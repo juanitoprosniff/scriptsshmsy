@@ -1,6 +1,6 @@
 # INSTALADOR SSHPLUS-NEW-msy
 ```
-wget https://raw.githubusercontent.com/VENHABRABO/SSHPLUS-NEW/main/Plus && chmod 777 Plus && ./Plus
+wget https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/Plus && chmod 777 Plus && ./Plus
 ```
 ou
 
