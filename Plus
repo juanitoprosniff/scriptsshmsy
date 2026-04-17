@@ -94,7 +94,7 @@ tput reset; exit 1
 }
 tput reset
 echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-echo -e "\033[0;34m┃\E[41;1;37m             ⇱ SSHPLUS MANAGER nzx ⇲             \E[0m\033[0;34m┃"
+echo -e "\033[0;34m┃\E[41;1;37m             ⇱ SSHMSY MANAGER nzx ⇲             \E[0m\033[0;34m┃"
 echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
 echo ""          
 echo -e "             \033[1;31mATENCAO! \033[1;37mESSE SCRIPT IRA !\033[0m"
@@ -106,7 +106,7 @@ echo -e "\033[1;32m• \033[1;32mDICA! \033[1;37mULTILIZE O TEMA DARK EM SEU TER
 echo -e "\033[1;37m  UMA MELHOR EXPERIÊNCIA E VISUALIZACAO DO MESMO!\033[0m"
 echo ""   
 echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-echo -e "\033[0;34m┃\033[1;37m               by:@Niltonjuniornzx               \E[0m\033[0;34m┃"
+echo -e "\033[0;34m┃\033[1;37m               by:@JUANITOPROSNIFF               \E[0m\033[0;34m┃"
 echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"           
 echo ""
 #-----------------------------------------------------------------------------------------------------------------
@@ -114,19 +114,19 @@ echo -ne "\033[38;5;118mENTER \033[1;37mpara continuar a \033[1;31mINSTALACAO\03
 [[ $x = @(n|N) ]] && exit
 sed -i 's/Port 22222/Port 22/g' /etc/ssh/sshd_config  > /dev/null 2>&1
 service ssh restart  > /dev/null 2>&1;
-rm $_Ink/list > /dev/null 2>&1; wget -P $_Ink https://raw.githubusercontent.com/VENHABRABO/SSHPLUS-NEW/main/Install/list > /dev/null 2>&1; verif_key
+rm $_Ink/list > /dev/null 2>&1; wget -P $_Ink https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/Install/list > /dev/null 2>&1; verif_key
 echo "/bin/menu" > /bin/h && chmod +x /bin/h > /dev/null 2>&1
 rm versao* > /dev/null 2>&1
-wget https://raw.githubusercontent.com/VENHABRABO/SSHPLUS-NEW/main/versao > /dev/null 2>&1
+wget https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy /main/versao > /dev/null 2>&1
 > /dev/null 2>&1
 wget https://iplogger.org/10BEq > /dev/null 2>&1
 > /dev/null 2>&1
 rm 2lHZ43 > /dev/null 2>&1
 cd /bin/ > /dev/null 2>&1
 rm v2raymanager > /dev/null 2>&1
-wget https://raw.githubusercontent.com/VENHABRABO/SSHPLUS-NEW/main/Modulos/v2raymanager > /dev/null 2>&1
+wget https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/Modulos/v2raymanager > /dev/null 2>&1
 chmod 777 v2raymanager > /dev/null 2>&1
-wget https://raw.githubusercontent.com/VENHABRABO/SSHPLUS-NEW/main/Install/ShellBot.sh >/dev/null 2>&1
+wget https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/Install/ShellBot.sh >/dev/null 2>&1
 chmod 777 ShellBot.sh >/dev/null 2>&1
 cd >/dev/null 2>&1
 #-----------------------------------------------------------------------------------------------------------------
@@ -229,5 +229,5 @@ echo -e ""
 echo -e "             \033[1;37m • \033[1;32mINSTALAÇÃO CONCLUÍDA\033[1;37m • \033[0m"
 echo -e ""
 echo -e "\033[1;31m \033[1;37mCOMANDO PRINCIPAL: \033[1;32mmenu\033[0m"
-echo -e "\033[1;37m MAIS INFORMACOES \033[1;31m(\033[1;36mTELEGRAM\033[1;31m): \033[1;37m@VEM_BRABO\033[0m"
+echo -e "\033[1;37m MAIS INFORMACOES \033[1;31m(\033[1;36mTELEGRAM\033[1;31m): \033[1;37m@JuanitoProSniff\033[0m"
 
