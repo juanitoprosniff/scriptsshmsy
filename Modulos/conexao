@@ -614,124 +614,188 @@ SCOLOR='\033[0m'
 	}
 
 	inst_ssl() {
-		if ss -tlpn 2>/dev/null | grep -q 'stunnel4' || netstat -nltp 2>/dev/null | grep 'stunnel4' 1>/dev/null 2>/dev/null; then
-			sslt=$(get_ports_by_process 'stunnel')
-			[[ -z "$sslt" ]] && sslt="\033[1;31mINDISPONÍVEL"
-			echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-			echo -e "\033[0;34m┃\E[44;1;37m           GERENCIAR SSL TUNNEL          \E[0m\033[0;34m┃"
-			echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
-			echo -e "\033[0;34m╼ \033[1;32mPORTAS\033[1;37m: \033[1;37m$sslt"
-			echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-			echo -e "\033[0;34m┃\033[1;31m[\033[1;36m1\033[1;31m] \033[1;37m• \033[1;33mALTERAR PORTA SSL TUNNEL\033[0m           \033[0;34m┃"
-			echo -e "\033[0;34m┃\033[1;31m[\033[1;36m2\033[1;31m] \033[1;37m• \033[1;33mREMOVER SSL TUNNEL\033[0m                 \033[0;34m┃"
-			echo -e "\033[0;34m┃\033[1;31m[\033[1;36m0\033[1;31m] \033[1;37m• \033[1;33mVOLTAR\033[0m                             \033[0;34m┃"
-			echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
-			echo -ne "\033[1;32mO QUE DESEJA FAZER \033[1;37m?\033[1;31m?\033[1;37m : ";
-			read resposta
+	# ── Stunnel4 ya instalado ──────────────────────────────────────
+	if ss -tlpn 2>/dev/null | grep -q 'stunnel4' || \
+	   netstat -nltp 2>/dev/null | grep -q 'stunnel4'; then
+
+		sslt=$(ss -tlpn 2>/dev/null | grep 'stunnel' | awk '{print $4}' \
+			| rev | cut -d: -f1 | rev | xargs)
+		[[ -z "$sslt" ]] && sslt=$(netstat -nplt 2>/dev/null | grep stunnel4 \
+			| awk '{print $4}' | awk -F ":" '{print $2}' | xargs)
+		[[ -z "$sslt" ]] && sslt="\033[1;31mINDISPONÍVEL"
+
+		echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
+		echo -e "\033[0;34m┃\E[44;1;37m           GERENCIAR SSL TUNNEL          \E[0m\033[0;34m┃"
+		echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
+		echo -e "\033[0;34m╼ \033[1;32mPORTAS\033[1;37m: \033[1;37m$sslt"
+		echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
+		echo -e "\033[0;34m┃\033[1;31m[\033[1;36m1\033[1;31m] \033[1;37m• \033[1;33mALTERAR PORTA SSL TUNNEL\033[0m           \033[0;34m┃"
+		echo -e "\033[0;34m┃\033[1;31m[\033[1;36m2\033[1;31m] \033[1;37m• \033[1;33mREMOVER SSL TUNNEL\033[0m                 \033[0;34m┃"
+		echo -e "\033[0;34m┃\033[1;31m[\033[1;36m0\033[1;31m] \033[1;37m• \033[1;33mVOLTAR\033[0m                             \033[0;34m┃"
+		echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
+		echo -ne "\033[1;32mO QUE DESEJA FAZER \033[1;37m?\033[1;31m?\033[1;37m : "
+		read resposta
+		echo ""
+
+		[[ "$resposta" = '1' ]] && {
+			echo -ne "\033[1;32mQUAL PORTA DESEJA USAR \033[1;37m?\033[1;37m "
+			read porta
 			echo ""
-			[[ "$resposta" = '1' ]] && {
-				echo -ne "\033[1;32mQUAL PORTA DESEJA USAR \033[1;37m?\033[1;37m "
-				read porta
-				echo ""
-				[[ -z "$porta" ]] && {
-					echo ""
-					echo -e "\033[1;31mPorta inválida!"
-					inst_ssl
-				}
-				verif_ptrs $porta
-				echo -e "\033[1;32mALTERANDO PORTA SSL TUNNEL!"
-				var2=$(grep 'accept' /etc/stunnel/stunnel.conf | awk '{print $NF}')
-				sed -i "s/\b$var2\b/$porta/g" /etc/stunnel/stunnel.conf >/dev/null 2>&1
-				echo ""
-				fun_bar 'sleep 2'
-				echo ""
-				echo -e "\033[1;32mREINICIANDO SSL TUNNEL!\n"
-				fun_bar 'service stunnel4 restart' '/etc/init.d/stunnel4 restart'
-				echo ""
-				ss -tlpn 2>/dev/null | grep -q 'stunnel' && echo -e "\033[1;32mPORTA ALTERADA COM SUCESSO !" || echo -e "\033[1;31mERRO INESPERADO!"
-				inst_ssl
-			}
-			[[ "$resposta" = '2' ]] && {
-				echo -e "\033[1;32mREMOVENDO O SSL TUNNEL !\033[0m"
-				del_ssl() {
-					pkill stunnel4
-					service stunnel4 stop
-					apt-get remove stunnel4 -y
-					apt-get autoremove stunnel4 -y
-					apt-get purge stunnel4 -y
-					rm -rf /etc/stunnel/stunnel.conf
-					rm -rf /etc/default/stunnel4
-					rm -rf /etc/stunnel/stunnel.pem
-				}
-				echo ""
-				fun_bar 'del_ssl'
-				echo ""
-				echo -e "\033[1;32mSSL TUNNEL REMOVIDO COM SUCESSO!\033[0m"
-				inst_ssl
-			} || {
-				echo -e "\033[1;31mVoltando...\033[0m"
-				fun_conexao
-			}
-		else
-			clear
-			echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-			echo -e "\033[0;34m┃\E[44;1;37m           INSTALAR SSL TUNNEL           \E[0m\033[0;34m┃"
-			echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
-			echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-			echo -e "\033[0;34m┃\033[1;31m[\033[1;36m1\033[1;31m] \033[1;37m• \033[1;33mINSTALAR SSL TUNNEL PADRÃO\033[0m         \033[0;34m┃"
-			echo -e "\033[0;34m┃\033[1;31m[\033[1;36m2\033[1;31m] \033[1;37m• \033[1;33mINSTALAR SSL TUNNEL WEBSOCKET\033[0m      \033[0;34m┃"
-			echo -e "\033[0;34m┃\033[1;31m[\033[1;36m0\033[1;31m] \033[1;37m• \033[1;33mVOLTAR\033[0m                             \033[0;34m┃"
-			echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
-			echo -ne "\033[1;32mO QUE DESEJA FAZER \033[1;37m?\033[1;31m?\033[1;37m : ";
-			read resposta
+			[[ -z "$porta" ]] && { echo -e "\033[1;31mPorta inválida!"; inst_ssl; return; }
+			verif_ptrs $porta
+			echo -e "\033[1;32mALTERANDO PORTA SSL TUNNEL!"
+			var2=$(grep 'accept' /etc/stunnel/stunnel.conf | awk '{print $NF}')
+			sed -i "s/accept = $var2/accept = $porta/" /etc/stunnel/stunnel.conf
 			echo ""
-			if [[ "$resposta" = '1' ]]; then
-				portssl='22'
-			elif [[ "$resposta" = '2' ]]; then
-				portssl='80'
-			elif [[ "$resposta" = '0' ]]; then
-				echo -e "\033[1;31mVoltando...\033[0m"
-				sleep 1
-				fun_conexao
-			else
-				echo ""
-				echo -e "\033[1;31mOpção inválida !\033[0m"
-				inst_ssl
-			fi
-			clear
-			echo -e "\E[44;1;37m           INSTALAR SSL TUNNEL             \E[0m"
-			echo -e "\n\033[1;37mVOCÊ ESTÁ PRESTES A INSTALAR O SSL TUNNEL !\033[0m"
-			{
-				echo ""
-				read -p "$(echo -e "\033[1;32mQUAL PORTA DESEJA USAR? \033[1;37m")" -e -i 443 porta
-				[[ -z "$porta" ]] && {
-					echo ""
-					echo -e "\033[1;31mPorta inválida!"
-					inst_ssl
-				}
-				verif_ptrs $porta
-				apt-get install stunnel4 -y
-				echo -e "cert = /etc/stunnel/stunnel.pem\nclient = no\nsocket = a:SO_REUSEADDR=1\nsocket = l:TCP_NODELAY=1\nsocket = r:TCP_NODELAY=1\n\n[stunnel]\nconnect = 127.0.0.1:$portssl\naccept = ${porta}" >/etc/stunnel/stunnel.conf
-				echo -e "\n\033[1;32mCRIANDO CERTIFICADO !\033[0m"
-				echo ""
-				ssl_certif() {
-					sed -i 's/ENABLED=0/ENABLED=1/g' /etc/default/stunnel4
-					cd /etc/stunnel && wget https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/mains/Install/stunnel.pem && cd $HOME
-				}
-				fun_bar 'ssl_certif'
-				echo -e "\n\033[1;32mINICIANDO O SSL TUNNEL !\033[0m"
-				echo ""
-				fun_finssl() {
-					service stunnel4 restart
-					service ssh restart
-				}
-				fun_bar 'fun_finssl' 'service stunnel4 restart'
-				echo -e "\n\033[1;32mSSL TUNNEL INSTALADO COM SUCESSO !\033[1;31m PORTA: \033[1;37m$porta\033[0m"
-				sleep 1
-				inst_ssl
+			fun_bar 'sleep 2'
+			echo ""
+			echo -e "\033[1;32mREINICIANDO SSL TUNNEL!\n"
+			fun_bar 'service stunnel4 restart'
+			echo ""
+			ss -tlpn 2>/dev/null | grep -q 'stunnel' \
+				&& echo -e "\033[1;32mPORTA ALTERADA COM SUCESSO!" \
+				|| echo -e "\033[1;31mERRO INESPERADO!"
+			sleep 2
+			inst_ssl
+			return
+		}
+
+		[[ "$resposta" = '2' ]] && {
+			echo -e "\033[1;32mREMOVENDO O SSL TUNNEL !\033[0m"
+			del_ssl() {
+				pkill stunnel4 2>/dev/null
+				systemctl stop stunnel4 2>/dev/null
+				service stunnel4 stop 2>/dev/null
+				apt-get remove stunnel4 -y >/dev/null 2>&1
+				apt-get purge stunnel4 -y >/dev/null 2>&1
+				rm -f /etc/stunnel/stunnel.conf /etc/stunnel/stunnel.pem
 			}
-		fi
+			echo ""
+			fun_bar 'del_ssl'
+			echo ""
+			echo -e "\033[1;32mSSL TUNNEL REMOVIDO COM SUCESSO!\033[0m"
+			sleep 2
+			fun_conexao
+			return
+		}
+
+		# [0] voltar
+		echo -e "\033[1;31mVoltando...\033[0m"
+		fun_conexao
+		return
+	fi
+
+	# ── Stunnel4 NO instalado — menú de instalación ───────────────
+	clear
+	echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
+	echo -e "\033[0;34m┃\E[44;1;37m           INSTALAR SSL TUNNEL           \E[0m\033[0;34m┃"
+	echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
+	echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
+	echo -e "\033[0;34m┃\033[1;31m[\033[1;36m1\033[1;31m] \033[1;37m• \033[1;33mSSL TUNNEL → SSH   (porta destino 22)\033[0m  \033[0;34m┃"
+	echo -e "\033[0;34m┃\033[1;31m[\033[1;36m2\033[1;31m] \033[1;37m• \033[1;33mSSL TUNNEL → PROXY (porta destino 80)\033[0m  \033[0;34m┃"
+	echo -e "\033[0;34m┃\033[1;31m[\033[1;36m0\033[1;31m] \033[1;37m• \033[1;33mVOLTAR\033[0m                             \033[0;34m┃"
+	echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
+	echo -ne "\033[1;32mO QUE DESEJA FAZER \033[1;37m?\033[1;31m?\033[1;37m : "
+	read resposta
+	echo ""
+
+	if [[ "$resposta" = '1' ]]; then
+		portssl='22'
+	elif [[ "$resposta" = '2' ]]; then
+		portssl='80'
+	elif [[ "$resposta" = '0' ]]; then
+		echo -e "\033[1;31mVoltando...\033[0m"; sleep 1; fun_conexao; return
+	else
+		echo -e "\033[1;31mOpção inválida!\033[0m"; sleep 1; inst_ssl; return
+	fi
+
+	# ── Pedir porta de escuta (accept) ────────────────────────────
+	clear
+	echo -e "\E[44;1;37m           INSTALAR SSL TUNNEL             \E[0m"
+	echo -e "\n\033[1;37mVOCÊ ESTÁ PRESTES A INSTALAR O SSL TUNNEL!\033[0m\n"
+	read -p "$(echo -e "\033[1;32mQUAL PORTA DESEJA USAR PARA SSL? \033[1;37m[padrão: 443]: ")" -e -i 443 porta
+	[[ -z "$porta" ]] && porta=443
+	verif_ptrs $porta
+
+	echo -e "\n\033[1;32mINSTALANDO STUNNEL4...\033[0m"
+	apt-get update -y >/dev/null 2>&1
+	apt-get install -y stunnel4 openssl >/dev/null 2>&1
+
+	# ── Habilitar stunnel4 en /etc/default/stunnel4 ───────────────
+	if [[ -f /etc/default/stunnel4 ]]; then
+		sed -i 's/ENABLED=0/ENABLED=1/g' /etc/default/stunnel4
+	fi
+
+	mkdir -p /etc/stunnel
+
+	# ── Generar certificado auto-firmado ──────────────────────────
+	echo -e "\n\033[1;32mGERANDO CERTIFICADO SSL...\033[0m"
+	ssl_certif() {
+		# Eliminar certificados viejos
+		rm -f /etc/stunnel/stunnel.pem /etc/stunnel/stunnel.key /etc/stunnel/stunnel.crt
+
+		# Generar clave privada + certificado auto-firmado en un solo paso
+		openssl req -new -newkey rsa:2048 -days 3650 -nodes -x509 \
+			-subj "/C=US/ST=State/L=City/O=SSHPlus/CN=sshplus.local" \
+			-keyout /etc/stunnel/stunnel.key \
+			-out /etc/stunnel/stunnel.crt >/dev/null 2>&1
+
+		# Combinar en el archivo .pem que stunnel4 necesita
+		cat /etc/stunnel/stunnel.crt /etc/stunnel/stunnel.key \
+			>/etc/stunnel/stunnel.pem
+		chmod 600 /etc/stunnel/stunnel.pem
 	}
+	ssl_certif
+
+	if [[ ! -s /etc/stunnel/stunnel.pem ]]; then
+		echo -e "\033[1;31mERRO: Não foi possível gerar o certificado SSL!\033[0m"
+		sleep 2
+		inst_ssl
+		return
+	fi
+
+	# ── Escribir stunnel.conf correcto (una sola vez) ─────────────
+	echo -e "\n\033[1;32mCONFIGURANDO O SSL TUNNEL...\033[0m"
+	cat > /etc/stunnel/stunnel.conf <<EOF
+cert = /etc/stunnel/stunnel.pem
+client = no
+socket = a:SO_REUSEADDR=1
+socket = l:TCP_NODELAY=1
+socket = r:TCP_NODELAY=1
+
+[sshtunnel]
+accept  = $porta
+connect = 127.0.0.1:$portssl
+EOF
+
+	# ── Reiniciar stunnel4 ────────────────────────────────────────
+	echo -e "\n\033[1;32mINICIANDO O SSL TUNNEL NA PORTA $porta...\033[0m"
+	fun_finssl() {
+		# Ubuntu 22+ usa systemctl; fallback a service/init.d
+		if systemctl is-enabled stunnel4 >/dev/null 2>&1; then
+			systemctl enable stunnel4 >/dev/null 2>&1
+			systemctl restart stunnel4 >/dev/null 2>&1
+		else
+			service stunnel4 restart >/dev/null 2>&1
+			/etc/init.d/stunnel4 restart >/dev/null 2>&1
+		fi
+		service ssh restart >/dev/null 2>&1
+		sleep 2
+	}
+	fun_bar 'fun_finssl'
+
+	# ── Verificar que está escuchando ─────────────────────────────
+	sleep 1
+	if ss -tlpn 2>/dev/null | grep -q ":$porta" || \
+	   netstat -nltp 2>/dev/null | grep -q ":$porta"; then
+		echo -e "\n\033[1;32mSSL TUNNEL INSTALADO COM SUCESSO!\033[1;31m PORTA: \033[1;37m$porta\033[0m"
+	else
+		echo -e "\n\033[1;33mATENÇÃO: stunnel4 pode não ter iniciado corretamente."
+		echo -e "Verifique com: \033[1;37msystemctl status stunnel4\033[0m"
+	fi
+	sleep 2
+	inst_ssl
+}
 
 	# ============================================================
 	# fun_socks — SECCIÓN ACTUALIZADA CON SOPORTE MULTI-PUERTO WS
