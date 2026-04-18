@@ -1,9 +1,81 @@
-#!/bin/bash  
-sleep 2
+#!/bin/bash
+# ============================================================
+# SPEEDTEST — compatible Ubuntu 18/20/22/24/25+
+# Soporta: speedtest-cli (pip) y speedtest oficial (ookla)
+# ============================================================
+sleep 1
 clear
 echo ""
 echo "--------------------------------------------------------------------"
-speedtest-cli --share --secure
+echo -e "\033[1;33m  Detectando herramienta de speedtest...\033[0m"
 echo ""
 
+# Detectar versión de Ubuntu para elegir método correcto
+_ubuntu_ver=$(lsb_release -rs 2>/dev/null | cut -d. -f1)
+
+# ── Función: instalar speedtest-cli via pip ──────────────────
+_instalar_speedtest_cli() {
+    if command -v pip3 &>/dev/null; then
+        pip3 install speedtest-cli --break-system-packages >/dev/null 2>&1 || \
+        pip3 install speedtest-cli >/dev/null 2>&1
+    elif command -v pip &>/dev/null; then
+        pip install speedtest-cli --break-system-packages >/dev/null 2>&1 || \
+        pip install speedtest-cli >/dev/null 2>&1
+    fi
+}
+
+# ── Función: instalar speedtest oficial de Ookla ─────────────
+_instalar_speedtest_ookla() {
+    if ! command -v curl &>/dev/null; then
+        apt-get install -y curl >/dev/null 2>&1
+    fi
+    curl -s https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | bash >/dev/null 2>&1
+    apt-get install -y speedtest >/dev/null 2>&1
+}
+
+# ── Determinar qué binario usar ──────────────────────────────
+_spd_bin=""
+
+# Prioridad 1: speedtest-cli ya instalado
+if command -v speedtest-cli &>/dev/null; then
+    _spd_bin="speedtest-cli"
+# Prioridad 2: speedtest oficial (Ookla) ya instalado
+elif command -v speedtest &>/dev/null; then
+    _spd_bin="speedtest"
+else
+    # Ubuntu 22+ tiene restricción PEP 668 — usar pip con --break-system-packages
+    echo -e "\033[1;33m  Instalando speedtest-cli...\033[0m"
+    apt-get install -y python3-pip >/dev/null 2>&1
+    _instalar_speedtest_cli
+    if command -v speedtest-cli &>/dev/null; then
+        _spd_bin="speedtest-cli"
+    else
+        # Fallback: instalar CLI oficial de Ookla
+        echo -e "\033[1;33m  Intentando con speedtest oficial (Ookla)...\033[0m"
+        _instalar_speedtest_ookla
+        command -v speedtest &>/dev/null && _spd_bin="speedtest"
+    fi
+fi
+
+if [[ -z "$_spd_bin" ]]; then
+    echo -e "\033[1;31m  No se pudo instalar ninguna herramienta de speedtest.\033[0m"
+    echo -e "\033[1;33m  Intente manualmente: pip3 install speedtest-cli\033[0m"
+    echo ""
+    echo "--------------------------------------------------------------------"
+    exit 1
+fi
+
+echo -e "\033[1;32m  Usando: $_spd_bin\033[0m"
+echo ""
+echo -e "\033[1;33m  Ejecutando prueba... espere...\033[0m"
+echo ""
+
+if [[ "$_spd_bin" = "speedtest-cli" ]]; then
+    speedtest-cli --share --secure
+else
+    # Speedtest Ookla — acepta la licencia automáticamente
+    speedtest --accept-license --accept-gdpr 2>/dev/null || speedtest 2>/dev/null
+fi
+
+echo ""
 echo "--------------------------------------------------------------------"
