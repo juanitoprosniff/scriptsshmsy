@@ -1837,6 +1837,272 @@ reiniciar_proxy_socks() {
 # ============================================================
 # MENÚ PRINCIPAL DE CONEXIÓN
 # ============================================================
+
+# ============================================================
+# CREAR USUARIO — compatible con Dropbear 2016 y OpenSSH
+# Dropbear 2016 no usa PAM extendido, pero sí /etc/shadow.
+# El problema usual: passwd interactivo falla en scripts,
+# usar chpasswd que escribe directo en /etc/shadow.
+# ============================================================
+criarusuario() {
+    clear
+    echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
+    echo -e "\033[0;34m┃\E[44;1;37m            CRIAR USUÁRIO SSH             \E[0m\033[0;34m┃"
+    echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
+    echo ""
+
+    # Mostrar puertos activos de todos los servicios SSH
+    echo -e "\033[1;33m━━━━━ PUERTOS ACTIVOS ━━━━━\033[0m"
+    _ssh_p=$(grep '^Port' /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' | xargs)
+    [[ -n "$_ssh_p" ]] && echo -e "\033[1;32mOpenSSH  :\033[1;37m $_ssh_p"
+
+    # Dropbear normal
+    _db_p=$(ss -tlpn 2>/dev/null | grep 'dropbear' | grep -v 'dropbear-legacy\|legacy' | \
+            awk '{print $4}' | rev | cut -d: -f1 | rev | xargs)
+    [[ -n "$_db_p" ]] && echo -e "\033[1;32mDropbear :\033[1;37m $_db_p"
+
+    # Dropbear 2016 (legacy)
+    _db16_p=$(systemctl show dropbear-legacy --property=ExecStart 2>/dev/null | \
+              grep -oP '(?<=-p )\d+' | head -1)
+    [[ -z "$_db16_p" ]] && _db16_p=$(ss -tlpn 2>/dev/null | grep 'legacy' | \
+              awk '{print $4}' | rev | cut -d: -f1 | rev | head -1)
+    [[ -n "$_db16_p" ]] && echo -e "\033[1;32mDB 2016  :\033[1;37m $_db16_p"
+
+    # Proxy Socks / WebSocket
+    _py_p=$(ss -tlpn 2>/dev/null | grep -E 'python|python3' | \
+            awk '{print $4}' | rev | cut -d: -f1 | rev | xargs)
+    [[ -n "$_py_p" ]] && echo -e "\033[1;32mProxy/WS :\033[1;37m $_py_p"
+
+    # SSL Stunnel
+    _ssl_p=$(ss -tlpn 2>/dev/null | grep 'stunnel' | \
+             awk '{print $4}' | rev | cut -d: -f1 | rev | xargs)
+    [[ -n "$_ssl_p" ]] && echo -e "\033[1;32mSSL      :\033[1;37m $_ssl_p"
+
+    echo -e "\033[1;33m━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+    echo ""
+
+    echo -ne "\033[1;32mUSUÁRIO : \033[1;37m"; read usuario
+    [[ -z "$usuario" ]] && { echo -e "\033[1;31mUsuario vacío!\033[0m"; sleep 2; return; }
+
+    # Verificar si ya existe
+    if id "$usuario" &>/dev/null; then
+        echo -e "\033[1;31mUsuario '$usuario' ya existe!\033[0m"; sleep 2; return
+    fi
+
+    echo -ne "\033[1;32mSENHA   : \033[1;37m"; read -s senha; echo ""
+    [[ -z "$senha" ]] && { echo -e "\033[1;31mContraseña vacía!\033[0m"; sleep 2; return; }
+
+    echo -ne "\033[1;32mDIAS    : \033[1;37m"; read dias
+    [[ -z "$dias" ]] && dias=30
+
+    # Crear usuario con home y shell bash
+    # useradd -m -s /bin/bash: crea home, asigna bash
+    # Dropbear 2016 autentica via /etc/shadow, esto lo genera chpasswd
+    useradd -m -s /bin/bash "$usuario" 2>/dev/null
+    if [[ $? -ne 0 ]]; then
+        echo -e "\033[1;31mError creando usuario!\033[0m"; sleep 2; return
+    fi
+
+    # Establecer contraseña con chpasswd (compatible con Dropbear 2016)
+    # Nota: NO usar 'passwd usuario' en scripts porque requiere TTY interactivo
+    echo "${usuario}:${senha}" | chpasswd 2>/dev/null
+    if [[ $? -ne 0 ]]; then
+        # Fallback: openssl passwd + usermod
+        _hash=$(openssl passwd -6 "$senha" 2>/dev/null || openssl passwd -1 "$senha")
+        usermod -p "$_hash" "$usuario" 2>/dev/null
+    fi
+
+    # Establecer fecha de expiración
+    _exp_date=$(date -d "+${dias} days" +%Y-%m-%d 2>/dev/null || \
+                date -v +${dias}d +%Y-%m-%d 2>/dev/null)
+    [[ -n "$_exp_date" ]] && chage -E "$_exp_date" "$usuario" 2>/dev/null
+
+    # Guardar en registro SSHPlus si existe
+    [[ -d /etc/SSHPlus ]] && echo "$usuario $dias" >> /etc/SSHPlus/usuarios 2>/dev/null
+
+    echo ""
+    echo -e "\033[1;32m✓ Usuario creado exitosamente!\033[0m"
+    echo -e "\033[1;33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+    echo -e "\033[1;32mUsuario  :\033[1;37m $usuario"
+    echo -e "\033[1;32mExpira   :\033[1;37m ${_exp_date:-en $dias días}"
+    echo -e "\033[1;33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+    echo -e "\033[1;33m  PUERTOS PARA CONECTAR:\033[0m"
+    [[ -n "$_ssh_p"  ]] && echo -e "\033[1;37m  SSH  → \033[1;32m$_ssh_p"
+    [[ -n "$_db_p"   ]] && echo -e "\033[1;37m  DB   → \033[1;32m$_db_p"
+    [[ -n "$_db16_p" ]] && echo -e "\033[1;37m  DB16 → \033[1;32m$_db16_p"
+    [[ -n "$_py_p"   ]] && echo -e "\033[1;37m  Proxy→ \033[1;32m$_py_p"
+    [[ -n "$_ssl_p"  ]] && echo -e "\033[1;37m  SSL  → \033[1;32m$_ssl_p"
+    echo -e "\033[1;33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+    echo ""
+}
+
+# ============================================================
+# CREAR USUARIO DE PRUEBA (teste)
+# ============================================================
+criarteste() {
+    clear
+    echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
+    echo -e "\033[0;34m┃\E[44;1;37m           CRIAR USUÁRIO TESTE            \E[0m\033[0;34m┃"
+    echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
+    echo ""
+    echo -ne "\033[1;32mUSUÁRIO : \033[1;37m"; read usuario
+    [[ -z "$usuario" ]] && { echo -e "\033[1;31mUsuario vacío!\033[0m"; sleep 2; return; }
+    if id "$usuario" &>/dev/null; then
+        echo -e "\033[1;31mUsuario '$usuario' ya existe!\033[0m"; sleep 2; return
+    fi
+    echo -ne "\033[1;32mSENHA   : \033[1;37m"; read -s senha; echo ""
+    [[ -z "$senha" ]] && senha="$usuario"
+    echo -ne "\033[1;32mDIAS    : \033[1;37m"; read dias
+    [[ -z "$dias" ]] && dias=1
+
+    useradd -m -s /bin/bash "$usuario" 2>/dev/null
+    echo "${usuario}:${senha}" | chpasswd 2>/dev/null || {
+        _hash=$(openssl passwd -6 "$senha" 2>/dev/null || openssl passwd -1 "$senha")
+        usermod -p "$_hash" "$usuario" 2>/dev/null
+    }
+    _exp_date=$(date -d "+${dias} days" +%Y-%m-%d 2>/dev/null)
+    [[ -n "$_exp_date" ]] && chage -E "$_exp_date" "$usuario" 2>/dev/null
+
+    _ssh_p=$(grep '^Port' /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' | xargs)
+    _db16_p=$(systemctl show dropbear-legacy --property=ExecStart 2>/dev/null | grep -oP '(?<=-p )\d+' | head -1)
+    _py_p=$(ss -tlpn 2>/dev/null | grep -E 'python|python3' | awk '{print $4}' | rev | cut -d: -f1 | rev | xargs)
+    _ssl_p=$(ss -tlpn 2>/dev/null | grep 'stunnel' | awk '{print $4}' | rev | cut -d: -f1 | rev | xargs)
+
+    echo ""
+    echo -e "\033[1;32m✓ Usuario TESTE creado!\033[0m"
+    echo -e "\033[1;33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+    echo -e "\033[1;32mUsuario  :\033[1;37m $usuario"
+    echo -e "\033[1;32mSenha    :\033[1;37m $senha"
+    echo -e "\033[1;32mExpira   :\033[1;37m ${_exp_date:-$dias día(s)}"
+    echo -e "\033[1;33m━━━━━ PUERTOS ━━━━━\033[0m"
+    [[ -n "$_ssh_p"  ]] && echo -e "\033[1;37m  SSH  → \033[1;32m$_ssh_p"
+    [[ -n "$_db16_p" ]] && echo -e "\033[1;37m  DB16 → \033[1;32m$_db16_p"
+    [[ -n "$_py_p"   ]] && echo -e "\033[1;37m  Proxy→ \033[1;32m$_py_p"
+    [[ -n "$_ssl_p"  ]] && echo -e "\033[1;37m  SSL  → \033[1;32m$_ssl_p"
+    echo -e "\033[1;33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+    echo ""
+}
+
+# ============================================================
+# SSL DUAL MODE: stunnel → SSH directo + stunnel → WebSocket
+# ============================================================
+# EXPLICACIÓN DEL PROBLEMA STUNNEL+WEBSOCKET:
+#
+# Modo A (STUNNEL directo al SSH):
+#   Cliente → SSL → stunnel:443 → SSH:143
+#   Funciona con: HTTPCUSTOM SSL/SNI, SSLsocks, apps con modo SSL
+#   NO funciona con: WebSocket sobre SSL, Enhanced sobre SSL
+#
+# Modo B (STUNNEL → WebSocket → SSH):
+#   Cliente → SSL → stunnel:443 → wsproxy:8080 → SSH:143
+#   Funciona con: WebSocket+SSL, Enhanced+SSL
+#   La desventaja: el status del proxy aparece en la respuesta SSL (¡efecto bonito!)
+#
+# SOLUCIÓN: usar dos stunnel en puertos diferentes.
+#   443  → SSH directo    (clientes SSL simples / STUNNEL app)
+#   8443 → WebSocket      (clientes WebSocket+SSL / HTTP Injector SSL)
+#   444  → WebSocket      (alternativo)
+# ============================================================
+fun_ssl_dual() {
+    clear
+    echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
+    echo -e "\033[0;34m┃\E[44;1;37m    SSL DUAL MODE: STUNNEL + WEBSOCKET      \E[0m\033[0;34m┃"
+    echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
+    echo ""
+    echo -e "\033[1;33mEsto configura SSL con DOS modos en un solo stunnel:\033[0m"
+    echo -e "\033[1;37m  Puerto 443  → SSH directo (STUNNEL puro, modo A)\033[0m"
+    echo -e "\033[1;37m  Puerto 8443 → WebSocket   (SSL+WS+Enhanced, modo B)\033[0m"
+    echo -e "\033[1;37m  Puerto 444  → WebSocket   (alternativo modo B)\033[0m"
+    echo ""
+
+    if ! command -v stunnel4 &>/dev/null; then
+        echo -e "\033[1;33mInstalando stunnel4...\033[0m"
+        apt-get update -y >/dev/null 2>&1
+        apt-get install -y stunnel4 openssl >/dev/null 2>&1
+        [[ -f /etc/default/stunnel4 ]] && sed -i 's/ENABLED=0/ENABLED=1/' /etc/default/stunnel4
+    fi
+
+    # Puerto SSH de Dropbear 2016
+    _ssh_direct=$(systemctl show dropbear-legacy --property=ExecStart 2>/dev/null | \
+                  grep -oP '(?<=-p )\d+' | head -1)
+    [[ -z "$_ssh_direct" ]] && _ssh_direct=22
+    echo -e "\033[1;33mPuerto SSH destino detectado: \033[1;37m$_ssh_direct\033[0m"
+    echo -ne "\033[1;32mCambiar puerto SSH destino? (Enter para usar $_ssh_direct): \033[1;37m"
+    read _new_ssh; [[ -n "$_new_ssh" ]] && _ssh_direct="$_new_ssh"
+
+    # Puerto WebSocket destino
+    _ws_port=$(ss -tlpn 2>/dev/null | grep -E 'python|python3' | \
+               awk '{print $4}' | rev | cut -d: -f1 | rev | head -1)
+    [[ -z "$_ws_port" ]] && _ws_port=8080
+    echo -e "\033[1;33mPuerto WebSocket detectado: \033[1;37m$_ws_port\033[0m"
+    echo -ne "\033[1;32mCambiar puerto WebSocket? (Enter para usar $_ws_port): \033[1;37m"
+    read _new_ws; [[ -n "$_new_ws" ]] && _ws_port="$_new_ws"
+
+    mkdir -p /etc/stunnel
+
+    # Generar certificado si no existe
+    if [[ ! -s /etc/stunnel/stunnel.pem ]]; then
+        echo -e "\033[1;32mGenerando certificado SSL...\033[0m"
+        openssl req -new -newkey rsa:2048 -days 3650 -nodes -x509 \
+            -subj "/C=CO/ST=Colombia/L=Bogota/O=SSHPlus/CN=sshplus.local" \
+            -keyout /etc/stunnel/stunnel.key \
+            -out /etc/stunnel/stunnel.crt >/dev/null 2>&1
+        cat /etc/stunnel/stunnel.crt /etc/stunnel/stunnel.key > /etc/stunnel/stunnel.pem
+        chmod 600 /etc/stunnel/stunnel.pem
+    fi
+
+    # Configuración DUAL:
+    #   443  → SSH directo  (STUNNEL puro)
+    #   444  → WebSocket    (SSL + WS + Enhanced)
+    #   8443 → WebSocket    (SSL + WS + Enhanced alternativo)
+    cat > /etc/stunnel/stunnel.conf <<EOF
+cert = /etc/stunnel/stunnel.pem
+client = no
+socket = a:SO_REUSEADDR=1
+socket = l:TCP_NODELAY=1
+socket = r:TCP_NODELAY=1
+
+# MODO A: SSL directo al SSH (Dropbear 2016 / OpenSSH)
+# Compatible: STUNNEL app, SSLsocks, clientes SSL simples
+[ssl-direct-443]
+accept  = 443
+connect = 127.0.0.1:${_ssh_direct}
+
+# MODO B: SSL → WebSocket → SSH
+# Compatible: HTTP Custom SSL, HTTP Injector SSL, Enhanced+SSL
+# El status del WebSocket aparece en la respuesta (el efecto bonito!)
+[ssl-websocket-8443]
+accept  = 8443
+connect = 127.0.0.1:${_ws_port}
+
+[ssl-websocket-444]
+accept  = 444
+connect = 127.0.0.1:${_ws_port}
+EOF
+
+    systemctl enable stunnel4 >/dev/null 2>&1
+    systemctl restart stunnel4 2>/dev/null || service stunnel4 restart 2>/dev/null
+    for _p in 443 444 8443; do _fw_open $_p; done
+    sleep 1
+
+    echo ""
+    if ss -tlpn 2>/dev/null | grep -q ':443 '; then
+        echo -e "\033[1;32m✓ SSL DUAL MODE ACTIVO!\033[0m"
+        echo -e "\033[1;33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+        echo -e "\033[1;37m  Puerto \033[1;32m443\033[1;37m  → SSH directo ($STUNNEL puro)\033[0m"
+        echo -e "\033[1;37m  Puerto \033[1;32m444\033[1;37m  → WebSocket proxy (SSL+WS+Enhanced)\033[0m"
+        echo -e "\033[1;37m  Puerto \033[1;32m8443\033[1;37m → WebSocket proxy (SSL+WS+Enhanced)\033[0m"
+        echo -e "\033[1;33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+        echo -e "\033[1;33mPARA USAR CON STUNNEL APP:\033[0m"
+        echo -e "\033[1;37m  Puerto destino: 443 | sin payload\033[0m"
+        echo -e "\033[1;33mPARA USAR CON HTTP CUSTOM/INJECTOR SSL+WS:\033[0m"
+        echo -e "\033[1;37m  Puerto destino: 444 o 8443 | con payload WebSocket\033[0m"
+    else
+        echo -e "\033[1;33mVerifique: systemctl status stunnel4\033[0m"
+    fi
+    sleep 3; inst_ssl
+}
+
 x="ok"; clear
 fun_conexao() {
     while true; do
@@ -1885,6 +2151,7 @@ fun_conexao() {
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m14\033[1;31m] \033[1;33mHYSTERIA UDP $hysterasts               \033[0;34m┃"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m15\033[1;31m] \033[1;33mSSH ALTERNATIVOS $tinypts              \033[0;34m┃"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m16\033[1;31m] \033[1;33mACTUALIZAR SCRIPT                    \033[0;34m┃"
+        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m17\033[1;31m] \033[1;33mSSL DUAL (STUNNEL+WS simultáneo)     \033[0;34m┃"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m12\033[1;31m] \033[1;33mVOLVER \033[1;32m<<<                          \033[0;34m┃"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m00\033[1;31m] \033[1;33mSALIR \033[1;32m<<<                            \033[0;34m┃"
         echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
@@ -1908,6 +2175,7 @@ fun_conexao() {
         14)    tput reset; fun_hysteria ;;
         15)    tput reset; fun_alt_ssh ;;
         16)    tput reset; fun_update_script ;;
+        17)    tput reset; fun_ssl_dual ;;
         0|00)  tput reset; echo -e "\033[1;31mSaliendo...\033[0m"; sleep 1; exit ;;
         *)     echo -e "\033[1;31mOpción inválida!\033[0m"; sleep 1 ;;
         esac

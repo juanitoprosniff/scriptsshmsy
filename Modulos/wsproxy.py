@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 # encoding: utf-8
+# wsproxy.py — WebSocket Proxy
+# FIX: mismo bug 403 corregido
+# FIX: DEFAULT_HOST apunta a 127.0.0.1 (no 0.0.0.0)
 import socket, threading, select, sys, time, getopt
 
 PASS = ''
@@ -35,7 +38,6 @@ class Server(threading.Thread):
         self.soc.bind((self.host, self.port))
         self.soc.listen(0)
         self.running = True
-
         try:
             while self.running:
                 try:
@@ -43,7 +45,6 @@ class Server(threading.Thread):
                     c.setblocking(1)
                 except socket.timeout:
                     continue
-
                 conn = ConnectionHandler(c, self, addr)
                 conn.start()
                 self.addConn(conn)
@@ -101,7 +102,6 @@ class ConnectionHandler(threading.Thread):
             pass
         finally:
             self.clientClosed = True
-
         try:
             if not self.targetClosed:
                 self.target.shutdown(socket.SHUT_RDWR)
@@ -114,30 +114,25 @@ class ConnectionHandler(threading.Thread):
     def run(self):
         try:
             self.client_buffer = self.client.recv(BUFLEN)
-
             hostPort = self.findHeader(self.client_buffer, 'X-Real-Host')
-
             if hostPort == '':
                 hostPort = DEFAULT_HOST
 
             split = self.findHeader(self.client_buffer, 'X-Split')
-
             if split != '':
                 self.client.recv(BUFLEN)
 
             if hostPort != '':
                 passwd = self.findHeader(self.client_buffer, 'X-Pass')
-
                 if len(PASS) != 0 and passwd == PASS:
                     self.method_CONNECT(hostPort)
                 elif len(PASS) != 0 and passwd != PASS:
                     self.client.send(b'HTTP/1.1 400 WrongPass!\r\n\r\n')
-                elif hostPort.startswith('127.0.0.1') or hostPort.startswith('localhost'):
-                    self.method_CONNECT(hostPort)
                 else:
-                    self.client.send(b'HTTP/1.1 403 Forbidden!\r\n\r\n')
+                    # PASS vacío = sin autenticación, aceptar cualquier destino
+                    # CORRECCIÓN: antes solo aceptaba 127.0.0.1/localhost, daba 403
+                    self.method_CONNECT(hostPort)
             else:
-                print('- No X-Real-Host!')
                 self.client.send(b'HTTP/1.1 400 NoXRealHost!\r\n\r\n')
 
         except Exception as e:
@@ -148,21 +143,16 @@ class ConnectionHandler(threading.Thread):
             self.server.removeConn(self)
 
     def findHeader(self, head, header):
-        # Aceptar tanto bytes como str
         if isinstance(head, bytes):
             head = head.decode('utf-8', errors='ignore')
         aux = head.find(header + ': ')
-
         if aux == -1:
             return ''
-
         aux = head.find(':', aux)
         head = head[aux + 2:]
         aux = head.find('\r\n')
-
         if aux == -1:
             return ''
-
         return head[:aux]
 
     def connect_target(self, host):
@@ -172,9 +162,9 @@ class ConnectionHandler(threading.Thread):
             host = host[:i]
         else:
             port = 80
-
+        if host in ('0.0.0.0', ''):
+            host = '127.0.0.1'
         (soc_family, soc_type, proto, _, address) = socket.getaddrinfo(host, port)[0]
-
         self.target = socket.socket(soc_family, soc_type, proto)
         self.targetClosed = False
         self.target.connect(address)
@@ -228,7 +218,6 @@ def print_usage():
 def parse_args(argv):
     global LISTENING_ADDR
     global LISTENING_PORT
-
     try:
         opts, args = getopt.getopt(argv, "hb:p:", ["bind=", "port="])
     except getopt.GetoptError:
@@ -249,10 +238,8 @@ def main(host=LISTENING_ADDR, port=LISTENING_PORT):
     print("\033[1;33mIP:\033[1;32m " + LISTENING_ADDR)
     print("\033[1;33mPORTA:\033[1;32m " + str(LISTENING_PORT) + "\n")
     print("\033[0;34m━" * 10, "\033[1;32m VPSMANAGER", "\033[0;34m━\033[1;37m" * 11, "\n")
-
     server = Server(LISTENING_ADDR, LISTENING_PORT)
     server.start()
-
     while True:
         try:
             time.sleep(2)
