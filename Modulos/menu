@@ -35,70 +35,82 @@ x="ok"
 # Usa speedtest-cli (pip) o el oficial speedtest.net CLI
 # ============================================================
 velocity() {
+_UBUNTU_VER_V=$(lsb_release -rs 2>/dev/null | cut -d. -f1 || echo "0")
 clear
 echo -e "\E[38;5;18m╭━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮\033[0m"
-echo -e "\E[38;5;18m┃\E[44;1;37m     TESTANDO A VELOCIDADE DO SERVIDOR   \E[0m\E[38;5;18m┃"
+echo -e "\E[38;5;18m┃\E[44;1;37m     PROBANDO VELOCIDAD DEL SERVIDOR     \E[0m\E[38;5;18m┃"
 echo -e "\E[38;5;18m╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯\033[0m"
 echo ""
 
-# Instalar speedtest-cli se não existir (compatível Ubuntu 22+)
-if ! command -v speedtest-cli &>/dev/null && ! command -v speedtest &>/dev/null; then
-	echo -e "\033[1;33mInstalando speedtest-cli...\033[0m"
-	apt-get install -y python3-pip >/dev/null 2>&1
-	pip3 install speedtest-cli --break-system-packages >/dev/null 2>&1 || \
-	pip3 install speedtest-cli >/dev/null 2>&1
-fi
-
-# Determinar el binario disponible
-_spd_bin=""
-command -v speedtest-cli &>/dev/null && _spd_bin="speedtest-cli"
-# Speedtest CLI oficial (de speedtest.net) — instalación si no hay speedtest-cli
-if [[ -z "$_spd_bin" ]]; then
+# ── Instalar CLI oficial Ookla si no existe ───────────────────
+if ! command -v speedtest &>/dev/null && ! command -v speedtest-cli &>/dev/null; then
+	echo -e "\033[1;33m  Instalando CLI oficial speedtest.net...\033[0m"
+	curl -s https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh \
+		| bash >/dev/null 2>&1
+	apt-get install -y speedtest >/dev/null 2>&1
+	# Fallback: speedtest-cli Python
 	if ! command -v speedtest &>/dev/null; then
-		echo -e "\033[1;33mInstalando speedtest CLI oficial...\033[0m"
-		curl -s https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | bash >/dev/null 2>&1
-		apt-get install -y speedtest >/dev/null 2>&1
+		echo -e "\033[1;33m  Usando speedtest-cli (Python) como alternativa...\033[0m"
+		apt-get install -y python3-pip >/dev/null 2>&1
+		if [[ "${_UBUNTU_VER_V:-0}" -ge 22 ]]; then
+			pip3 install speedtest-cli --break-system-packages -q 2>/dev/null
+		else
+			pip3 install speedtest-cli -q 2>/dev/null
+		fi
 	fi
-	command -v speedtest &>/dev/null && _spd_bin="speedtest"
 fi
+
+# ── Determinar binario ────────────────────────────────────────
+_spd_bin=""
+command -v speedtest     &>/dev/null && _spd_bin="ookla"
+[[ -z "$_spd_bin" ]] && command -v speedtest-cli &>/dev/null && _spd_bin="python"
 
 if [[ -z "$_spd_bin" ]]; then
-	echo -e "\033[1;31mNão foi possível instalar o speedtest.\033[0m"
-	echo -ne "\n\033[1;31mENTER \033[1;37mpara voltar ao \033[1;32mMENU!\033[0m"; read; return
+	echo -e "\033[1;31m  No se pudo instalar speedtest. Intente: apt install speedtest\033[0m"
+	echo -ne "\n\033[1;31mENTER \033[1;37mpara volver al \033[1;32mMENÚ!\033[0m"; read; return
 fi
 
-echo -e "\033[1;33mExecutando teste... aguarde...\033[0m"
+echo -e "\033[1;33m  Ejecutando prueba... espere hasta 90 seg...\033[0m"
 echo ""
 
-if [[ "$_spd_bin" = "speedtest-cli" ]]; then
-	# speedtest-cli (Python) — saída simples
-	_result=$(speedtest-cli --simple 2>/dev/null)
-	_ping=$(echo "$_result" | grep 'Ping' | awk '{print $2 " " $3}')
-	_down=$(echo "$_result" | grep 'Download' | awk '{print $2 " " $3}')
-	_up=$(echo "$_result"   | grep 'Upload'   | awk '{print $2 " " $3}')
-	_link=$(speedtest-cli --share 2>/dev/null | grep 'http' | awk '{print $NF}')
+_ping="" _down="" _up="" _link="" _server="" _isp=""
+
+if [[ "$_spd_bin" = "ookla" ]]; then
+	_result=$(timeout 90 speedtest \
+		--accept-license --accept-gdpr --progress=no 2>/dev/null)
+	_ping=$(echo "$_result"   | grep -i 'Latency\|Idle'    | grep -oP '[\d.]+\s*ms'    | head -1)
+	_down=$(echo "$_result"   | grep -i 'Download'          | grep -oP '[\d.]+\s*\w+bps' | head -1)
+	_up=$(echo "$_result"     | grep -i 'Upload'            | grep -oP '[\d.]+\s*\w+bps' | head -1)
+	_link=$(echo "$_result"   | grep -i 'Result URL\|Share' | grep -oP 'https?://\S+'    | head -1)
+	_server=$(echo "$_result" | grep -i 'Server'            | head -1 | sed 's/Server://i;s/^[[:space:]]*//')
+	_isp=$(echo "$_result"    | grep -i 'ISP'               | head -1 | sed 's/ISP://i;s/^[[:space:]]*//')
 else
-	# speedtest CLI oficial — saída JSON ou texto
-	_result=$(speedtest --progress=no 2>/dev/null)
-	_ping=$(echo "$_result" | grep -i 'latency\|ping' | grep -oP '[\d.]+\s*ms' | head -1)
-	_down=$(echo "$_result" | grep -i 'download' | grep -oP '[\d.]+ \w+bit' | head -1)
-	_up=$(echo "$_result"   | grep -i 'upload'   | grep -oP '[\d.]+ \w+bit' | head -1)
-	_link=$(echo "$_result" | grep -i 'result\|share' | grep -oP 'https?://\S+' | head -1)
+	_result=$(timeout 90 speedtest-cli --simple 2>/dev/null)
+	_ping=$(echo "$_result" | grep -i 'Ping'     | awk '{print $2 " " $3}')
+	_down=$(echo "$_result" | grep -i 'Download' | awk '{print $2 " " $3}')
+	_up=$(echo "$_result"   | grep -i 'Upload'   | awk '{print $2 " " $3}')
+	_link=$(timeout 20 speedtest-cli --share 2>/dev/null | grep -oP 'https?://\S+' | head -1)
 fi
 
 clear
 echo -e "\E[38;5;18m╭━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮\033[0m"
-echo -e "\E[38;5;18m┃\E[44;1;37m       RESULTADO DO TESTE DE VELOCIDADE  \E[0m\E[38;5;18m┃"
+echo -e "\E[38;5;18m┃\E[44;1;37m      RESULTADO — speedtest.net          \E[0m\E[38;5;18m┃"
 echo -e "\E[38;5;18m╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯\033[0m"
 echo ""
 echo -e "\E[38;5;18m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
-echo -e "\033[1;32mPING (LATÊNCIA):\033[1;37m ${_ping:-N/A}"
-echo -e "\033[1;32mDOWNLOAD:       \033[1;37m ${_down:-N/A}"
-echo -e "\033[1;32mUPLOAD:         \033[1;37m ${_up:-N/A}"
-[[ -n "$_link" ]] && echo -e "\033[1;32mLINK:           \E[38;5;33m $_link\033[0m"
+[[ -n "$_isp"    ]] && echo -e "\033[1;32mISP             :\033[1;37m $_isp"
+[[ -n "$_server" ]] && echo -e "\033[1;32mSERVIDOR        :\033[1;37m $_server"
+echo -e "\033[1;32mPING (LATENCIA) :\033[1;37m ${_ping:-N/A}"
+echo -e "\033[1;32mDESCARGA        :\033[1;37m ${_down:-N/A}"
+echo -e "\033[1;32mSUBIDA          :\033[1;37m ${_up:-N/A}"
 echo -e "\E[38;5;18m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+[[ -n "$_link" ]] && {
+	echo ""
+	echo -e "\033[1;32mCOMPARTIR RESULTADO:\033[0m"
+	echo -e "\E[38;5;33m  $_link\033[0m"
+}
 echo ""
-echo -ne "\n\033[1;31mENTER \033[1;37mpara voltar ao \033[1;32mMENU!\033[0m"; read
+echo -ne "\n\033[1;31mENTER \033[1;37mpara volver al \033[1;32mMENÚ!\033[0m"; read
 }
 
 syncpw() {
@@ -220,6 +232,114 @@ case "$x" in
 	*) echo -e "\n\033[1;31mOpção inválida!\033[0m"; sleep 2 ;;
 esac
 done
+}
+
+
+# ============================================================
+# REINICIAR SERVICIOS — incluye Proxy Socks y WebSocket
+# ============================================================
+reiniciarservicos() {
+clear
+echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
+echo -e "\033[0;34m┃\E[44;1;37m         REINICIANDO SERVICIOS           \E[0m\033[0;34m┃"
+echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
+echo ""
+
+# SSH
+echo -ne "\033[1;33m  OpenSSH...         \033[0m"
+service ssh restart >/dev/null 2>&1 || systemctl restart ssh >/dev/null 2>&1
+echo -e "\033[1;32mOK\033[0m"
+
+# Dropbear normal
+if command -v dropbear &>/dev/null || systemctl list-units --type=service 2>/dev/null | grep -q 'dropbear'; then
+	echo -ne "\033[1;33m  Dropbear...        \033[0m"
+	systemctl restart dropbear 2>/dev/null || service dropbear restart 2>/dev/null
+	echo -e "\033[1;32mOK\033[0m"
+fi
+
+# Dropbear 2016 (systemd)
+if systemctl list-units --type=service 2>/dev/null | grep -q 'dropbear-legacy'; then
+	echo -ne "\033[1;33m  Dropbear 2016...   \033[0m"
+	systemctl restart dropbear-legacy 2>/dev/null
+	echo -e "\033[1;32mOK\033[0m"
+fi
+
+# Squid
+if _sq=$(command -v squid || command -v squid3); then
+	echo -ne "\033[1;33m  Squid...           \033[0m"
+	service squid restart >/dev/null 2>&1 || service squid3 restart >/dev/null 2>&1
+	echo -e "\033[1;32mOK\033[0m"
+fi
+
+# SSL Tunnel
+if command -v stunnel4 &>/dev/null && [[ -f /etc/stunnel/stunnel.conf ]]; then
+	echo -ne "\033[1;33m  SSL Tunnel...      \033[0m"
+	systemctl restart stunnel4 2>/dev/null || service stunnel4 restart 2>/dev/null
+	echo -e "\033[1;32mOK\033[0m"
+fi
+
+# OpenVPN
+if command -v openvpn &>/dev/null && systemctl is-active openvpn >/dev/null 2>&1; then
+	echo -ne "\033[1;33m  OpenVPN...         \033[0m"
+	systemctl restart openvpn >/dev/null 2>&1
+	echo -e "\033[1;32mOK\033[0m"
+fi
+
+# ── PROXY SOCKS y WEBSOCKET ───────────────────────────────────
+# Capturar puertos activos ANTES de parar
+_proxy_activos=$(ss -tlpn 2>/dev/null | grep -E 'python|python3' | \
+	awk '{print $4}' | rev | cut -d: -f1 | rev | sort -u | xargs)
+
+if [[ -n "$_proxy_activos" ]] || grep -qE 'proxy\.py|wsproxy|open\.py' /etc/autostart 2>/dev/null; then
+	echo -ne "\033[1;33m  Proxy Socks/WS...  \033[0m"
+
+	# Parar todas las sesiones screen de proxy
+	for _pid in $(screen -ls 2>/dev/null | \
+			grep -E '\.proxy|\.ws[0-9]|proxy[0-9]|ws[0-9]|openpy' | \
+			awk '{print $1}'); do
+		screen -r -S "$_pid" -X quit 2>/dev/null
+	done
+	pkill -f '/etc/SSHPlus/proxy.py'    2>/dev/null
+	pkill -f '/etc/SSHPlus/wsproxy'     2>/dev/null
+	pkill -f '/etc/SSHPlus/open.py'     2>/dev/null
+	screen -wipe >/dev/null 2>&1
+	sleep 1
+
+	# Relanzar desde /etc/autostart
+	local _relanzados=0
+	if [[ -f /etc/autostart ]]; then
+		while IFS= read -r _cmd; do
+			[[ "$_cmd" =~ proxy\.py|wsproxy|open\.py ]] && {
+				eval "$_cmd" 2>/dev/null
+				((_relanzados++))
+			}
+		done < /etc/autostart
+	fi
+
+	# Si no había en autostart pero sí estaban activos, relanzar en mismos puertos
+	if [[ $_relanzados -eq 0 && -n "$_proxy_activos" ]]; then
+		for _pt in $_proxy_activos; do
+			local _sc="wsproxy.py"
+			[[ -f /etc/SSHPlus/wsproxy2.py ]] && _sc="wsproxy2.py"
+			screen -dmS "ws${_pt}" python3 /etc/SSHPlus/$_sc $_pt 2>/dev/null
+			((_relanzados++))
+		done
+	fi
+
+	echo -e "\033[1;32mOK ($_relanzados sesiones)\033[0m"
+fi
+
+# Slowdns
+if ps x | grep 'slowdns' | grep -v grep >/dev/null 2>&1; then
+	echo -ne "\033[1;33m  Slowdns...         \033[0m"
+	pkill -f slowdns 2>/dev/null; sleep 1
+	grep 'slowdns' /etc/autostart 2>/dev/null | head -1 | bash 2>/dev/null &
+	echo -e "\033[1;32mOK\033[0m"
+fi
+
+echo ""
+echo -e "\033[1;32m✓ Todos los servicios han sido reiniciados.\033[0m"
+sleep 3
 }
 
 function limit1() {

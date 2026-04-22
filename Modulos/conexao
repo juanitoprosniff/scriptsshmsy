@@ -455,7 +455,8 @@ fun_drop() {
 }
 
 # ============================================================
-# DROPBEAR 2016.74 — FIX REAL para GCC 12/13 (Ubuntu 22/24/25)
+# DROPBEAR 2016.74 — Versión probada con systemd service
+# Compatible: Ubuntu 18 / 20 / 22 / 24 / 25+
 # ============================================================
 fun_inst_dropbear2016() {
     clear
@@ -464,170 +465,136 @@ fun_inst_dropbear2016() {
     echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
     echo -e "\n\033[1;37mUbuntu: $_UBUNTU_VER  GCC: $_GCC_VER\033[0m"
     echo -e "\033[1;33mCompilación: ~3-5 minutos.\033[0m"
-    echo -ne "\033[1;32mPUERTO (defecto 90): \033[1;37m"; read porta_db16; [[ -z "$porta_db16" ]] && porta_db16=90
+    echo -ne "\033[1;32mPUERTO (defecto 143): \033[1;37m"; read porta_db16; [[ -z "$porta_db16" ]] && porta_db16=143
     verif_ptrs $porta_db16
 
     echo -e "\n\033[1;32mInstalando dependencias...\033[0m"
     apt-get update -y >/dev/null 2>&1
-    apt-get install -y make gcc wget zlib1g-dev >/dev/null 2>&1
+    apt-get install -y make gcc wget zlib1g-dev build-essential >/dev/null 2>&1
 
-    # Para GCC >= 12 también necesitamos estas
-    if [[ "${_GCC_VER:-0}" -ge 12 ]]; then
-        apt-get install -y libc6-dev build-essential >/dev/null 2>&1
+    echo "=========================================="
+    echo "Compilando Dropbear 2016.74 desde fuente..."
+    echo "Esto puede tardar unos minutos..."
+    echo "=========================================="
+
+    cd /usr/src
+
+    # Descargar Dropbear 2016.74
+    if [[ ! -f dropbear-2016.74.tar.bz2 ]] || [[ ! -s dropbear-2016.74.tar.bz2 ]]; then
+        echo "Descargando Dropbear 2016.74..."
+        wget -q --timeout=60 \
+            https://github.com/juanitoprosniff/script_msyvpn/raw/refs/heads/main/installer/dropbear-2016.74.tar.bz2
     fi
 
-    compilar_dropbear2016() {
-        cd /usr/src || return 1
+    # Verificar descarga
+    if [[ ! -s dropbear-2016.74.tar.bz2 ]]; then
+        echo -e "\033[1;31mNo se pudo descargar el fuente.\033[0m"
+        echo -e "\033[1;33mSuba manualmente dropbear-2016.74.tar.bz2 a /usr/src/ e intente de nuevo.\033[0m"
+        sleep 3; fun_conexao; return
+    fi
 
-        # Intentar descargar el fuente — múltiples mirrors
-        if [[ ! -f dropbear-2016.74.tar.bz2 ]] || [[ ! -s dropbear-2016.74.tar.bz2 ]]; then
-            echo -e "\033[1;33mDescargando fuente...\033[0m"
-            local _downloaded=0
-            # Mirror 1: repo del script
-            wget -q --timeout=30 \
-                "https://github.com/juanitoprosniff/script_msyvpn/raw/refs/heads/main/installer/dropbear-2016.74.tar.bz2" \
-                -O dropbear-2016.74.tar.bz2 2>/dev/null && [[ -s dropbear-2016.74.tar.bz2 ]] && _downloaded=1
-            # Mirror 2: mirror alternativo en Github
-            [[ $_downloaded -eq 0 ]] && \
-                wget -q --timeout=30 \
-                    "https://github.com/mkj/dropbear/archive/refs/tags/DROPBEAR_2016.74.tar.gz" \
-                    -O /tmp/db2016.tar.gz 2>/dev/null && [[ -s /tmp/db2016.tar.gz ]] && {
-                    # Es .tar.gz no .tar.bz2
-                    mv /tmp/db2016.tar.gz dropbear-2016.tar.gz
-                    _downloaded=2
-                }
-            [[ $_downloaded -eq 0 ]] && {
-                echo -e "\033[1;31mNo se pudo descargar el fuente.\033[0m"
-                echo -e "\033[1;33mSubir manualmente dropbear-2016.74.tar.bz2 a /usr/src/\033[0m"
-                return 1
-            }
-        fi
+    # Extraer
+    echo "Extrayendo archivos..."
+    rm -rf dropbear-2016.74 2>/dev/null
+    tar xjf dropbear-2016.74.tar.bz2
+    cd dropbear-2016.74
 
-        rm -rf dropbear-2016.74 dropbear-DROPBEAR_2016.74 2>/dev/null
+    # Modificar identificador SSH
+    echo "Modificando identificador SSH..."
+    if [[ -f sysoptions.h ]]; then
+        sed -i 's|^#define LOCAL_IDENT.*|#define LOCAL_IDENT "SSH-2.0-ByJuanitoProSniff"|' sysoptions.h 2>/dev/null || true
+        echo "✓ Modificado en sysoptions.h"
+    elif [[ -f default_options.h ]]; then
+        sed -i 's/#define LOCAL_IDENT "SSH-2.0-dropbear_" DROPBEAR_VERSION/#define LOCAL_IDENT "SSH-2.0-ByJuanitoProSniff"/' default_options.h 2>/dev/null || true
+        sed -i 's/SSH-2.0-dropbear/SSH-2.0-ByJuanitoProSniff/g' default_options.h 2>/dev/null || true
+        echo "✓ Modificado en default_options.h"
+    fi
 
-        # Extraer según formato
-        if [[ -f dropbear-2016.74.tar.bz2 ]] && [[ -s dropbear-2016.74.tar.bz2 ]]; then
-            tar xjf dropbear-2016.74.tar.bz2 2>/dev/null
-        elif [[ -f dropbear-2016.tar.gz ]] && [[ -s dropbear-2016.tar.gz ]]; then
-            tar xzf dropbear-2016.tar.gz 2>/dev/null
-        fi
+    # Configurar compilación
+    echo "Configurando compilación..."
+    ./configure --prefix=/opt/dropbear-2016 \
+        --disable-zlib \
+        --disable-wtmp \
+        --disable-lastlog
 
-        # Entrar al directorio (nombre puede variar)
-        local _srcdir
-        _srcdir=$(ls -d dropbear-*2016* 2>/dev/null | head -1)
-        [[ -z "$_srcdir" ]] && { echo -e "\033[1;31mNo se encontró directorio fuente.\033[0m"; return 1; }
-        cd "$_srcdir" || return 1
-
-        # ── Parches de identidad ──────────────────────────────
-        for f in sysoptions.h default_options.h options.h; do
-            [[ -f "$f" ]] && sed -i \
-                's|#define LOCAL_IDENT.*|#define LOCAL_IDENT "SSH-2.0-OpenSSH_8.9"|' "$f" 2>/dev/null
-        done
-
-        # ── CFLAGS según versión de GCC ───────────────────────
-        # GCC 12+: implicit-function-declaration y implicit-int son ERROR por defecto
-        # GCC 13+: incompatible-pointer-types también es ERROR
-        EXTRA_CFLAGS="-w"   # suprimir todos los warnings como errores
-        if [[ "${_GCC_VER:-0}" -ge 12 ]]; then
-            EXTRA_CFLAGS="-w -Wno-error -fpermissive"
-            EXTRA_CFLAGS+=" -Wno-implicit-function-declaration"
-            EXTRA_CFLAGS+=" -Wno-implicit-int"
-            EXTRA_CFLAGS+=" -Wno-int-conversion"
-            EXTRA_CFLAGS+=" -Wno-incompatible-pointer-types"
-        fi
-        if [[ "${_GCC_VER:-0}" -ge 13 ]]; then
-            EXTRA_CFLAGS+=" -Wno-error=incompatible-pointer-types"
-            EXTRA_CFLAGS+=" -std=gnu11"
-        fi
-        export CFLAGS="$EXTRA_CFLAGS"
-        export CXXFLAGS="$EXTRA_CFLAGS"
-
-        echo -e "\033[1;33mConfigurando...\033[0m"
-        # --disable-zlib solo si no está disponible
-        local _zlibflag=""
-        [[ ! -f /usr/include/zlib.h ]] && _zlibflag="--disable-zlib"
-        ./configure --prefix=/opt/dropbear-2016 \
-            $_zlibflag \
-            --disable-wtmp --disable-lastlog \
-            --disable-syslog \
-            >/dev/null 2>&1
-
-        echo -e "\033[1;33mCompilando (GCC $_GCC_VER)...\033[0m"
-
-        # Intentar compilación normal primero
-        if ! make -j$(nproc) PROGRAMS="dropbear dropbearkey" \
-            CFLAGS="$EXTRA_CFLAGS" 2>/tmp/db_make.log; then
-
-            echo -e "\033[1;33mIntentando compilación legacy...\033[0m"
-            # Si falló, intentar con -O0 y más permisivo
-            EXTRA_CFLAGS="-w -O0 -Wno-error -fpermissive -std=gnu11"
-            export CFLAGS="$EXTRA_CFLAGS"
-            make clean >/dev/null 2>&1
-
-            if ! make -j1 PROGRAMS="dropbear dropbearkey" \
-                CFLAGS="$EXTRA_CFLAGS" 2>>/tmp/db_make.log; then
-
-                echo -e "\033[1;31mError en compilación.\033[0m"
-                echo -e "\033[1;33mÚltimas líneas del error:\033[0m"
-                tail -5 /tmp/db_make.log
-                cd /root; unset CFLAGS CXXFLAGS
-                return 1
-            fi
-        fi
-
-        make install PROGRAMS="dropbear dropbearkey" >/dev/null 2>&1
-        unset CFLAGS CXXFLAGS
-
-        [[ ! -f /opt/dropbear-2016/sbin/dropbear ]] && {
-            echo -e "\033[1;31mBinario no encontrado tras compilación.\033[0m"
-            cd /root; return 1
-        }
-        cd /root
-        echo -e "\033[1;32m✓ Dropbear 2016.74 compilado con GCC $_GCC_VER!\033[0m"
-        return 0
-    }
-
-    if compilar_dropbear2016; then
-        mkdir -p /etc/dropbear-2016
-
-        # Generar claves host
-        [[ ! -f /etc/dropbear-2016/dropbear_rsa_host_key ]] && \
-            /opt/dropbear-2016/bin/dropbearkey -t rsa -s 2048 \
-                -f /etc/dropbear-2016/dropbear_rsa_host_key >/dev/null 2>&1
-
-        [[ ! -f /etc/dropbear-2016/dropbear_ecdsa_host_key ]] && \
-            /opt/dropbear-2016/bin/dropbearkey -t ecdsa \
-                -f /etc/dropbear-2016/dropbear_ecdsa_host_key >/dev/null 2>&1
-
-        # Parar sesión anterior
-        for _sid in $(screen -ls 2>/dev/null | grep 'dropbear2016' | awk '{print $1}'); do
-            screen -r -S "$_sid" -X quit 2>/dev/null
-        done
-        sleep 1
-
-        # Iniciar
-        screen -dmS dropbear2016 /opt/dropbear-2016/sbin/dropbear \
-            -r /etc/dropbear-2016/dropbear_rsa_host_key \
-            -r /etc/dropbear-2016/dropbear_ecdsa_host_key \
-            -p $porta_db16 -F -E 2>/dev/null
-
-        # Autostart
-        local _db16_cmd="screen -ls | grep -q 'dropbear2016' || screen -dmS dropbear2016 /opt/dropbear-2016/sbin/dropbear -r /etc/dropbear-2016/dropbear_rsa_host_key -r /etc/dropbear-2016/dropbear_ecdsa_host_key -p $porta_db16 -F -E"
-        grep -q 'dropbear2016' /etc/autostart 2>/dev/null && sed -i '/dropbear2016/d' /etc/autostart
-        echo "$_db16_cmd" >> /etc/autostart
-
-        _fw_open $porta_db16
-        sleep 1
-
-        if screen -list 2>/dev/null | grep -q 'dropbear2016'; then
-            echo -e "\n\033[1;32m✓ DROPBEAR 2016.74 ACTIVO EN PUERTO $porta_db16!\033[0m"
-        else
-            echo -e "\n\033[1;33mDropbear iniciado. Verificar con: screen -ls\033[0m"
-        fi
+    # Compilar
+    echo "Compilando... (puede tardar 2-3 minutos)"
+    if make -j$(nproc) PROGRAMS="dropbear dropbearkey"; then
+        echo "Instalando..."
+        make install PROGRAMS="dropbear dropbearkey"
     else
-        echo -e "\n\033[1;31mFallo en la instalación de Dropbear 2016.\033[0m"
-        echo -e "\033[1;33mAlternativa recomendada: use TinySSH o OSSH (opción 15 del menú).\033[0m"
+        echo -e "\033[1;31m⚠ ERROR: No se pudo compilar Dropbear 2016\033[0m"
+        echo -e "\033[1;33mContinuando sin Dropbear Legacy...\033[0m"
+        cd /root; sleep 3; fun_conexao; return
     fi
+
+    # Verificar instalación del binario
+    if [[ ! -f /opt/dropbear-2016/sbin/dropbear ]]; then
+        echo -e "\033[1;31m⚠ ERROR: Binario no encontrado tras compilación.\033[0m"
+        cd /root; sleep 3; fun_conexao; return
+    fi
+
+    echo "✓ Dropbear 2016.74 compilado exitosamente"
+
+    # Crear directorio para llaves
+    mkdir -p /etc/dropbear-legacy
+
+    # Generar llaves SSH para Dropbear 2016
+    echo "Generando llaves SSH para Dropbear 2016..."
+    [[ ! -f /etc/dropbear-legacy/dropbear_rsa_host_key ]] && \
+        /opt/dropbear-2016/bin/dropbearkey -t rsa \
+            -f /etc/dropbear-legacy/dropbear_rsa_host_key -s 2048
+
+    [[ ! -f /etc/dropbear-legacy/dropbear_dss_host_key ]] && \
+        /opt/dropbear-2016/bin/dropbearkey -t dss \
+            -f /etc/dropbear-legacy/dropbear_dss_host_key
+
+    # Crear banner
+    cat > /etc/dropbear-legacy/banner.txt <<'BANEOF'
+t.me/FREEINTERNETVPNMSY
+BANEOF
+
+    # Crear servicio systemd para Dropbear 2016
+    cat > /etc/systemd/system/dropbear-legacy.service <<DBEOF
+[Unit]
+Description=Dropbear SSH Legacy 2016.74 - Puerto $porta_db16
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=/opt/dropbear-2016/sbin/dropbear -F -E -p $porta_db16 -r /etc/dropbear-legacy/dropbear_rsa_host_key -d /etc/dropbear-legacy/dropbear_dss_host_key -b /etc/dropbear-legacy/banner.txt -K 60 -I 300
+ExecReload=/bin/kill -HUP \$MAINPID
+Restart=always
+RestartSec=3
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target
+DBEOF
+
+    # Activar e iniciar servicio
+    systemctl daemon-reload
+    systemctl enable dropbear-legacy
+    systemctl start dropbear-legacy
+
+    _fw_open $porta_db16
+
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "Versión de Dropbear 2016 instalada:"
+    /opt/dropbear-2016/sbin/dropbear -V 2>&1 | head -n 1
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+
+    sleep 1
+    if systemctl is-active dropbear-legacy >/dev/null 2>&1; then
+        echo -e "\n\033[1;32m✓ DROPBEAR 2016.74 ACTIVO EN PUERTO $porta_db16!\033[0m"
+    else
+        echo -e "\n\033[1;33mVerifique con: systemctl status dropbear-legacy\033[0m"
+    fi
+
+    cd /root
     sleep 3; fun_conexao
 }
 
@@ -958,14 +925,15 @@ EOF
     echo -e "\033[0;34m┃\033[1;31m[\033[1;36m2\033[1;31m] \033[1;33mSSL → SSH Legado     (puerto 23)\033[0;34m┃"
     echo -e "\033[0;34m┃\033[1;31m[\033[1;36m3\033[1;31m] \033[1;33mSSL → PROXY SOCKS    (puerto 80)\033[0;34m┃"
     echo -e "\033[0;34m┃\033[1;31m[\033[1;36m4\033[1;31m] \033[1;33mSSL → DROPBEAR       (puerto 110)\033[0;34m┃"
-    echo -e "\033[0;34m┃\033[1;31m[\033[1;36m5\033[1;31m] \033[1;33mSSL → DROPBEAR 2016  (puerto 90)\033[0;34m┃"
-    echo -e "\033[0;34m┃\033[1;31m[\033[1;36m6\033[1;31m] \033[1;33mSSL → Puerto personalizado       \033[0;34m┃"
+    echo -e "\033[0;34m┃\033[1;31m[\033[1;36m5\033[1;31m] \033[1;33mSSL → DROPBEAR 2016  (puerto 143)\033[0;34m┃"
+    echo -e "\033[0;34m┃\033[1;31m[\033[1;36m6\033[1;31m] \033[1;33mSSL → WEBSOCKET      (puerto 8080)\033[0;34m┃"
+    echo -e "\033[0;34m┃\033[1;31m[\033[1;36m7\033[1;31m] \033[1;33mSSL → Puerto personalizado       \033[0;34m┃"
     echo -e "\033[0;34m┃\033[1;31m[\033[1;36m0\033[1;31m] \033[1;33mVOLVER                           \033[0;34m┃"
     echo -ne "\033[1;32mOpción: \033[1;37m"; read resposta; echo ""
     case "$resposta" in
     1) portssl=22 ;;  2) portssl=23 ;;  3) portssl=80 ;;
-    4) portssl=110 ;; 5) portssl=90 ;;
-    6) echo -ne "\033[1;32mPUERTO DESTINO: \033[1;37m"; read portssl; [[ -z "$portssl" ]] && { inst_ssl; return; } ;;
+    4) portssl=110 ;; 5) portssl=143 ;; 6) portssl=8080 ;;
+    7) echo -ne "\033[1;32mPUERTO DESTINO: \033[1;37m"; read portssl; [[ -z "$portssl" ]] && { inst_ssl; return; } ;;
     0) fun_conexao; return ;;
     *) echo -e "\033[1;31mOpción inválida!"; sleep 1; inst_ssl; return ;;
     esac
@@ -1179,10 +1147,20 @@ _fun_socks_menu_destino() {
 
 _fun_alterar_status() {
     local script_file="$1" titulo="$2"
-    if ps x | grep -w "$script_file" | grep -v grep >/dev/null 2>&1; then
-        msgsocks=$(grep -E "MSG =" /etc/SSHPlus/$script_file 2>/dev/null | awk -F= '{print $2}' | tr -d "' ")
+    # Buscar el script activo — puede ser proxy.py, wsproxy.py, wsproxy2.py
+    local _real_script="$script_file"
+    [[ "$script_file" = "wsproxy.py" && -f /etc/SSHPlus/wsproxy2.py ]] && \
+        ps x | grep -w wsproxy2.py | grep -v grep >/dev/null 2>&1 && _real_script="wsproxy2.py"
+
+    if ps x | grep -w "$_real_script" | grep -v grep >/dev/null 2>&1 || \
+       ps x | grep -w "$script_file"  | grep -v grep >/dev/null 2>&1; then
+
+        local _use_script="$_real_script"
+        [[ ! -f /etc/SSHPlus/$_use_script ]] && _use_script="$script_file"
+
+        msgsocks=$(grep -E "MSG\s*=" /etc/SSHPlus/$_use_script 2>/dev/null | head -1 | awk -F= '{print $2}' | tr -d "' ")
         echo -e "\E[44;1;37m   STATUS — $titulo   \E[0m"
-        echo -e "\n\033[1;33mSTATUS ACTUAL: \033[1;32m$msgsocks\033[0m"
+        echo -e "\n\033[1;33mSTATUS ACTUAL: \033[1;32m${msgsocks:-sin status}\033[0m"
         echo -ne "\n\033[1;32mNUEVO STATUS: \033[1;37m"; read msgg
         [[ -z "$msgg" ]] && { fun_conexao; return; }
         echo -e "\033[1;31m[01] AZUL  [02] VERDE  [03] ROJO   [04] AMARILLO"
@@ -1193,11 +1171,48 @@ _fun_alterar_status() {
         4|04) cor_sts='yellow' ;; 5|05) cor_sts='#F535AA' ;; 6|06) cor_sts='cyan' ;;
         7|07) cor_sts='#FF7F00' ;; 8|08) cor_sts='#9932CD' ;; *) cor_sts='null' ;;
         esac
-        msgsocks2=$(grep "MSG =" /etc/SSHPlus/$script_file | awk -F= '{print $2}')
-        sed -i "s/$msgsocks2/ '$msgg'/" /etc/SSHPlus/$script_file
-        cor_old=$(grep 'color=' /etc/SSHPlus/$script_file | cut -d'"' -f2)
-        [[ -n "$cor_old" ]] && sed -i "s/$cor_old/$cor_sts/" /etc/SSHPlus/$script_file
-        echo -e "\n\033[1;32mSTATUS CAMBIADO!\033[0m"; sleep 2; fun_socks
+        # Editar MSG en el script
+        msgsocks2=$(grep "MSG\s*=" /etc/SSHPlus/$_use_script | head -1 | awk -F= '{print $2}')
+        [[ -n "$msgsocks2" ]] && sed -i "s|$msgsocks2| '$msgg'|" /etc/SSHPlus/$_use_script
+        # Editar color
+        cor_old=$(grep 'color=' /etc/SSHPlus/$_use_script 2>/dev/null | head -1 | cut -d'"' -f2)
+        [[ -n "$cor_old" && "$cor_old" != "$cor_sts" ]] && \
+            sed -i "s|color=\"$cor_old\"|color=\"$cor_sts\"|g" /etc/SSHPlus/$_use_script
+
+        # ── REINICIAR el proxy para aplicar el nuevo status ──
+        echo -e "\n\033[1;33mReiniciando proxy para aplicar cambios...\033[0m"
+        # Capturar puertos activos antes de parar
+        local _active_ports
+        _active_ports=$(ss -tlpn 2>/dev/null | grep -E 'python|python3' | \
+            awk '{print $4}' | rev | cut -d: -f1 | rev | xargs)
+
+        # Detectar prefijo de sesión screen
+        local _screen_pfx="proxy"
+        [[ "$_use_script" = *"wsproxy"* || "$_use_script" = *"ws"* ]] && _screen_pfx="ws"
+
+        # Parar todas las sesiones del script
+        for pid in $(screen -ls 2>/dev/null | grep -E "\.${_screen_pfx}|${_screen_pfx}[0-9]" | \
+                     awk '{print $1}'); do
+            screen -r -S "$pid" -X quit 2>/dev/null
+        done
+        # Matar procesos Python del script
+        pkill -f "/etc/SSHPlus/$_use_script" 2>/dev/null
+        pkill -f "/etc/SSHPlus/$script_file"  2>/dev/null
+        screen -wipe >/dev/null 2>&1
+        sleep 1
+
+        # Reiniciar en los mismos puertos
+        if [[ -n "$_active_ports" ]]; then
+            for _pt in $_active_ports; do
+                screen -dmS "${_screen_pfx}${_pt}" python3 /etc/SSHPlus/$_use_script $_pt
+                echo -e "\033[1;32mPuerto \033[1;37m$_pt \033[1;32mreiniciado!\033[0m"
+                sleep 0.2
+            done
+        else
+            echo -e "\033[1;33mNo se detectaron puertos activos. Inicie el proxy manualmente.\033[0m"
+        fi
+
+        echo -e "\n\033[1;32mSTATUS CAMBIADO Y PROXY REINICIADO!\033[0m"; sleep 2; fun_socks
     else
         echo -e "\033[1;31mACTIVE EL $titulo PRIMERO!\033[0m"; sleep 2; fun_socks
     fi
@@ -1783,6 +1798,43 @@ fun_hysteria() {
 }
 
 # ============================================================
+# REINICIAR SERVICIOS DE PROXY SOCKS / WEBSOCKET
+# Función exportable — llamada desde menu.sh reiniciarservicos
+# ============================================================
+reiniciar_proxy_socks() {
+    echo -e "\033[1;33mReiniciando Proxy Socks y WebSocket...\033[0m"
+    local _reiniciados=0
+
+    # Leer los comandos del autostart para proxy/ws
+    if [[ -f /etc/autostart ]]; then
+        # Parar todos los procesos python de proxy
+        for pid in $(screen -ls 2>/dev/null | grep -E '\.proxy|\.ws[0-9]|\.openpy|proxy[0-9]|ws[0-9]' | \
+                     awk '{print $1}'); do
+            screen -r -S "$pid" -X quit 2>/dev/null
+        done
+        pkill -f "/etc/SSHPlus/proxy.py"   2>/dev/null
+        pkill -f "/etc/SSHPlus/wsproxy"    2>/dev/null
+        pkill -f "/etc/SSHPlus/open.py"    2>/dev/null
+        screen -wipe >/dev/null 2>&1
+        sleep 1
+
+        # Relanzar desde /etc/autostart
+        while IFS= read -r _cmd; do
+            [[ "$_cmd" =~ proxy\.py|wsproxy|open\.py ]] && {
+                eval "$_cmd" 2>/dev/null
+                ((_reiniciados++))
+            }
+        done < /etc/autostart
+    fi
+
+    if [[ $_reiniciados -gt 0 ]]; then
+        echo -e "\033[1;32m✓ $_reiniciados servicios proxy reiniciados.\033[0m"
+    else
+        echo -e "\033[1;33mNo hay proxies configurados en autostart.\033[0m"
+    fi
+}
+
+# ============================================================
 # MENÚ PRINCIPAL DE CONEXIÓN
 # ============================================================
 x="ok"; clear
@@ -1794,10 +1846,13 @@ fun_conexao() {
         echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
         _ssh_ports=$(grep '^Port' /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' | xargs)
         echo -e "\033[1;32mOPENSSH\033[1;31m: \033[1;37m${_ssh_ports:-22}"
-        _db16_on=$(screen -list 2>/dev/null | grep -c 'dropbear2016')
+        _db16_on=0
+        screen -list 2>/dev/null | grep -q 'dropbear2016' && _db16_on=1
+        systemctl is-active dropbear-legacy >/dev/null 2>&1 && _db16_on=1
         [[ "$_db16_on" != '0' ]] && {
-            _db16_port=$(screen -list 2>/dev/null | grep 'dropbear2016' | grep -oP '\d+(?=\.dropbear2016)' | head -1)
-            echo -e "\033[1;32mDROPBEAR 2016\033[1;31m: \033[1;37m$_db16_port"
+            _db16_port=$(systemctl show dropbear-legacy --property=ExecStart 2>/dev/null | grep -oP '(?<=-p )\d+' | head -1)
+            [[ -z "$_db16_port" ]] && _db16_port=$(screen -list 2>/dev/null | grep 'dropbear2016' | grep -oP '\d+(?=\.dropbear2016)' | head -1)
+            [[ -n "$_db16_port" ]] && echo -e "\033[1;32mDROPBEAR 2016\033[1;31m: \033[1;37m$_db16_port"
         }
         _py_active=$(ss -tlpn 2>/dev/null | grep -E 'python|python3' | awk '{print $4}' | rev | cut -d: -f1 | rev | xargs)
         _check_proc 'docker'   && { sts8="\033[1;32m✓ "; echo -e "\033[1;32mCHISEL\033[1;31m: \033[1;37m$(get_ports_by_process 'docker')"; } || sts8="\033[1;31m✕ "
