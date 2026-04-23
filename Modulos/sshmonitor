@@ -1,104 +1,226 @@
-#!/bin/bash 
-if [[ -e /usr/lib/licence ]]; then
+#!/bin/bash
+# sshmonitor — Monitor de usuarios SSH
+# FIX: soporte completo para Dropbear 2016 (dropbear-legacy)
+#      conteo preciso sin lentitud
+# ============================================================
+
+[[ ! -e /usr/lib/licence ]] && exit 0
+
 database="/root/usuarios.db"
-tmp_now=$(printf '%(%H%M%S)T\n')
-fun_drop () {
-port_dropbear=`ps aux | grep dropbear | awk NR==1 | awk '{print $17;}'`
-log=/var/log/auth.log
-loginsukses='Password auth succeeded'
-clear
-pids=`ps ax |grep dropbear |grep  " $port_dropbear" |awk -F" " '{print $1}'`
-for pid in $pids
-do
-    pidlogs=`grep $pid $log |grep "$loginsukses" |awk -F" " '{print $3}'`
-    i=0
-    for pidend in $pidlogs
-    do
-      let i=i+1
+[[ ! -f "$database" ]] && exit 0
+
+# ── Detectar proceso y puerto de Dropbear 2016 ───────────────
+# BUG ORIGINAL: usaba `ps aux | awk '{print $17}'` para obtener el
+# puerto — esa columna depende del ancho del terminal y de cuántos
+# argumentos tiene el proceso. Con Dropbear 2016 (dropbear-legacy)
+# el binario está en /opt/dropbear-2016/sbin/dropbear y el
+# comando cambia de posición → siempre daba vacío → drop=0 siempre.
+# FIX: extraer el puerto con grep -oP directamente del cmdline.
+# ─────────────────────────────────────────────────────────────
+_db_port=""
+_db_bin=""
+
+# Buscar Dropbear 2016 (dropbear-legacy) primero
+if systemctl is-active dropbear-legacy >/dev/null 2>&1; then
+    _db_port=$(systemctl show dropbear-legacy --property=ExecStart 2>/dev/null \
+               | grep -oP '(?<=-p )\d+' | head -1)
+    _db_bin="dropbear"
+fi
+
+# Fallback: cualquier dropbear corriendo (normal o legacy via screen)
+if [[ -z "$_db_port" ]]; then
+    _db_port=$(ps aux 2>/dev/null | grep -E '[d]ropbear' \
+               | grep -oP '(?<=-p )\d+' | head -1)
+    [[ -n "$_db_port" ]] && _db_bin="dropbear"
+fi
+
+# ── Función: contar conexiones Dropbear para un usuario ──────
+# BUG ORIGINAL: fun_drop() leía /var/log/auth.log buscando el PID
+# del proceso padre de dropbear y correlacionaba con el log.
+# Problemas:
+#   1) auth.log rota y puede no tener entradas recientes
+#   2) El formato del log varía entre Ubuntu 22 (systemd-journal)
+#      y Ubuntu 18/20 (rsyslog) → los campos $10, $3, etc. quedan mal
+#   3) fun_drop() llama `clear` → borra la pantalla en cada usuario
+#   4) Era O(n²): grep del log por cada PID de cada usuario → muy lento
+#
+# FIX: contar directamente los procesos hijo de dropbear que
+# pertenecen al usuario via /proc. Es instantáneo y exacto.
+# ─────────────────────────────────────────────────────────────
+_count_dropbear_user() {
+    local usr="$1"
+    [[ -z "$_db_port" ]] && echo 0 && return
+
+    # Cada conexión aceptada por dropbear crea un proceso hijo
+    # cuyo UID real es el del usuario autenticado.
+    # Contamos esos procesos hijos (los que NO son el proceso principal).
+    local uid
+    uid=$(id -u "$usr" 2>/dev/null)
+    [[ -z "$uid" ]] && echo 0 && return
+
+    local count=0
+    # Procesar /proc directamente — sin fork pesado, sin grep de log
+    for pid_dir in /proc/[0-9]*/; do
+        local pid="${pid_dir//[^0-9]/}"
+        [[ -z "$pid" ]] && continue
+        # Verificar que sea proceso dropbear
+        local exe
+        exe=$(readlink "/proc/$pid/exe" 2>/dev/null)
+        [[ "$exe" != *dropbear* ]] && continue
+        # Verificar que el UID real del proceso sea el del usuario
+        local proc_uid
+        proc_uid=$(awk '/^Uid:/{print $2; exit}' "/proc/$pid/status" 2>/dev/null)
+        [[ "$proc_uid" == "$uid" ]] && (( count++ ))
     done
-    if [ $pidend ];then
-       login=`grep $pid $log |grep "$pidend" |grep "$loginsukses"`
-       PID=$pid
-       user=`echo $login |awk -F" " '{print $10}' | sed -r "s/'/ /g"`
-       waktu=`echo $login |awk -F" " '{print $2"-"$1,$3}'`
-       while [ ${#waktu} -lt 13 ]; do
-           waktu=$waktu" "
-       done
-       while [ ${#user} -lt 16 ]; do
-           user=$user" "
-       done
-       while [ ${#PID} -lt 8 ]; do
-           PID=$PID" "
-       done
-       echo "$user $PID $waktu"
-    fi
-done
+    echo "$count"
 }
+
+# ── Función: obtener tiempo de conexión dropbear ──────────────
+# BUG ORIGINAL: el tiempo se leía de `ps -u $user | grep sshd`
+# → con Dropbear no hay proceso sshd del usuario, así que siempre
+# daba vacío y el timer era 00:00:00 aunque hubiera conexión.
+# FIX: leer el etime del proceso dropbear hijo del usuario.
+# ─────────────────────────────────────────────────────────────
+_get_dropbear_time() {
+    local usr="$1"
+    local uid
+    uid=$(id -u "$usr" 2>/dev/null)
+    [[ -z "$uid" ]] && echo "00:00:00" && return
+
+    for pid_dir in /proc/[0-9]*/; do
+        local pid="${pid_dir//[^0-9]/}"
+        [[ -z "$pid" ]] && continue
+        local exe
+        exe=$(readlink "/proc/$pid/exe" 2>/dev/null)
+        [[ "$exe" != *dropbear* ]] && continue
+        local proc_uid
+        proc_uid=$(awk '/^Uid:/{print $2; exit}' "/proc/$pid/status" 2>/dev/null)
+        if [[ "$proc_uid" == "$uid" ]]; then
+            # Obtener etime del primer proceso encontrado
+            local et
+            et=$(ps -o etime= -p "$pid" 2>/dev/null | tr -d ' ')
+            if [[ -n "$et" ]]; then
+                # Normalizar formato: ps puede dar MM:SS o HH:MM:SS o D-HH:MM:SS
+                if [[ "$et" =~ ^[0-9]+-[0-9]+:[0-9]+:[0-9]+$ ]]; then
+                    # D-HH:MM:SS → convertir días a horas
+                    local days hms
+                    days="${et%%-*}"
+                    hms="${et##*-}"
+                    local hh mm ss
+                    IFS=: read hh mm ss <<< "$hms"
+                    hh=$(( days * 24 + 10#$hh ))
+                    printf "%02d:%02d:%02d" "$hh" "$(( 10#$mm ))" "$(( 10#$ss ))"
+                elif [[ "$et" =~ ^[0-9]+:[0-9]+:[0-9]+$ ]]; then
+                    echo "$et"
+                elif [[ "$et" =~ ^[0-9]+:[0-9]+$ ]]; then
+                    echo "00:$et"
+                else
+                    echo "00:00:00"
+                fi
+                return
+            fi
+        fi
+    done
+    echo "00:00:00"
+}
+
+# ── Función: tiempo de conexión OpenSSH ──────────────────────
+_get_sshd_time() {
+    local usr="$1"
+    local pid
+    pid=$(ps -u "$usr" 2>/dev/null | awk '/sshd/{print $1; exit}')
+    [[ -z "$pid" ]] && echo "00:00:00" && return
+    local et
+    et=$(ps -o etime= -p "$pid" 2>/dev/null | tr -d ' ')
+    [[ -z "$et" ]] && echo "00:00:00" && return
+    if [[ "$et" =~ ^[0-9]+:[0-9]+:[0-9]+$ ]]; then
+        echo "$et"
+    elif [[ "$et" =~ ^[0-9]+:[0-9]+$ ]]; then
+        echo "00:$et"
+    else
+        echo "00:00:00"
+    fi
+}
+
+# ── Encabezado ───────────────────────────────────────────────
+clear
 echo -e "\033[0;34m╭━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮\033[0m"
 echo -e "\033[0;34m┃\E[44;1;37m USUARIO         STATUS       CONEXAO     TEMPO   \E[0m\033[0;34m┃"
-echo -e "\033[0;34m╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯\033[0m\n"
+echo -e "\033[0;34m╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯\033[0m"
+echo ""
 
- while read usline
-    do  
-        user="$(echo $usline | cut -d' ' -f1)"
-        s2ssh="$(echo $usline | cut -d' ' -f2)"
-        if [ "$(cat /etc/passwd| grep -w $user| wc -l)" = "1" ]; then
-          sqd="$(ps -u $user | grep sshd | wc -l)"
-        else
-          sqd=00
-        fi
-        [[ "$sqd" = "" ]] && sqd=0
-        if [[ -e /etc/openvpn/openvpn-status.log ]]; then
-          ovp="$(cat /etc/openvpn/openvpn-status.log | grep -E ,"$user", | wc -l)"
-        else
-          ovp=0
-        fi
-        if netstat -nltp|grep 'dropbear'> /dev/null;then
-          drop="$(fun_drop | grep "$user" | wc -l)"
-        else
-          drop=0
-        fi
-        cnx=$(($sqd + $drop))
-        conex=$(($cnx + $ovp))
-        if [[ $cnx -gt 0 ]]; then
-          tst="$(ps -o etime $(ps -u $user |grep sshd |awk 'NR==1 {print $1}')|awk 'NR==2 {print $1}')"
-          tst1=$(echo "$tst" | wc -c)
-        if [[ "$tst1" == "9" ]]; then 
-          timerr="$(ps -o etime $(ps -u $user |grep sshd |awk 'NR==1 {print $1}')|awk 'NR==2 {print $1}')"
-        else
-          timerr="$(echo "00:$tst")"
-        fi
-        elif [[ $ovp -gt 0 ]]; then
-          tmp2=$(printf '%(%H:%M:%S)T\n')
-          tmp1="$(grep -w "$user" /etc/openvpn/openvpn-status.log |awk '{print $4}'| head -1)"
-          [[ "$tmp1" = "" ]] && tmp1="00:00:00" && tmp2="00:00:00"
-          var1=`echo $tmp1 | cut -c 1-2`
-          var2=`echo $tmp1 | cut -c 4-5`
-          var3=`echo $tmp1 | cut -c 7-8`
-          var4=`echo $tmp2 | cut -c 1-2`
-          var5=`echo $tmp2 | cut -c 4-5`
-          var6=`echo $tmp2 | cut -c 7-8`
-          calc1=`echo $var1*3600 + $var2*60 + $var3 | bc`
-          calc2=`echo $var4*3600 + $var5*60 + $var6 | bc`
-          seg=$(($calc2 - $calc1))
-          min=$(($seg/60))
-          seg=$(($seg-$min*60))
-          hor=$(($min/60))
-          min=$(($min-$hor*60))
-          timerusr=`printf "%02d:%02d:%02d \n" $hor $min $seg;`
-          timerr=$(echo "$timerusr" | sed -e 's/[^0-9:]//ig' )
-        else
-          timerr="00:00:00"
-        fi
-        if [[ $conex -eq 0 ]]; then
-           status=$(echo -e "\033[1;31mOffline \033[1;33m       ")
-           echo -ne "\033[1;33m"
-           printf '%-17s%-14s%-10s%s\n' " $user"      "$status" "$conex/$s2ssh" "$timerr" 
-        else
-           status=$(echo -e "\033[1;32mOnline\033[1;33m         ")
-           echo -ne "\033[1;33m"
-           printf '%-17s%-14s%-10s%s\n' " $user"      "$status" "$conex/$s2ssh" "$timerr"
-        fi
-    done < "$database"
-fi
-#exit
+# ── Loop principal ────────────────────────────────────────────
+while IFS= read -r usline; do
+    [[ -z "$usline" ]] && continue
+
+    user="$(echo "$usline" | cut -d' ' -f1)"
+    s2ssh="$(echo "$usline" | cut -d' ' -f2)"
+
+    # Verificar que el usuario exista en el sistema
+    if ! getent passwd "$user" >/dev/null 2>&1; then
+        sqd=0
+    else
+        # Conexiones OpenSSH (proceso sshd del usuario)
+        sqd=$(ps -u "$user" 2>/dev/null | grep -c 'sshd' || echo 0)
+        [[ -z "$sqd" || ! "$sqd" =~ ^[0-9]+$ ]] && sqd=0
+    fi
+
+    # Conexiones OpenVPN
+    if [[ -e /etc/openvpn/openvpn-status.log ]]; then
+        ovp=$(grep -cE ",$user," /etc/openvpn/openvpn-status.log 2>/dev/null || echo 0)
+    else
+        ovp=0
+    fi
+
+    # Conexiones Dropbear (método directo via /proc — sin leer logs)
+    if [[ -n "$_db_port" ]]; then
+        drop=$(_count_dropbear_user "$user")
+    else
+        drop=0
+    fi
+
+    cnx=$(( sqd + drop ))
+    conex=$(( cnx + ovp ))
+
+    # ── Timer de conexión ─────────────────────────────────────
+    if [[ $sqd -gt 0 ]]; then
+        # Tiene sesión OpenSSH activa
+        timerr=$(_get_sshd_time "$user")
+    elif [[ $drop -gt 0 ]]; then
+        # Tiene sesión Dropbear activa — BUG ORIGINAL: siempre 00:00:00
+        timerr=$(_get_dropbear_time "$user")
+    elif [[ $ovp -gt 0 ]]; then
+        # Tiene sesión OpenVPN activa
+        tmp2=$(printf '%(%H:%M:%S)T\n')
+        tmp1="$(grep -w "$user" /etc/openvpn/openvpn-status.log 2>/dev/null \
+                | awk '{print $4}' | head -1)"
+        [[ -z "$tmp1" ]] && tmp1="00:00:00" && tmp2="00:00:00"
+        IFS=: read var1 var2 var3 <<< "$tmp1"
+        IFS=: read var4 var5 var6 <<< "$tmp2"
+        calc1=$(( 10#$var1 * 3600 + 10#$var2 * 60 + 10#$var3 ))
+        calc2=$(( 10#$var4 * 3600 + 10#$var5 * 60 + 10#$var6 ))
+        seg=$(( calc2 - calc1 ))
+        [[ $seg -lt 0 ]] && seg=0
+        hor=$(( seg / 3600 ))
+        seg=$(( seg - hor * 3600 ))
+        min=$(( seg / 60 ))
+        seg=$(( seg - min * 60 ))
+        timerr=$(printf "%02d:%02d:%02d" "$hor" "$min" "$seg")
+    else
+        timerr="00:00:00"
+    fi
+
+    # ── Mostrar línea ─────────────────────────────────────────
+    if [[ $conex -eq 0 ]]; then
+        status=$(echo -e "\033[1;31mOffline\033[1;33m        ")
+        echo -ne "\033[1;33m"
+        printf '%-17s%-14s%-10s%s\n' " $user" "$status" "$conex/$s2ssh" "$timerr"
+    else
+        status=$(echo -e "\033[1;32mOnline\033[1;33m         ")
+        echo -ne "\033[1;33m"
+        printf '%-17s%-14s%-10s%s\n' " $user" "$status" "$conex/$s2ssh" "$timerr"
+    fi
+
+done < "$database"
+
+echo ""
