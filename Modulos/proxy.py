@@ -48,9 +48,12 @@ class Server(threading.Thread):
     def run(self):
         self.soc = socket.socket(socket.AF_INET)
         self.soc.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # FIX: listen(0) en Linux moderno = backlog=1 → rechaza conexiones
+        # en puertos alternativos (8080/8880/8888). Usar 128 o más.
+        self.soc.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         self.soc.settimeout(2)
         self.soc.bind((self.host, self.port))
-        self.soc.listen(0)
+        self.soc.listen(128)
         self.running = True
         try:
             while self.running:

@@ -12,6 +12,12 @@ cor1='\033[41;1;37m'
 cor2='\033[44;1;37m'
 scor='\033[0m'
 
+# FIX Dropbear 2016: registrar /bin/false en /etc/shells
+# Dropbear 2016 rechaza el login si la shell del usuario no está
+# en /etc/shells — criarusuario usa -s /bin/false por seguridad
+grep -qx '/bin/false' /etc/shells 2>/dev/null || echo '/bin/false' >> /etc/shells
+grep -qx '/usr/sbin/nologin' /etc/shells 2>/dev/null || echo '/usr/sbin/nologin' >> /etc/shells
+
 # ── Función: mostrar puertos activos ─────────────────────────
 fun_show_ports() {
     echo -e "\033[1;33m━━━━━━━━━━━━━━━━━ PUERTOS ACTIVOS ━━━━━━━━━━━━━━━━━\033[0m"
@@ -112,15 +118,15 @@ fun_usertoken() {
         gui=$(date "+%d/%m/%Y" -d "+$dias days")
     fi
 
-    pass=$(perl -e 'print crypt($ARGV[0], "password")' $password)
+    # FIX Dropbear 2016: usar hash MD5 ($1$) en vez de DES/SHA-512
+    # Dropbear 2016 no soporta SHA-512 ($6$) que genera Ubuntu 22/24 con salt corto
+    pass=$(perl -e 'print crypt($ARGV[0], "\$1\$sshmsy\$")' $password)
     useradd -e $final -M -s /bin/false -p $pass $username >/dev/null 2>&1
     [[ -d /etc/SSHPlus/senha ]] || mkdir -p /etc/SSHPlus/senha
     echo "$password" >/etc/SSHPlus/senha/$username
     echo "$username $sshlimiter" >>/root/usuarios.db
 
-    clear
-    echo -e "\033[0;34m╭━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮\033[0m"
-    echo -e "\033[0;34m┃\E[44;1;37m            TOKEN SSH CRIADO             \E[0m\033[0;34m┃"
+
     echo -e "\033[0;34m╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯\033[0m"
     echo ""
     echo -e "\033[1;32mIP          :\033[1;37m $IP\033[0m"
@@ -206,7 +212,9 @@ else
         gui=$(date "+%d/%m/%Y" -d "+$dias days")
     fi
 
-    pass=$(perl -e 'print crypt($ARGV[0], "password")' $password)
+    # FIX Dropbear 2016: usar hash MD5 ($1$) en vez de DES/SHA-512
+    # Dropbear 2016 no soporta SHA-512 ($6$) que genera Ubuntu 22/24 con salt corto
+    pass=$(perl -e 'print crypt($ARGV[0], "\$1\$sshmsy\$")' $password)
     useradd -e $final -M -s /bin/false -p $pass $username >/dev/null 2>&1
     [[ -d /etc/SSHPlus/senha ]] || mkdir -p /etc/SSHPlus/senha
     echo "$password" >/etc/SSHPlus/senha/$username
