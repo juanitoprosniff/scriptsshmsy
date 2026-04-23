@@ -1,27 +1,35 @@
 #!/usr/bin/env python3
 # encoding: utf-8
-# wsproxy.py — WebSocket Proxy (Multi-Puerto)
-# FIX: soporte multi-puerto (80, 8080, 8880, 8888, 444, etc.)
-# FIX: DEFAULT_HOST apunta a 127.0.0.1 (no 0.0.0.0)
-# FIX: lógica 403 corregida — PASS vacío acepta cualquier destino
-import socket, threading, select, sys, time, getopt
+# wsproxy.py — WebSocket Proxy
+# Uso desde conexao:
+#   python3 wsproxy.py <puerto> [host:puerto_destino]
+# Ejemplos:
+#   python3 wsproxy.py 8080 127.0.0.1:143   → Dropbear 2016
+#   python3 wsproxy.py 80   127.0.0.1:22    → OpenSSH
+#   python3 wsproxy.py 8080                 → defecto 127.0.0.1:22
 
-PASS = ''
+import socket, threading, select, sys, time
+
 LISTENING_ADDR = '0.0.0.0'
 
-# ── Puertos a escuchar ──────────────────────────────────────
-# Si se pasa argumento se usa ese puerto, si no, multi-puerto
-if len(sys.argv) > 1 and sys.argv[1].isdigit():
-    PORTS = [int(sys.argv[1])]
-else:
-    PORTS = [80, 8080, 8880, 8888]
+# ── argv[1] = puerto de escucha, argv[2] = destino ───────────
+try:
+    LISTENING_PORT = int(sys.argv[1])
+except:
+    LISTENING_PORT = 80
+
+try:
+    DEFAULT_HOST = sys.argv[2]
+    if ':' not in DEFAULT_HOST:
+        DEFAULT_HOST = '127.0.0.1:22'
+except:
+    DEFAULT_HOST = '127.0.0.1:22'
 
 BUFLEN = 4096 * 4
 TIMEOUT = 60
 MSG = ''
 COR = '<font color="null">'
 FTAG = '</font>'
-DEFAULT_HOST = "127.0.0.1:22"
 RESPONSE = ("HTTP/1.1 101 " + str(COR) + str(MSG) + str(FTAG) + "\r\n\r\n").encode()
 
 
@@ -118,6 +126,9 @@ class ConnectionHandler(threading.Thread):
     def run(self):
         try:
             self.client_buffer = self.client.recv(BUFLEN)
+
+            # Leer destino del header X-Real-Host si existe,
+            # si no usar DEFAULT_HOST (configurado por argv[2])
             hostPort = self.findHeader(self.client_buffer, 'X-Real-Host')
             if hostPort == '':
                 hostPort = DEFAULT_HOST
@@ -126,17 +137,12 @@ class ConnectionHandler(threading.Thread):
             if split != '':
                 self.client.recv(BUFLEN)
 
+            # Sin lógica de contraseña aqui — la autenticación
+            # la maneja Dropbear/OpenSSH en el destino final
             if hostPort != '':
-                passwd = self.findHeader(self.client_buffer, 'X-Pass')
-                if len(PASS) != 0 and passwd == PASS:
-                    self.method_CONNECT(hostPort)
-                elif len(PASS) != 0 and passwd != PASS:
-                    self.client.send(b'HTTP/1.1 400 WrongPass!\r\n\r\n')
-                else:
-                    # PASS vacío = sin autenticación, conectar directo
-                    self.method_CONNECT(hostPort)
+                self.method_CONNECT(hostPort)
             else:
-                self.client.send(b'HTTP/1.1 400 NoXRealHost!\r\n\r\n')
+                self.client.send(b'HTTP/1.1 400 NoHost!\r\n\r\n')
 
         except Exception as e:
             self.log += ' - error: ' + str(e)
@@ -164,8 +170,7 @@ class ConnectionHandler(threading.Thread):
             port = int(host[i + 1:])
             host = host[:i]
         else:
-            port = 80
-        # Normalizar: 0.0.0.0 o vacío → 127.0.0.1
+            port = 22
         if host in ('0.0.0.0', ''):
             host = '127.0.0.1'
         (soc_family, soc_type, proto, _, address) = socket.getaddrinfo(host, port)[0]
@@ -213,40 +218,27 @@ class ConnectionHandler(threading.Thread):
                 break
 
 
-def print_usage():
-    print('Uso: wsproxy.py [puerto]')
-    print('     wsproxy.py 80          → solo puerto 80')
-    print('     wsproxy.py             → multi-puerto: 80, 8080, 8880, 8888')
-
-
 def main():
     print("\033[0;34m" + "━" * 8 + "\033[1;32m PROXY WEBSOCKET \033[0;34m" + "━" * 8)
     print("")
-    print("\033[1;33mIP:\033[1;32m " + LISTENING_ADDR)
-    print("\033[1;33mPUERTOS:\033[1;32m " + ", ".join(str(p) for p in PORTS))
-    print("\033[1;33mDEFAULT HOST:\033[1;32m " + DEFAULT_HOST)
+    print("\033[1;33mPUERTO :\033[1;32m " + str(LISTENING_PORT))
+    print("\033[1;33mDESTINO:\033[1;32m " + DEFAULT_HOST)
     print("")
     print("\033[0;34m" + "━" * 10 + "\033[1;32m VPSMANAGER \033[0;34m" + "━" * 11 + "\033[0m")
     print("")
 
-    servers = []
-    for port in PORTS:
-        try:
-            s = Server(LISTENING_ADDR, port)
-            s.start()
-            servers.append(s)
-            print("\033[1;32m[✓] Escuchando en puerto \033[1;37m" + str(port) + "\033[0m")
-        except Exception as e:
-            print("\033[1;31m[✗] Error en puerto " + str(port) + ": " + str(e) + "\033[0m")
-
+    server = Server(LISTENING_ADDR, LISTENING_PORT)
+    server.start()
+    print("\033[1;32m[✓] Puerto \033[1;37m" + str(LISTENING_PORT) +
+          "\033[1;32m → \033[1;37m" + DEFAULT_HOST + "\033[0m")
     print("")
+
     while True:
         try:
             time.sleep(2)
         except KeyboardInterrupt:
             print('\n\033[1;31mParando...\033[0m')
-            for s in servers:
-                s.close()
+            server.close()
             break
 
 

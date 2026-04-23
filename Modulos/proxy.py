@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 # encoding: utf-8
-# proxy.py — Proxy SOCKS SSH (Multi-Puerto)
-# FIX: soporte multi-puerto (8080, 8880, 8888, 444, etc.)
-# FIX: lógica de autorización cuando PASS está vacío
-# FIX: banner muestra todos los puertos activos
+# proxy.py — Proxy SOCKS SSH
+# Uso desde conexao:
+#   python3 proxy.py <puerto> [host:puerto_destino]
+# Ejemplos:
+#   python3 proxy.py 8080 127.0.0.1:143
+#   python3 proxy.py 80   127.0.0.1:22
+#   python3 proxy.py 8080
+
 import socket, threading, select, sys, time
 from os import system
 
@@ -11,23 +15,24 @@ system("clear")
 
 IP = '0.0.0.0'
 
-# ── Puertos a escuchar ──────────────────────────────────────
-# Si se pasa argumento se usa ese puerto, si no, multi-puerto
-if len(sys.argv) > 1:
-    try:
-        PORTS = [int(sys.argv[1])]
-    except:
-        PORTS = [8080, 8880, 8888]
-else:
-    PORTS = [8080, 8880, 8888]
+# ── argv[1] = puerto de escucha, argv[2] = destino ───────────
+try:
+    PORT = int(sys.argv[1])
+except:
+    PORT = 80
 
-PASS = ''
+try:
+    DEFAULT_HOST = sys.argv[2]
+    if ':' not in DEFAULT_HOST:
+        DEFAULT_HOST = '127.0.0.1:22'
+except:
+    DEFAULT_HOST = '127.0.0.1:22'
+
 BUFLEN = 8196 * 8
 TIMEOUT = 60
 MSG = ''
 COR = '<font color="null">'
 FTAG = '</font>'
-DEFAULT_HOST = '127.0.0.1:22'
 RESPONSE = ("HTTP/1.1 200 " + str(COR) + str(MSG) + str(FTAG) + "\r\n\r\n").encode()
 
 
@@ -117,6 +122,7 @@ class ConnectionHandler(threading.Thread):
     def run(self):
         try:
             self.client_buffer = self.client.recv(BUFLEN)
+
             hostPort = self.findHeader(self.client_buffer, 'X-Real-Host')
             if hostPort == '':
                 hostPort = DEFAULT_HOST
@@ -125,17 +131,12 @@ class ConnectionHandler(threading.Thread):
             if split != '':
                 self.client.recv(BUFLEN)
 
+            # Sin lógica de contraseña — la autenticación la
+            # maneja Dropbear/OpenSSH en el destino final
             if hostPort != '':
-                passwd = self.findHeader(self.client_buffer, 'X-Pass')
-                if len(PASS) != 0 and passwd == PASS:
-                    self.method_CONNECT(hostPort)
-                elif len(PASS) != 0 and passwd != PASS:
-                    self.client.send(b'HTTP/1.1 400 WrongPass!\r\n\r\n')
-                else:
-                    # PASS vacío = sin autenticación, conectar directo
-                    self.method_CONNECT(hostPort)
+                self.method_CONNECT(hostPort)
             else:
-                self.client.send(b'HTTP/1.1 400 NoXRealHost!\r\n\r\n')
+                self.client.send(b'HTTP/1.1 400 NoHost!\r\n\r\n')
 
         except Exception as e:
             pass
@@ -163,7 +164,6 @@ class ConnectionHandler(threading.Thread):
             host = host[:i]
         else:
             port = 22
-        # Normalizar: 0.0.0.0 o vacío → 127.0.0.1
         if host in ('0.0.0.0', ''):
             host = '127.0.0.1'
         (soc_family, soc_type, proto, _, address) = socket.getaddrinfo(host, port)[0]
@@ -210,33 +210,25 @@ class ConnectionHandler(threading.Thread):
 
 
 def main():
-    print("\033[0;34m" + "━" * 8 + "\033[1;32m PROXY SOCKS SSH \033[0;34m" + "━" * 8)
+    print("\033[0;34m" + "━" * 8 + "\033[1;32m PROXY SOCKS \033[0;34m" + "━" * 8)
     print("")
-    print("\033[1;33mIP:\033[1;32m " + IP)
-    print("\033[1;33mPUERTOS:\033[1;32m " + ", ".join(str(p) for p in PORTS))
-    print("\033[1;33mDEFAULT HOST:\033[1;32m " + DEFAULT_HOST)
+    print("\033[1;33mPUERTO :\033[1;32m " + str(PORT))
+    print("\033[1;33mDESTINO:\033[1;32m " + DEFAULT_HOST)
     print("")
     print("\033[0;34m" + "━" * 10 + "\033[1;32m SSHPLUS \033[0;34m" + "━" * 11 + "\033[0m")
     print("")
-
-    servers = []
-    for port in PORTS:
-        try:
-            s = Server(IP, port)
-            s.start()
-            servers.append(s)
-            print("\033[1;32m[✓] Escuchando en puerto \033[1;37m" + str(port) + "\033[0m")
-        except Exception as e:
-            print("\033[1;31m[✗] Error en puerto " + str(port) + ": " + str(e) + "\033[0m")
-
+    print("\033[1;32m[✓] Puerto \033[1;37m" + str(PORT) +
+          "\033[1;32m → \033[1;37m" + DEFAULT_HOST + "\033[0m")
     print("")
+
+    server = Server(IP, PORT)
+    server.start()
     while True:
         try:
             time.sleep(2)
         except KeyboardInterrupt:
             print('\n\033[1;31mParando...\033[0m')
-            for s in servers:
-                s.close()
+            server.close()
             break
 
 
