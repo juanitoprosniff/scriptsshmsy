@@ -1019,8 +1019,7 @@ fun_socks() {
     [[ $(screen -list 2>/dev/null | grep -wc 'openpy') != '0' ]] && sksop="\033[1;32m✓" || sksop="\033[1;31m✕"
     echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
     echo -e "\033[0;34m┃\033[1;31m[\033[1;36m1\033[1;31m] \033[1;33mWEBSOCKET $var_sks2                        \033[0;34m┃"
-    echo -e "\033[0;34m┃\033[1;31m[\033[1;36m2\033[1;31m] \033[1;33mCAMBIAR STATUS SOCKS SSH             \033[0;34m┃"
-    echo -e "\033[0;34m┃\033[1;31m[\033[1;36m3\033[1;31m] \033[1;33mCAMBIAR STATUS WEBSOCKET             \033[0;34m┃"
+    echo -e "\033[0;34m┃\033[1;31m[\033[1;36m2\033[1;31m] \033[1;33mCAMBIAR STATUS WEBSOCKET             \033[0;34m┃"
     echo -e "\033[0;34m┃\033[1;31m[\033[1;36m0\033[1;31m] \033[1;33mVOLVER                               \033[0;34m┃"
     echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
     echo -ne "\033[1;32mOpción: \033[1;37m"; read resposta
@@ -1046,8 +1045,7 @@ fun_socks() {
         else
             _fun_socks_menu_destino "WEBSOCKET" "ws" "wsproxy.py"
         fi ;;
-    2) _fun_alterar_status "proxy.py" "PROXY SOCKS" ;;
-    3) _fun_alterar_status "wsproxy.py" "WEBSOCKET" ;;
+    2) _fun_alterar_status "wsproxy.py" "WEBSOCKET" ;;
     0) fun_conexao ;;
     *) echo -e "\033[1;31mOpción inválida!\033[0m"; sleep 1; fun_socks ;;
     esac
@@ -1090,17 +1088,23 @@ _fun_socks_menu_destino() {
     [[ -n "$_dst_port" ]] && echo -e "\033[1;33mDestino: 127.0.0.1:$_dst_port\033[0m"
     echo -e "\033[1;32mIniciando $titulo...\033[0m\n"
 
+    # Argumento de destino para cada instancia — esto evita el bug donde
+    # el sed sobre el archivo afecta a todas las instancias por igual
+    local _dst_arg=""
+    [[ -n "$_dst_port" ]] && _dst_arg="127.0.0.1:${_dst_port}"
+
     # Usar wsproxy mejorado si existe
     local _use_script="$script"
     [[ "$script" = "wsproxy.py" && -f /etc/SSHPlus/wsproxy2.py ]] && _use_script="wsproxy2.py"
 
     for porta in $_listen_ports; do
         verif_ptrs $porta
-        screen -dmS ${screen_prefix}${porta} python3 /etc/SSHPlus/$_use_script $porta
+        # Pasar destino como argumento — cada instancia independiente de las demás
+        screen -dmS ${screen_prefix}${porta} python3 /etc/SSHPlus/$_use_script $porta $_dst_arg
         _fw_open $porta tcp
         # Forzar iptables por si el puerto está bloqueado a nivel de kernel
         iptables -I INPUT -p tcp --dport $porta -j ACCEPT 2>/dev/null
-        echo "ss -tlpn | grep -qw $porta || screen -dmS ${screen_prefix}${porta} python3 /etc/SSHPlus/$_use_script $porta" >> /etc/autostart
+        echo "ss -tlpn | grep -qw $porta || screen -dmS ${screen_prefix}${porta} python3 /etc/SSHPlus/$_use_script $porta $_dst_arg" >> /etc/autostart
         sleep 0.5
         # Verificar que realmente está escuchando
         if ss -tlpn 2>/dev/null | grep -q ":$porta "; then
@@ -1110,7 +1114,7 @@ _fun_socks_menu_destino() {
             sleep 1
             ss -tlpn 2>/dev/null | grep -q ":$porta " && \
                 echo -e "\033[1;32m  ✓ Puerto $porta OK\033[0m" || \
-                echo -e "\033[1;31m  ✕ Puerto $porta no responde — verifique python3 y el script $\_use_script\033[0m"
+                echo -e "\033[1;31m  ✕ Puerto $porta no responde — verifique python3 y el script $_use_script\033[0m"
         fi
     done
     echo -e "\n\033[1;32m$titulo ACTIVADO!\033[0m"; sleep 2; fun_socks
