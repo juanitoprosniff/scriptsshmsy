@@ -1,18 +1,25 @@
 #!/usr/bin/env python3
 # encoding: utf-8
-# proxy.py — Proxy SOCKS SSH
-# FIX: puertos 8080/8880/8888/444 ahora conectan correctamente
-# FIX: lógica de autorización cuando PASS está vacío (corrige 403)
+# proxy.py — Proxy SOCKS SSH (Multi-Puerto)
+# FIX: soporte multi-puerto (8080, 8880, 8888, 444, etc.)
+# FIX: lógica de autorización cuando PASS está vacío
+# FIX: banner muestra todos los puertos activos
 import socket, threading, select, sys, time
 from os import system
 
 system("clear")
 
 IP = '0.0.0.0'
-try:
-    PORT = int(sys.argv[1])
-except:
-    PORT = 80
+
+# ── Puertos a escuchar ──────────────────────────────────────
+# Si se pasa argumento se usa ese puerto, si no, multi-puerto
+if len(sys.argv) > 1:
+    try:
+        PORTS = [int(sys.argv[1])]
+    except:
+        PORTS = [8080, 8880, 8888]
+else:
+    PORTS = [8080, 8880, 8888]
 
 PASS = ''
 BUFLEN = 8196 * 8
@@ -125,8 +132,7 @@ class ConnectionHandler(threading.Thread):
                 elif len(PASS) != 0 and passwd != PASS:
                     self.client.send(b'HTTP/1.1 400 WrongPass!\r\n\r\n')
                 else:
-                    # PASS vacío = sin autenticación, aceptar cualquier destino
-                    # CORRECCIÓN: antes verificaba startswith('0.0.0.0') y enviaba 403
+                    # PASS vacío = sin autenticación, conectar directo
                     self.method_CONNECT(hostPort)
             else:
                 self.client.send(b'HTTP/1.1 400 NoXRealHost!\r\n\r\n')
@@ -157,7 +163,7 @@ class ConnectionHandler(threading.Thread):
             host = host[:i]
         else:
             port = 22
-        # Normalizar: 0.0.0.0 → 127.0.0.1
+        # Normalizar: 0.0.0.0 o vacío → 127.0.0.1
         if host in ('0.0.0.0', ''):
             host = '127.0.0.1'
         (soc_family, soc_type, proto, _, address) = socket.getaddrinfo(host, port)[0]
@@ -203,19 +209,34 @@ class ConnectionHandler(threading.Thread):
                 break
 
 
-def main(host=IP, port=PORT):
-    print("\033[0;34m━" * 8, "\033[1;32m PROXY SOCKS", "\033[0;34m━" * 8, "\n")
+def main():
+    print("\033[0;34m" + "━" * 8 + "\033[1;32m PROXY SOCKS SSH \033[0;34m" + "━" * 8)
+    print("")
     print("\033[1;33mIP:\033[1;32m " + IP)
-    print("\033[1;33mPORTA:\033[1;32m " + str(PORT) + "\n")
-    print("\033[0;34m━" * 10, "\033[1;32m SSHPLUS", "\033[0;34m━\033[1;37m" * 11, "\n")
-    server = Server(IP, PORT)
-    server.start()
+    print("\033[1;33mPUERTOS:\033[1;32m " + ", ".join(str(p) for p in PORTS))
+    print("\033[1;33mDEFAULT HOST:\033[1;32m " + DEFAULT_HOST)
+    print("")
+    print("\033[0;34m" + "━" * 10 + "\033[1;32m SSHPLUS \033[0;34m" + "━" * 11 + "\033[0m")
+    print("")
+
+    servers = []
+    for port in PORTS:
+        try:
+            s = Server(IP, port)
+            s.start()
+            servers.append(s)
+            print("\033[1;32m[✓] Escuchando en puerto \033[1;37m" + str(port) + "\033[0m")
+        except Exception as e:
+            print("\033[1;31m[✗] Error en puerto " + str(port) + ": " + str(e) + "\033[0m")
+
+    print("")
     while True:
         try:
             time.sleep(2)
         except KeyboardInterrupt:
-            print('\nParando...')
-            server.close()
+            print('\n\033[1;31mParando...\033[0m')
+            for s in servers:
+                s.close()
             break
 
 

@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 # encoding: utf-8
-# wsproxy.py — WebSocket Proxy
-# FIX: mismo bug 403 corregido
+# wsproxy.py — WebSocket Proxy (Multi-Puerto)
+# FIX: soporte multi-puerto (80, 8080, 8880, 8888, 444, etc.)
 # FIX: DEFAULT_HOST apunta a 127.0.0.1 (no 0.0.0.0)
+# FIX: lógica 403 corregida — PASS vacío acepta cualquier destino
 import socket, threading, select, sys, time, getopt
 
 PASS = ''
 LISTENING_ADDR = '0.0.0.0'
-try:
-    LISTENING_PORT = int(sys.argv[1])
-except:
-    LISTENING_PORT = 80
+
+# ── Puertos a escuchar ──────────────────────────────────────
+# Si se pasa argumento se usa ese puerto, si no, multi-puerto
+if len(sys.argv) > 1 and sys.argv[1].isdigit():
+    PORTS = [int(sys.argv[1])]
+else:
+    PORTS = [80, 8080, 8880, 8888]
 
 BUFLEN = 4096 * 4
 TIMEOUT = 60
@@ -129,8 +133,7 @@ class ConnectionHandler(threading.Thread):
                 elif len(PASS) != 0 and passwd != PASS:
                     self.client.send(b'HTTP/1.1 400 WrongPass!\r\n\r\n')
                 else:
-                    # PASS vacío = sin autenticación, aceptar cualquier destino
-                    # CORRECCIÓN: antes solo aceptaba 127.0.0.1/localhost, daba 403
+                    # PASS vacío = sin autenticación, conectar directo
                     self.method_CONNECT(hostPort)
             else:
                 self.client.send(b'HTTP/1.1 400 NoXRealHost!\r\n\r\n')
@@ -162,6 +165,7 @@ class ConnectionHandler(threading.Thread):
             host = host[:i]
         else:
             port = 80
+        # Normalizar: 0.0.0.0 o vacío → 127.0.0.1
         if host in ('0.0.0.0', ''):
             host = '127.0.0.1'
         (soc_family, soc_type, proto, _, address) = socket.getaddrinfo(host, port)[0]
@@ -210,45 +214,41 @@ class ConnectionHandler(threading.Thread):
 
 
 def print_usage():
-    print('Use: proxy.py -p <port>')
-    print('       proxy.py -b <ip> -p <porta>')
-    print('       proxy.py -b 0.0.0.0 -p 22')
+    print('Uso: wsproxy.py [puerto]')
+    print('     wsproxy.py 80          → solo puerto 80')
+    print('     wsproxy.py             → multi-puerto: 80, 8080, 8880, 8888')
 
 
-def parse_args(argv):
-    global LISTENING_ADDR
-    global LISTENING_PORT
-    try:
-        opts, args = getopt.getopt(argv, "hb:p:", ["bind=", "port="])
-    except getopt.GetoptError:
-        print_usage()
-        sys.exit(2)
-    for opt, arg in opts:
-        if opt == '-h':
-            print_usage()
-            sys.exit()
-        elif opt in ("-b", "--bind"):
-            LISTENING_ADDR = arg
-        elif opt in ("-p", "--port"):
-            LISTENING_PORT = int(arg)
-
-
-def main(host=LISTENING_ADDR, port=LISTENING_PORT):
-    print("\033[0;34m━" * 8, "\033[1;32m PROXY WEBSOCKET", "\033[0;34m━" * 8, "\n")
+def main():
+    print("\033[0;34m" + "━" * 8 + "\033[1;32m PROXY WEBSOCKET \033[0;34m" + "━" * 8)
+    print("")
     print("\033[1;33mIP:\033[1;32m " + LISTENING_ADDR)
-    print("\033[1;33mPORTA:\033[1;32m " + str(LISTENING_PORT) + "\n")
-    print("\033[0;34m━" * 10, "\033[1;32m VPSMANAGER", "\033[0;34m━\033[1;37m" * 11, "\n")
-    server = Server(LISTENING_ADDR, LISTENING_PORT)
-    server.start()
+    print("\033[1;33mPUERTOS:\033[1;32m " + ", ".join(str(p) for p in PORTS))
+    print("\033[1;33mDEFAULT HOST:\033[1;32m " + DEFAULT_HOST)
+    print("")
+    print("\033[0;34m" + "━" * 10 + "\033[1;32m VPSMANAGER \033[0;34m" + "━" * 11 + "\033[0m")
+    print("")
+
+    servers = []
+    for port in PORTS:
+        try:
+            s = Server(LISTENING_ADDR, port)
+            s.start()
+            servers.append(s)
+            print("\033[1;32m[✓] Escuchando en puerto \033[1;37m" + str(port) + "\033[0m")
+        except Exception as e:
+            print("\033[1;31m[✗] Error en puerto " + str(port) + ": " + str(e) + "\033[0m")
+
+    print("")
     while True:
         try:
             time.sleep(2)
         except KeyboardInterrupt:
-            print('Parando...')
-            server.close()
+            print('\n\033[1;31mParando...\033[0m')
+            for s in servers:
+                s.close()
             break
 
 
 if __name__ == '__main__':
-    parse_args(sys.argv[1:])
     main()
