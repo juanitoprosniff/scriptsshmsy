@@ -185,114 +185,52 @@ fun_inst_dropbear2016() {
     fi
 
     echo "Configurando compilación..."
-    # GCC 14+ (Ubuntu 26) rechaza funciones estilo K&R como error fatal.
-    # Estos CFLAGS suprimen los warnings que GCC 14 eleva a errores.
-    _CFLAGS_COMPAT="-Wno-implicit-function-declaration \
--Wno-implicit-int \
--Wno-incompatible-pointer-types \
--Wno-int-conversion \
--Wno-error=deprecated-declarations \
--Wno-error=old-style-definition \
--Wno-old-style-definition \
--Wno-error"
-
-    # atomicio.c usa declaración de función estilo K&R (pre-ANSI C).
-    # GCC 14 la rechaza con error "too many arguments to function".
-    # Parche: reescribir la firma de la función a ANSI C estándar.
-    if [[ -f atomicio.c ]]; then
-        echo "Aplicando parche de compatibilidad en atomicio.c..."
-        # Reemplazar declaración K&R por prototipo ANSI C correcto
-        sed -i 's/^atomicio(f, fd, _s, n)$/atomicio(ssize_t (*f)(int, void*, size_t), int fd, void *_s, size_t n)/' atomicio.c
-        # Eliminar las líneas de declaración de tipos que siguen en estilo K&R
-        sed -i '/^[[:space:]]*ssize_t (\*f)();$/d'   atomicio.c
-        sed -i '/^[[:space:]]*int fd;$/d'             atomicio.c
-        sed -i '/^[[:space:]]*void \*_s;$/d'          atomicio.c
-        sed -i '/^[[:space:]]*size_t n;$/d'           atomicio.c
-        echo "✓ Parche atomicio.c aplicado"
-    fi
-
-    local _db_configure_opts="--prefix=/opt/dropbear-2016 \
---disable-zlib \
---disable-wtmp \
---disable-lastlog"
-
-    # Ubuntu 22+ usa OpenSSL 3.x; --disable-openssl usa libtomcrypt
-    # evitando las APIs RSA/DSA deprecadas que generan errores de compilación.
-    if [[ $_UBUNTU_VER -ge 22 ]]; then
-        apt-get install -y libtomcrypt-dev libtommath-dev >/dev/null 2>&1
-        _db_configure_opts="$_db_configure_opts --disable-openssl"
-    fi
-
-    CFLAGS="$_CFLAGS_COMPAT" ./configure $_db_configure_opts
+    ./configure --prefix=/opt/dropbear-2016 \
+        --disable-zlib \
+        --disable-wtmp \
+        --disable-lastlog
 
     echo "Compilando... (puede tardar 2-3 minutos)"
-    _compile_ok=0
-    if make -j$(nproc) CFLAGS="$_CFLAGS_COMPAT" PROGRAMS="dropbear dropbearkey"; then
+    if make -j$(nproc) PROGRAMS="dropbear dropbearkey"; then
         echo "Instalando..."
         make install PROGRAMS="dropbear dropbearkey"
-        _compile_ok=1
-    fi
-
-    # ── Fallback: si la compilación falla, usar dropbear del repositorio ──
-    # El dropbear del sistema (apt) funciona perfectamente como reemplazo;
-    # solo cambia la versión, el comportamiento es idéntico para el VPN.
-    if [[ $_compile_ok -eq 0 ]] || [[ ! -f /opt/dropbear-2016/sbin/dropbear ]]; then
-        echo -e "\033[1;33m⚠ Compilación desde fuente no disponible en este sistema.\033[0m"
-        echo -e "\033[1;33mInstalando Dropbear desde repositorio (compatible)...\033[0m"
-        apt-get install -y dropbear >/dev/null 2>&1
-        # Detener el servicio dropbear del sistema para evitar conflicto
-        systemctl stop dropbear  2>/dev/null
-        systemctl disable dropbear 2>/dev/null
-        mkdir -p /opt/dropbear-2016/sbin /opt/dropbear-2016/bin
-        # Apuntar el binario al que instaló apt
-        _db_bin=$(command -v dropbear 2>/dev/null || echo "/usr/sbin/dropbear")
-        _dbkey_bin=$(command -v dropbearkey 2>/dev/null || echo "/usr/bin/dropbearkey")
-        ln -sf "$_db_bin"    /opt/dropbear-2016/sbin/dropbear
-        ln -sf "$_dbkey_bin" /opt/dropbear-2016/bin/dropbearkey
-        echo -e "\033[1;32m✓ Dropbear instalado desde repositorio como fallback.\033[0m"
-    fi
-
-    if [[ ! -e /opt/dropbear-2016/sbin/dropbear ]]; then
-        echo -e "\033[1;31m⚠ ERROR: No se pudo instalar Dropbear por ningún método.\033[0m"
+    else
+        echo -e "\033[1;31m⚠ ERROR: No se pudo compilar Dropbear 2016\033[0m"
+        echo -e "\033[1;33mContinuando sin Dropbear Legacy...\033[0m"
         cd /root; sleep 3; fun_conexao; return
     fi
 
-    echo "✓ Dropbear listo"
+    if [[ ! -f /opt/dropbear-2016/sbin/dropbear ]]; then
+        echo -e "\033[1;31m⚠ ERROR: Binario no encontrado tras compilación.\033[0m"
+        cd /root; sleep 3; fun_conexao; return
+    fi
+
+    echo "✓ Dropbear 2016.74 compilado exitosamente"
 
     mkdir -p /etc/dropbear-legacy
 
-    echo "Generando llaves SSH para Dropbear..."
+    echo "Generando llaves SSH para Dropbear 2016..."
     [[ ! -f /etc/dropbear-legacy/dropbear_rsa_host_key ]] && \
         /opt/dropbear-2016/bin/dropbearkey -t rsa \
             -f /etc/dropbear-legacy/dropbear_rsa_host_key -s 2048
 
-    # DSS (DSA) fue eliminado en OpenSSL 3.x (Ubuntu 22+), se omite en esos sistemas.
-    if [[ $_UBUNTU_VER -lt 22 ]]; then
-        [[ ! -f /etc/dropbear-legacy/dropbear_dss_host_key ]] && \
-            /opt/dropbear-2016/bin/dropbearkey -t dss \
-                -f /etc/dropbear-legacy/dropbear_dss_host_key
-    fi
+    [[ ! -f /etc/dropbear-legacy/dropbear_dss_host_key ]] && \
+        /opt/dropbear-2016/bin/dropbearkey -t dss \
+            -f /etc/dropbear-legacy/dropbear_dss_host_key
 
     cat > /etc/dropbear-legacy/banner.txt <<'BANEOF'
 t.me/FREEINTERNETVPNMSY
 BANEOF
 
-    # En Ubuntu 22+ (OpenSSL 3.x) no se genera ni usa la llave DSS.
-    if [[ $_UBUNTU_VER -ge 22 ]]; then
-        _db_dss_flag=""
-    else
-        _db_dss_flag="-d /etc/dropbear-legacy/dropbear_dss_host_key"
-    fi
-
     cat > /etc/systemd/system/dropbear-legacy.service <<DBEOF
 [Unit]
-Description=Dropbear SSH Legacy - Puerto $porta_db16
+Description=Dropbear SSH Legacy 2016.74 - Puerto $porta_db16
 After=network.target
 Wants=network.target
 
 [Service]
 Type=simple
-ExecStart=/opt/dropbear-2016/sbin/dropbear -F -E -p $porta_db16 -r /etc/dropbear-legacy/dropbear_rsa_host_key $_db_dss_flag -b /etc/dropbear-legacy/banner.txt -K 60 -I 300
+ExecStart=/opt/dropbear-2016/sbin/dropbear -F -E -p $porta_db16 -r /etc/dropbear-legacy/dropbear_rsa_host_key -d /etc/dropbear-legacy/dropbear_dss_host_key -b /etc/dropbear-legacy/banner.txt -K 60 -I 300
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=always
 RestartSec=3
