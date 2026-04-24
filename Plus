@@ -1,12 +1,16 @@
 #!/bin/bash
 # ============================================================
-# INSTALADOR SSHMSY MANAGER — Plus
+# INSTALADOR MSYVPN-SCRIPT — Plus
+# Nombre visible: MSYVPN-SCRIPT  |  Carpetas: /etc/SSHPlus/
 # Traducido al español latinoamericano
-# Compatible: Ubuntu 18 / 20 / 22 / 24 / 25+
+# Compatible: Ubuntu 18 / 20 / 22 / 24 / 25 / 26+
+# Detección automática: ARM / ARM64 / AMD64
 # FIXES:
 #   - Eliminado iplogger (rastreador de IP)
 #   - Copia wsproxy.py y proxy.py a /etc/SSHPlus/ al instalar
+#   - Descarga SlowDNS desde repo propio (sin khaledagn)
 #   - Compatibilidad Python pip Ubuntu 22+
+#   - Rangos de puerto UDP: ZiVPN 1-19999 / Hysteria 20000-39999
 # ============================================================
 tput reset
 
@@ -23,6 +27,19 @@ cd $HOME
 
 # Detectar versión Ubuntu
 _UBUNTU_VER=$(lsb_release -rs 2>/dev/null | cut -d. -f1 || echo "0")
+
+# Detectar arquitectura
+_detect_arch() {
+    local _a; _a=$(uname -m)
+    case "$_a" in
+        x86_64|amd64)  echo "amd64" ;;
+        aarch64|arm64) echo "arm64" ;;
+        armv7*|armhf)  echo "arm"   ;;
+        armv6*)        echo "arm"   ;;
+        *)             echo "amd64" ;;
+    esac
+}
+_ARCH=$(_detect_arch)
 
 fun_bar() {
     comando[0]="$1"
@@ -61,7 +78,7 @@ function verif_key() {
 
 tput reset
 echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-echo -e "\033[0;34m┃\E[41;1;37m             ⇱ SSHMSY MANAGER nzx ⇲             \E[0m\033[0;34m┃"
+echo -e "\033[0;34m┃\E[41;1;37m           ⇱ MSYVPN-SCRIPT nzx ⇲             \E[0m\033[0;34m┃"
 echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
 echo ""
 echo -e "             \033[1;31mATENCIÓN! \033[1;37mESTE SCRIPT VA A:\033[0m"
@@ -74,6 +91,7 @@ echo -e "\033[1;37m  UNA MEJOR EXPERIENCIA Y VISUALIZACIÓN!\033[0m"
 echo ""
 echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
 echo -e "\033[0;34m┃\033[1;37m               by:@JUANITOPROSNIFF               \E[0m\033[0;34m┃"
+echo -e "\033[0;34m┃\033[1;37m        github.com/juanitoprosniff/script_msyvpn  \E[0m\033[0;34m┃"
 echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
 echo ""
 
@@ -84,19 +102,18 @@ sed -i 's/Port 22222/Port 22/g' /etc/ssh/sshd_config > /dev/null 2>&1
 service ssh restart > /dev/null 2>&1
 
 rm $_Ink/list > /dev/null 2>&1
-wget -P $_Ink https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/Install/list > /dev/null 2>&1
+wget -P $_Ink https://raw.githubusercontent.com/juanitoprosniff/script_msyvpn/main/Install/list > /dev/null 2>&1
 verif_key
 
 echo "/bin/menu" > /bin/h && chmod +x /bin/h > /dev/null 2>&1
 rm versao* > /dev/null 2>&1
-wget https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/versao > /dev/null 2>&1
-# ELIMINADO: wget https://iplogger.org/10BEq  ← rastreador de IP, no tiene lugar aquí
+wget https://raw.githubusercontent.com/juanitoprosniff/script_msyvpn/main/versao > /dev/null 2>&1
 
 cd /bin/ > /dev/null 2>&1
 rm v2raymanager > /dev/null 2>&1
-wget https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/Modulos/v2raymanager > /dev/null 2>&1
+wget https://raw.githubusercontent.com/juanitoprosniff/script_msyvpn/main/Modulos/v2raymanager > /dev/null 2>&1
 chmod 777 v2raymanager > /dev/null 2>&1
-wget https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/Install/ShellBot.sh > /dev/null 2>&1
+wget https://raw.githubusercontent.com/juanitoprosniff/script_msyvpn/main/Install/ShellBot.sh > /dev/null 2>&1
 chmod 777 ShellBot.sh > /dev/null 2>&1
 cd > /dev/null 2>&1
 
@@ -233,14 +250,18 @@ tput reset
 echo ""
 echo -e "          \033[1;37m[\033[1;31m!\033[1;37m] \033[1;32mCOPIANDO SCRIPTS PROXY \033[1;37m[\033[1;31m!\033[1;37m] \033[0m"
 echo ""
-[[ ! -d /etc/SSHPlus ]] && mkdir -p /etc/SSHPlus
-[[ ! -d /etc/SSHPlus/senha ]] && mkdir -p /etc/SSHPlus/senha
+echo -e "   \033[1;33mARQUITECTURA DETECTADA: \033[1;32m${_ARCH}\033[0m"
+echo ""
+[[ ! -d /etc/SSHPlus ]]        && mkdir -p /etc/SSHPlus
+[[ ! -d /etc/SSHPlus/senha ]]  && mkdir -p /etc/SSHPlus/senha
+[[ ! -d /etc/SSHPlus/Slow/install ]] && mkdir -p /etc/SSHPlus/Slow/install
+[[ ! -d /etc/SSHPlus/Slow/Key ]]     && mkdir -p /etc/SSHPlus/Slow/Key
+
+_REPO_BASE="https://raw.githubusercontent.com/juanitoprosniff/script_msyvpn/main"
 
 # Descargar wsproxy.py y proxy.py desde el repositorio
-wget -q https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/Modulos/wsproxy.py \
-    -O /etc/SSHPlus/wsproxy.py 2>/dev/null
-wget -q https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/Modulos/proxy.py \
-    -O /etc/SSHPlus/proxy.py 2>/dev/null
+wget -q "${_REPO_BASE}/Modulos/wsproxy.py" -O /etc/SSHPlus/wsproxy.py 2>/dev/null
+wget -q "${_REPO_BASE}/Modulos/proxy.py"   -O /etc/SSHPlus/proxy.py   2>/dev/null
 chmod 755 /etc/SSHPlus/wsproxy.py /etc/SSHPlus/proxy.py 2>/dev/null
 
 # Si el repositorio no los tiene aún, copiar desde el instalador mismo si existen localmente
@@ -249,7 +270,39 @@ chmod 755 /etc/SSHPlus/wsproxy.py /etc/SSHPlus/proxy.py 2>/dev/null
 [[ ! -s /etc/SSHPlus/proxy.py ]] && [[ -f $HOME/proxy.py ]] && \
     cp $HOME/proxy.py /etc/SSHPlus/proxy.py && chmod 755 /etc/SSHPlus/proxy.py
 
-echo -e "    \033[1;32mScripts proxy copiados a /etc/SSHPlus/\033[0m"
+echo -e "    \033[1;32m✓ Scripts proxy copiados a /etc/SSHPlus/\033[0m"
+
+# ── Descargar módulo SlowDNS (binario + script) ───────────────
+tput reset
+echo ""
+echo -e "          \033[1;37m[\033[1;31m!\033[1;37m] \033[1;32mCONFIGURANDO SLOWDNS \033[1;37m[\033[1;31m!\033[1;37m] \033[0m"
+echo ""
+
+# Descargar script de gestión slowdns.sh → /bin/slowdns
+wget -q "${_REPO_BASE}/Slow/slowdns.sh" -O /bin/slowdns 2>/dev/null || \
+curl -fsSL --max-time 20 "${_REPO_BASE}/Slow/slowdns.sh" -o /bin/slowdns 2>/dev/null
+chmod 755 /bin/slowdns 2>/dev/null
+
+# Descargar binario dns-server según arquitectura
+_slow_bin_name="dns-server"
+case "$_ARCH" in
+    arm64) _slow_bin_name="dns-server-arm64" ;;
+    arm)   _slow_bin_name="dns-server-arm"   ;;
+esac
+
+wget -q "${_REPO_BASE}/Slow/${_slow_bin_name}" \
+    -O /etc/SSHPlus/Slow/install/dns-server 2>/dev/null || \
+curl -fsSL --max-time 30 "${_REPO_BASE}/Slow/${_slow_bin_name}" \
+    -o /etc/SSHPlus/Slow/install/dns-server 2>/dev/null
+
+chmod +x /etc/SSHPlus/Slow/install/dns-server 2>/dev/null
+
+if [[ -s /etc/SSHPlus/Slow/install/dns-server ]]; then
+    echo -e "    \033[1;32m✓ SlowDNS binario descargado (${_ARCH})\033[0m"
+else
+    echo -e "    \033[1;33m⚠ SlowDNS: binario no encontrado en repo (súbelo a Slow/)\033[0m"
+    echo -e "    \033[1;33m  Ruta esperada: /etc/SSHPlus/Slow/install/dns-server\033[0m"
+fi
 
 # ── Finalizar ────────────────────────────────────────────────
 tput reset
@@ -263,7 +316,11 @@ tput reset
 echo ""
 cd $HOME
 echo -e ""
-echo -e "             \033[1;37m • \033[1;32mINSTALACIÓN COMPLETADA\033[1;37m • \033[0m"
+echo -e "             \033[1;37m • \033[1;32mINSTALACIÓN COMPLETADA — MSYVPN-SCRIPT\033[1;37m • \033[0m"
 echo -e ""
 echo -e "\033[1;31m \033[1;37mCOMANDO PRINCIPAL: \033[1;32mmenu\033[0m"
+echo -e "\033[1;37m SLOWDNS MANAGER  : \033[1;32mslowdns\033[0m"
+echo -e "\033[1;37m UDP HYSTERIA      : \033[1;31m[08] en menú conexao \033[1;37m(puertos 20000-39999)\033[0m"
+echo -e "\033[1;37m UDP ZIVPN         : \033[1;31m[10] en menú conexao \033[1;37m(puertos 1-19999)\033[0m"
+echo -e "\033[1;37m ARQUITECTURA      : \033[1;32m${_ARCH}\033[0m"
 echo -e "\033[1;37m MÁS INFORMACIÓN \033[1;31m(\033[1;36mTELEGRAM\033[1;31m): \033[1;37m@JuanitoProSniff\033[0m"
