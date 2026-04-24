@@ -134,7 +134,7 @@ fun_openssh() {
 
 # ============================================================
 # DROPBEAR 2016.74 — Versión probada con systemd service
-# Compatible: Ubuntu 18 / 20 / 22 / 24 / 25+
+# Compatible: Ubuntu 18 / 20 / 22 / 24 / 25 / 26+
 # ============================================================
 fun_inst_dropbear2016() {
     clear
@@ -142,9 +142,96 @@ fun_inst_dropbear2016() {
     echo -e "\033[0;34m┃\E[44;1;37m        INSTALAR DROPBEAR 2016.74        \E[0m\033[0;34m┃"
     echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
     echo -e "\n\033[1;37mUbuntu: $_UBUNTU_VER  GCC: $_GCC_VER\033[0m"
-    echo -e "\033[1;33mCompilación: ~3-5 minutos.\033[0m"
     echo -ne "\033[1;32mPUERTO (defecto 143): \033[1;37m"; read porta_db16; [[ -z "$porta_db16" ]] && porta_db16=143
     verif_ptrs $porta_db16
+
+    # ── Ubuntu 26+: GCC 14 no compila Dropbear 2016 ──────────
+    # Se descarga el binario precompilado oficial de Dropbear 2016.74
+    # y se instala directamente sin compilar.
+    if [[ $_UBUNTU_VER -ge 26 ]]; then
+        echo -e "\033[1;33mUbuntu $_UBUNTU_VER detectado — instalando binario precompilado Dropbear 2016.74...\033[0m"
+        apt-get update -y >/dev/null 2>&1
+        apt-get install -y wget >/dev/null 2>&1
+        mkdir -p /opt/dropbear-2016/sbin /opt/dropbear-2016/bin /etc/dropbear-legacy
+
+        # Binario precompilado de Dropbear 2016.74 para amd64/arm64
+        # alojado en el mismo repo del script
+        _db_bin_url_amd64="https://github.com/juanitoprosniff/script_msyvpn/raw/refs/heads/main/installer/dropbear2016-bin-amd64"
+        _db_bin_url_arm64="https://github.com/juanitoprosniff/script_msyvpn/raw/refs/heads/main/installer/dropbear2016-bin-arm64"
+        _dbkey_bin_url_amd64="https://github.com/juanitoprosniff/script_msyvpn/raw/refs/heads/main/installer/dropbearkey2016-bin-amd64"
+        _dbkey_bin_url_arm64="https://github.com/juanitoprosniff/script_msyvpn/raw/refs/heads/main/installer/dropbearkey2016-bin-arm64"
+
+        if [[ "$_ARCH" == "arm64" ]]; then
+            _db_url="$_db_bin_url_arm64"
+            _dbkey_url="$_dbkey_bin_url_arm64"
+        else
+            _db_url="$_db_bin_url_amd64"
+            _dbkey_url="$_dbkey_bin_url_amd64"
+        fi
+
+        echo "Descargando binario dropbear 2016.74 ($_ARCH)..."
+        wget -q --timeout=60 -O /opt/dropbear-2016/sbin/dropbear "$_db_url"
+        wget -q --timeout=60 -O /opt/dropbear-2016/bin/dropbearkey "$_dbkey_url"
+
+        if [[ ! -s /opt/dropbear-2016/sbin/dropbear ]]; then
+            echo -e "\033[1;31m⚠ No se pudo descargar el binario precompilado.\033[0m"
+            echo -e "\033[1;33mSuba manualmente los binarios a /opt/dropbear-2016/sbin/ e intente de nuevo.\033[0m"
+            sleep 3; fun_conexao; return
+        fi
+
+        chmod +x /opt/dropbear-2016/sbin/dropbear
+        chmod +x /opt/dropbear-2016/bin/dropbearkey
+        echo -e "\033[1;32m✓ Binario Dropbear 2016.74 instalado\033[0m"
+
+        echo "Generando llaves SSH para Dropbear 2016..."
+        [[ ! -f /etc/dropbear-legacy/dropbear_rsa_host_key ]] && \
+            /opt/dropbear-2016/bin/dropbearkey -t rsa \
+                -f /etc/dropbear-legacy/dropbear_rsa_host_key -s 2048
+
+        cat > /etc/dropbear-legacy/banner.txt <<'BANEOF'
+t.me/FREEINTERNETVPNMSY
+BANEOF
+
+        cat > /etc/systemd/system/dropbear-legacy.service <<DBEOF
+[Unit]
+Description=Dropbear SSH Legacy 2016.74 - Puerto $porta_db16
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=/opt/dropbear-2016/sbin/dropbear -F -E -p $porta_db16 -r /etc/dropbear-legacy/dropbear_rsa_host_key -b /etc/dropbear-legacy/banner.txt -K 60 -I 300
+ExecReload=/bin/kill -HUP \$MAINPID
+Restart=always
+RestartSec=3
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target
+DBEOF
+
+        systemctl daemon-reload
+        systemctl enable dropbear-legacy
+        systemctl start dropbear-legacy
+        _fw_open $porta_db16
+
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "Versión de Dropbear 2016 instalada:"
+        /opt/dropbear-2016/sbin/dropbear -V 2>&1 | head -n 1
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        sleep 1
+        if systemctl is-active dropbear-legacy >/dev/null 2>&1; then
+            echo -e "\n\033[1;32m✓ DROPBEAR 2016.74 ACTIVO EN PUERTO $porta_db16!\033[0m"
+        else
+            echo -e "\n\033[1;33mVerifique con: systemctl status dropbear-legacy\033[0m"
+        fi
+        cd /root; sleep 3; fun_conexao; return
+    fi
+    # ── Fin bloque Ubuntu 26+ ─────────────────────────────────
+
+    echo -e "\033[1;33mCompilación: ~3-5 minutos.\033[0m"
 
     echo -e "\n\033[1;32mInstalando dependencias...\033[0m"
     apt-get update -y >/dev/null 2>&1
