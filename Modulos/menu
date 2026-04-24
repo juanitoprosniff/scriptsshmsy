@@ -1,8 +1,4 @@
 #!/bin/bash
-# ============================================================
-# MSY VPN SCRIPT — Menú Principal
-# Traducido y reorganizado
-# ============================================================
 tput reset
 fun_bar() {
 comando[0]="$1"
@@ -35,7 +31,7 @@ IP=$(cat /etc/IP 2>/dev/null || hostname -I | awk '{print $1}')
 x="ok"
 
 # ============================================================
-# PRUEBA DE VELOCIDAD — corregido para Ubuntu 22+
+# SPEEDTEST — corregido para Ubuntu 22+
 # Usa speedtest-cli (pip) o el oficial speedtest.net CLI
 # ============================================================
 velocity() {
@@ -52,7 +48,7 @@ if ! command -v speedtest &>/dev/null && ! command -v speedtest-cli &>/dev/null;
 	curl -s https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh \
 		| bash >/dev/null 2>&1
 	apt-get install -y speedtest >/dev/null 2>&1
-	# Alternativa: speedtest-cli Python
+	# Fallback: speedtest-cli Python
 	if ! command -v speedtest &>/dev/null; then
 		echo -e "\033[1;33m  Usando speedtest-cli (Python) como alternativa...\033[0m"
 		apt-get install -y python3-pip >/dev/null 2>&1
@@ -133,22 +129,15 @@ wget -q sshplus.xyz/scripts/utilitarios/syncpainel/modulos.zip
 unzip modulos.zip >/dev/null 2>&1
 chmod 777 *sh
 service ssh restart >/dev/null 2>&1
-echo -e "\n\033[1;32mCOMPLETADO!\033[0m"
+echo -e "\n\033[1;32mCONCLUÍDO!\033[0m"
 sleep 1.5
 cat /dev/null >~/.bash_history && history -c && clear
-echo -e "\E[38;5;33mACCEDA AL PANEL Y CREE UNA CUENTA SSH PARA VERIFICAR QUE TODO ESTÉ OK!\033[0m"
+echo -e "\E[38;5;33mENTRE NO PAINEL E CRIE UMA CONTA SSH PARA VERIFICAR SE ESTÁ TUDO OK!\033[0m"
 rm inst sync.tar.bz2 modulos.zip >/dev/null 2>&1
 }
 
 gldutra() {
 bash <(curl -sL https://raw.githubusercontent.com/DuTra01/CheckUser/master/install.sh)
-}
-
-initcheck() {
-clear
-bash <(curl -sL https://raw.githubusercontent.com/juanitoprosniff/script_msyvpn/main/installer/checkuser_conecta4g.sh) 2>/dev/null \
-|| echo -e "\033[1;31mNo se pudo descargar el instalador. Verifique su conexión.\033[0m"
-sleep 2
 }
 
 fixchk() {
@@ -164,7 +153,7 @@ mkdir /etc/rec >/dev/null 2>&1
 echo 'By: @KIRITO_SSH' >/etc/rec/licence
 echo 'By: @KIRITO_SSH' >/usr/lib/licence
 clear
-echo -e "\033[1;37mActive el checkuser:\033[0m"
+echo -e "\033[1;37mAtive o checkuser:\033[0m"
 cat /dev/null >~/.bash_history && history -c
 checkrs
 }
@@ -178,7 +167,7 @@ echo -e "\E[38;5;18m┗━━━━━━━━━━━━━━━━━━━
 echo -e "\E[38;5;196m|\E[38;5;33m01\E[38;5;196m|\033[1;37m➜ \E[38;5;195mGL TUNNEL
 \E[38;5;196m|\E[38;5;33m02\E[38;5;196m|\033[1;37m➜ \E[38;5;195mCHECKUSER CONECTA4G
 \E[38;5;196m|\E[38;5;33m03\E[38;5;196m|\033[1;37m➜ \E[38;5;195mRECURSOS CHECKUSER
-\E[38;5;196m|\E[38;5;33m00\E[38;5;196m|\033[1;37m➜ \E[38;5;195mMENÚ PRINCIPAL"
+\E[38;5;196m|\E[38;5;33m00\E[38;5;196m|\033[1;37m➜ \E[38;5;195mMENU PRINCIPAL"
 echo ""
 echo -ne "\033[1;32mO QUE DESEJA FAZER \033[1;37m?\033[1;31m?\033[1;37m : "; read x
 case "$x" in
@@ -186,7 +175,27 @@ case "$x" in
 	2|02) clear; initcheck ;;
 	3|03) clear; fixchk ;;
 	0|00) menu; clear ;;
-	*) echo -e "\n\033[1;31mOpción inválida!\033[0m"; sleep 2 ;;
+	*) echo -e "\n\033[1;31mOpção inválida!\033[0m"; sleep 2 ;;
+esac
+done
+}
+
+uteis() {
+while true; do
+clear
+echo -e "\E[38;5;18m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
+echo -e "\E[38;5;18m┃\E[44;1;37m                FERRAMENTAS              \E[0m\E[38;5;18m┃"
+echo -e "\E[38;5;18m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
+echo -e "\E[38;5;196m|\E[38;5;33m01\E[38;5;196m|\033[1;37m➜ \E[38;5;195mSINCRONIZAR PAINEL WEB"
+echo -e "\E[38;5;196m|\E[38;5;33m02\E[38;5;196m|\033[1;37m➜ \E[38;5;195mMEMÓRIA VIRTUAL (SWAP)"
+echo -e "\E[38;5;196m|\E[38;5;33m00\E[38;5;196m|\033[1;37m➜ \E[38;5;195mMENU PRINCIPAL"
+echo ""
+echo -ne "\033[1;32mO QUE DESEJA FAZER \033[1;37m?\033[1;31m?\033[1;37m : "; read x
+case "$x" in
+	1|01) clear; syncpw ;;
+	2|02) clear; swapmemory ;;
+	0|00) menu; clear ;;
+	*) echo -e "\n\033[1;31mOpção inválida!\033[0m"; sleep 2 ;;
 esac
 done
 }
@@ -197,13 +206,13 @@ clear
 echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
 echo -e "\033[0;34m┃\E[44;1;37m        ALTERAR LIMITE DE CONEXÕES       \E[0m\033[0;34m┃"
 echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
-echo -e "\E[38;5;196m|\E[38;5;33m01\E[38;5;196m|\033[1;37m➜ \033[1;33mALTERAR LÍMITE DE USUARIOS\033[0m"
-echo -e "\E[38;5;196m|\E[38;5;33m00\E[38;5;196m|\033[1;37m➜ \033[1;33mVOLVER\033[0m"
+echo -e "\E[38;5;196m|\E[38;5;33m01\E[38;5;196m|\033[1;37m➜ \033[1;33mALTERAR LIMITE DE USUÁRIOS\033[0m"
+echo -e "\E[38;5;196m|\E[38;5;33m00\E[38;5;196m|\033[1;37m➜ \033[1;33mVOLTAR\033[0m"
 echo -ne "\E[38;5;40mO QUE DESEJA FAZER \033[1;37m?\033[1;31m?\033[1;37m: "; read x
 case "$x" in
 	1|01) clear; alterarlimite ;;
 	0|00) clear; menu ;;
-	*) echo -e "\n\033[1;31mOpción inválida!\033[0m"; sleep 2 ;;
+	*) echo -e "\n\033[1;31mOpção inválida!\033[0m"; sleep 2 ;;
 esac
 done
 }
@@ -212,18 +221,19 @@ mddata() {
 while true; do
 clear
 echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-echo -e "\033[0;34m┃\E[44;1;37m        ALTERAR DATA DE EXPIRACIÓN        \E[0m\033[0;34m┃"
+echo -e "\033[0;34m┃\E[44;1;37m        ALTERAR DATA DE EXPIRAÇÃO        \E[0m\033[0;34m┃"
 echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
-echo -e "\E[38;5;196m|\E[38;5;33m01\E[38;5;196m|\033[1;37m➜ \033[1;33mCAMBIAR FECHA DE EXPIRACIÓN\033[0m"
-echo -e "\E[38;5;196m|\E[38;5;33m00\E[38;5;196m|\033[1;37m➜ \033[1;33mVOLVER\033[0m"
+echo -e "\E[38;5;196m|\E[38;5;33m01\E[38;5;196m|\033[1;37m➜ \033[1;33mALTERAR DATA DE EXPIRAÇÃO\033[0m"
+echo -e "\E[38;5;196m|\E[38;5;33m00\E[38;5;196m|\033[1;37m➜ \033[1;33mVOLTAR\033[0m"
 echo -ne "\E[38;5;40mO QUE DESEJA FAZER \033[1;37m?\033[1;31m?\033[1;37m: "; read x
 case "$x" in
 	1|01) clear; mudardata ;;
 	0|00) clear; menu ;;
-	*) echo -e "\n\033[1;31mOpción inválida!\033[0m"; sleep 2 ;;
+	*) echo -e "\n\033[1;31mOpção inválida!\033[0m"; sleep 2 ;;
 esac
 done
 }
+
 
 # ============================================================
 # REINICIAR SERVICIOS — incluye Proxy Socks y WebSocket
@@ -276,12 +286,14 @@ if command -v openvpn &>/dev/null && systemctl is-active openvpn >/dev/null 2>&1
 fi
 
 # ── PROXY SOCKS y WEBSOCKET ───────────────────────────────────
+# Capturar puertos activos ANTES de parar
 _proxy_activos=$(ss -tlpn 2>/dev/null | grep -E 'python|python3' | \
 	awk '{print $4}' | rev | cut -d: -f1 | rev | sort -u | xargs)
 
 if [[ -n "$_proxy_activos" ]] || grep -qE 'proxy\.py|wsproxy|open\.py' /etc/autostart 2>/dev/null; then
 	echo -ne "\033[1;33m  Proxy Socks/WS...  \033[0m"
 
+	# Parar todas las sesiones screen de proxy
 	for _pid in $(screen -ls 2>/dev/null | \
 			grep -E '\.proxy|\.ws[0-9]|proxy[0-9]|ws[0-9]|openpy' | \
 			awk '{print $1}'); do
@@ -293,6 +305,7 @@ if [[ -n "$_proxy_activos" ]] || grep -qE 'proxy\.py|wsproxy|open\.py' /etc/auto
 	screen -wipe >/dev/null 2>&1
 	sleep 1
 
+	# Relanzar desde /etc/autostart
 	local _relanzados=0
 	if [[ -f /etc/autostart ]]; then
 		while IFS= read -r _cmd; do
@@ -303,6 +316,7 @@ if [[ -n "$_proxy_activos" ]] || grep -qE 'proxy\.py|wsproxy|open\.py' /etc/auto
 		done < /etc/autostart
 	fi
 
+	# Si no había en autostart pero sí estaban activos, relanzar en mismos puertos
 	if [[ $_relanzados -eq 0 && -n "$_proxy_activos" ]]; then
 		for _pt in $_proxy_activos; do
 			local _sc="wsproxy.py"
@@ -329,7 +343,7 @@ sleep 3
 }
 
 function limit1() {
-clear; echo -e "\n\033[1;32mINICIANDO EL LIMITADOR...\033[0m"; echo ""
+clear; echo -e "\n\033[1;32mINICIANDO O LIMITER...\033[0m"; echo ""
 fun_bar 'screen -dmS limiter limiter' 'sleep 3'
 [[ $(grep -wc "limiter" /etc/autostart 2>/dev/null) = '0' ]] && {
 	echo "ps x | grep 'limiter' | grep -v 'grep' && echo 'ON' || screen -dmS limiter limiter" >>/etc/autostart
@@ -337,11 +351,11 @@ fun_bar 'screen -dmS limiter limiter' 'sleep 3'
 	sed -i '/limiter/d' /etc/autostart
 	echo "ps x | grep 'limiter' | grep -v 'grep' && echo 'ON' || screen -dmS limiter limiter" >>/etc/autostart
 }
-echo -e "\n\033[1;32m  LIMITADOR ACTIVO!\033[0m"; sleep 3; menu
+echo -e "\n\033[1;32m  LIMITER ATIVO!\033[0m"; sleep 3; menu
 }
 
 function limit2() {
-clear; echo -e "\033[1;32mDETENIENDO EL LIMITADOR...\033[0m"; echo ""
+clear; echo -e "\033[1;32mPARANDO O LIMITER...\033[0m"; echo ""
 fun_stplimiter() {
 	sleep 1; screen -r -S "limiter" -X quit 2>/dev/null
 	screen -wipe 1>/dev/null 2>/dev/null
@@ -349,7 +363,7 @@ fun_stplimiter() {
 	sleep 1
 }
 fun_bar 'fun_stplimiter' 'sleep 3'
-echo -e "\n\033[1;31m LIMITADOR DETENIDO!\033[0m"; sleep 3; menu
+echo -e "\n\033[1;31m LIMITER PARADO!\033[0m"; sleep 3; menu
 }
 
 function limit_ssh() {
@@ -358,23 +372,23 @@ function limit_ssh() {
 
 function autoexec() {
 if grep "menu;" /etc/profile >/dev/null 2>&1; then
-	clear; echo -e "\033[1;32mDESACTIVANDO EJECUCIÓN AUTOMÁTICA\033[0m"
+	clear; echo -e "\033[1;32mDESATIVANDO AUTO EXECUÇÃO\033[0m"
 	offautmenu() { sed -i '/menu;/d' /etc/profile; }
 	fun_bar 'offautmenu'
-	echo -e "\n\033[1;31mEJECUCIÓN AUTOMÁTICA DESACTIVADA!\033[0m"; sleep 1.5s; menu
+	echo -e "\n\033[1;31mAUTO EXECUÇÃO DESATIVADO!\033[0m"; sleep 1.5s; menu
 else
-	clear; echo -e "\033[1;32mACTIVANDO EJECUCIÓN AUTOMÁTICA\033[0m"
+	clear; echo -e "\033[1;32mATIVANDO AUTO EXECUÇÃO\033[0m"
 	autmenu() {
 		grep -v "^menu;" /etc/profile >/tmp/tmpass && mv /tmp/tmpass /etc/profile
 		echo "menu;" >>/etc/profile
 	}
 	fun_bar 'autmenu'
-	echo -e "\n\033[1;32mEJECUCIÓN AUTOMÁTICA ACTIVADA!\033[0m"; sleep 1.5s; menu
+	echo -e "\n\033[1;32mAUTO EXECUÇÃO ATIVADO!\033[0m"; sleep 1.5s; menu
 fi
 }
 
 # ============================================================
-# HYSTERIA UDP — instalación y manager
+# HYSTERIA UDP — instalação e manager
 # ============================================================
 fun_hysteria_menu() {
 clear
@@ -382,13 +396,13 @@ echo -e "\E[38;5;18m┏━━━━━━━━━━━━━━━━━━━
 echo -e "\E[38;5;18m┃\E[44;1;37m          HYSTERIA UDP MANAGER           \E[0m\E[38;5;18m┃"
 echo -e "\E[38;5;18m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
 if command -v hysteria-manager &>/dev/null; then
-	echo -e "\033[1;32mHysteria UDP ya instalado. Abriendo manager...\033[0m"
+	echo -e "\033[1;32mHysteria UDP já instalado. Abrindo manager...\033[0m"
 	sleep 1; hysteria-manager; return
 fi
 echo -e "\E[38;5;196m|\E[38;5;33m01\E[38;5;196m|\033[1;37m➜ \E[38;5;195mINSTALAR HYSTERIA UDP"
-echo -e "\E[38;5;196m|\E[38;5;33m00\E[38;5;196m|\033[1;37m➜ \E[38;5;195mVOLVER"
+echo -e "\E[38;5;196m|\E[38;5;33m00\E[38;5;196m|\033[1;37m➜ \E[38;5;195mVOLTAR"
 echo ""
-echo -ne "\033[1;32mQUÉ DESEA HACER \033[1;37m?\033[1;31m?\033[1;37m : "; read opc
+echo -ne "\033[1;32mO QUE DESEJA FAZER \033[1;37m?\033[1;31m?\033[1;37m : "; read opc
 [[ "$opc" != '1' && "$opc" != '01' ]] && { menu; return; }
 echo -e "\n\033[1;32mInstalando Hysteria UDP Manager...\033[0m"
 BASE_URL="https://raw.githubusercontent.com/juanitoprosniff/script_msyvpn/main/installer"
@@ -399,19 +413,18 @@ if [[ -f /root/install_agnudp.sh ]] && [[ -f /root/agnudp_manager.sh ]]; then
 	bash /root/install_agnudp.sh
 	cp /root/agnudp_manager.sh /usr/local/bin/hysteria-manager
 	chmod +x /usr/local/bin/hysteria-manager
-	echo -e "\n\033[1;32m✓ Hysteria UDP instalado con éxito!\033[0m"
+	echo -e "\n\033[1;32m✓ Hysteria UDP instalado com sucesso!\033[0m"
 	sleep 1; hysteria-manager
 else
-	echo -e "\n\033[1;31m⚠ No fue posible descargar Hysteria UDP.\033[0m"
-	echo -e "\033[1;33mVerifique su conexión a internet.\033[0m"
+	echo -e "\n\033[1;31m⚠ Não foi possível baixar Hysteria UDP.\033[0m"
+	echo -e "\033[1;33mVerifique sua conexão com a internet.\033[0m"
 	sleep 3; menu
 fi
 }
 
 # ============================================================
-# MENÚ PRINCIPAL
+# MENU PRINCIPAL
 # ============================================================
-menu() {
 clear
 while true; do
 [[ -e /etc/Plus-torrent ]] && stsf=$(echo -e "\033[1;32m✓ ") || stsf=$(echo -e "\033[1;31m✕ ")
@@ -419,6 +432,7 @@ stsbot=$(ps x | grep "bot_plus" | grep -v grep >/dev/null && echo -e "\033[1;32m
 autm=$(grep "menu;" /etc/profile >/dev/null 2>&1 && echo -e "\033[1;32m✓ " || echo -e "\033[1;31m✕ ")
 [[ ! -e /usr/lib/licence ]] && rm -rf /bin >/dev/null 2>&1
 stsl=$(ps x | grep "limiter" | grep -v grep >/dev/null && echo -e "\033[1;32m✓ " || echo -e "\033[1;31m✕ ")
+stsu=$(ps x | grep "udpvpn" | grep -v grep >/dev/null && echo -e "\033[1;32m✓ " || echo -e "\033[1;31m✕ ")
 stshy=$(command -v hysteria-manager &>/dev/null && echo -e "\033[1;32m✓ " || echo -e "\033[1;31m✕ ")
 
 # Detectar sistema operativo
@@ -449,77 +463,79 @@ _onlin=$(printf '%-5s' "$_onli")
 _userexp=$(printf '%-5s' "$_expuser")
 _tuser=$(awk -F: '$3>=1000 {print $1}' /etc/passwd | grep -v nobody | wc -l)
 
-# ── Puertos activos para el menú principal ────────────────
-_ssh_pts=$(grep '^Port' /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' | xargs | tr ' ' ',')
-_ws_pts=$(ss -tlpn 2>/dev/null | grep -E 'python|python3' | awk '{print $4}' | rev | cut -d: -f1 | rev | xargs | tr ' ' ',')
-_ssl_pts=$(ss -tlpn 2>/dev/null | grep 'stunnel' | awk '{print $4}' | rev | cut -d: -f1 | rev | xargs | tr ' ' ',')
-
 echo -e "\E[38;5;18m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-echo -e "\E[38;5;18m┃\E[38;5;15m                   ⇱ MSY VPN SCRIPT ⇲                       \E[0m\E[38;5;18m┃"
+echo -e "\E[38;5;18m┃\E[38;5;15m                   ⇱ SSHPLUS MANAGER ⇲                      \E[0m\E[38;5;18m┃"
 echo -e "\E[38;5;18m┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\033[0m"
-echo -e "\E[38;5;18m┃\E[38;5;40mSISTEMA               MEMORIA RAM           PROCESADOR       \E[38;5;18m┃"
+echo -e "\E[38;5;18m┃\E[38;5;40mSISTEMA               MEMÓRIA RAM          PROCESSADOR      \E[38;5;18m┃"
 echo -e "\E[38;5;18m┃\033[1;31mOS: \033[1;37m$_system    \033[1;31mTotal:\033[1;37m$_ram     \033[1;31mNúcleos: \033[1;37m$_core\033[0m   \E[38;5;18m┃"
-echo -e "\E[38;5;18m┃\033[1;31mHora: \033[1;37m$_hora        \033[1;31mEn uso: \033[1;37m$_usor     \033[1;31mEn uso: \033[1;37m$_usop\033[0m    \E[38;5;18m┃"
+echo -e "\E[38;5;18m┃\033[1;31mHora: \033[1;37m$_hora        \033[1;31mEm uso: \033[1;37m$_usor     \033[1;31mEm uso: \033[1;37m$_usop\033[0m    \E[38;5;18m┃"
 echo -e "\E[38;5;18m┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\033[0m"
 [[ ! -e /tmp/att ]] && {
 	echo -e "\E[38;5;18m┃\E[38;5;40mOnline:\033[1;37m  $_onlin        \033[1;31mExpirados: \033[1;37m$_userexp       \033[1;37mTotal: \033[1;37m$_tuser\033[0m       \E[38;5;18m┃"
 	var01='\033[1;37m➜'
 } || {
-	echo -e "\E[38;5;18m┃  \033[1;37m[\033[1;31m!\033[1;37m]  \033[1;32mHAY UNA ACTUALIZACIÓN DISPONIBLE  \033[1;37m[\033[1;31m!\033[1;37m]\033[0m       \E[38;5;18m┃"
+	echo -e "\E[38;5;18m┃  \033[1;37m[\033[1;31m!\033[1;37m]  \033[1;32mEXISTE UMA ATUALIZAÇÃO DISPONÍVEL  \033[1;37m[\033[1;31m!\033[1;37m]\033[0m      \E[38;5;18m┃"
 	var01="\033[1;32m!"
 }
 echo -e "\E[38;5;18m┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\033[0m"
-# Puertos activos
-[[ -n "$_ssh_pts"  ]] && echo -e "\E[38;5;18m┃\033[1;32m SSH  \033[1;31m:\033[1;37m $_ssh_pts\033[0m$(printf '%*s' $((50 - ${#_ssh_pts})) '')\E[38;5;18m┃"
-[[ -n "$_ws_pts"   ]] && echo -e "\E[38;5;18m┃\033[1;32m WS   \033[1;31m:\033[1;37m $_ws_pts\033[0m$(printf '%*s' $((50 - ${#_ws_pts})) '')\E[38;5;18m┃"
-[[ -n "$_ssl_pts"  ]] && echo -e "\E[38;5;18m┃\033[1;32m SSL  \033[1;31m:\033[1;37m $_ssl_pts\033[0m$(printf '%*s' $((50 - ${#_ssl_pts})) '')\E[38;5;18m┃"
-echo -e "\E[38;5;18m┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\033[0m"
-echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m01\E[38;5;196m|\033[1;37m➜ \E[38;5;15mCREAR USUARIO\E[38;5;196m               |\E[38;5;33m14\E[38;5;196m|\033[1;37m➜ \E[38;5;15mOPTIMIZAR SISTEMA    \E[38;5;18m  ┃"
-echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m02\E[38;5;196m|\033[1;37m➜ \E[38;5;15mREMOVER EXPIRADOS\E[38;5;196m           |\E[38;5;33m15\E[38;5;196m|\033[1;37m➜ \E[38;5;15mBLOQUEAR TORRENT $stsf\E[38;5;18m ┃"
-echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m03\E[38;5;196m|\033[1;37m➜ \E[38;5;15mREMOVER USUARIO\E[38;5;196m             |\E[38;5;33m16\E[38;5;196m|\033[1;37m➜ \E[38;5;15mBOT TELEGRAM $stsbot  \E[38;5;18m  ┃"
-echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m04\E[38;5;196m|\033[1;37m➜ \E[38;5;15mMONITOR EN LÍNEA\E[38;5;196m            |\E[38;5;33m17\E[38;5;196m|\033[1;37m➜ \E[38;5;15mEJEC. AUTOMÁTICA $autm\E[38;5;18m ┃"
-echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m05\E[38;5;196m|\033[1;37m➜ \E[38;5;15mCAMBIAR FECHA\E[38;5;196m               |\E[38;5;33m18\E[38;5;196m|\033[1;37m➜ \E[38;5;15mREINICIAR SISTEMA    \E[38;5;18m  ┃"
-echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m06\E[38;5;196m|\033[1;37m➜ \E[38;5;15mCAMBIAR CONTRASEÑA\E[38;5;196m          |\E[38;5;33m19\E[38;5;196m|\033[1;37m➜ \E[38;5;15mCAMBIAR CLAVE ROOT   \E[38;5;18m  ┃"
-echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m07\E[38;5;196m|\033[1;37m➜ \E[38;5;15mREPORTE USUARIOS\E[38;5;196m            |\E[38;5;33m20\E[38;5;196m|\033[1;37m➜ \E[38;5;15mINFO VPS             \E[38;5;18m  ┃"
-echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m08\E[38;5;196m|\033[1;37m➜ \E[38;5;15mMODO DE CONEXIÓN\E[38;5;196m            |\E[38;5;33m21\E[38;5;196m|\033[1;37m➜ \E[38;5;15mSALIR \033[1;32m<<<          \E[38;5;18m  ┃"
-echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m09\E[38;5;196m|\033[1;37m➜ \E[38;5;15mBANNER\E[38;5;196m                      |\E[38;5;33mAT\E[38;5;196m|$var01 \033[1;32mACTUALIZAR SCRIPT    \E[38;5;18m  ┃"
-echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m10\E[38;5;196m|\033[1;37m➜ \E[38;5;15mTRÁFICO DE RED\E[38;5;196m              |\E[38;5;33mRE\E[38;5;196m|\033[1;37m➜ \033[1;31mELIMINAR SCRIPT      \E[38;5;18m  ┃"
-echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m11\E[38;5;196m|\033[1;37m➜ \E[38;5;15mPRUEBA DE VELOCIDAD\E[38;5;196m         |\E[38;5;33m  \E[38;5;196m|                     \E[38;5;18m  ┃"
-echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m12\E[38;5;196m|\033[1;37m➜ \E[38;5;15mLIMITADOR $stsl\E[38;5;196m                 |\E[38;5;33m  \E[38;5;196m|                     \E[38;5;18m  ┃"
-echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m13\E[38;5;196m|\033[1;37m➜ \E[38;5;15mMEMORIA VIRTUAL (SWAP)\E[38;5;196m      |\E[38;5;33m  \E[38;5;196m|                     \E[38;5;18m  ┃"
+echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m01\E[38;5;196m|\033[1;37m➜ \E[38;5;15mCRIAR USUÁRIO\E[38;5;196m               |\E[38;5;33m17\E[38;5;196m|\033[1;37m➜ \E[38;5;15mBAD VPN $stsu        \E[38;5;18m  ┃"
+echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m02\E[38;5;196m|\033[1;37m➜ \E[38;5;15mCRIAR TESTE\E[38;5;196m                 |\E[38;5;33m18\E[38;5;196m|\033[1;37m➜ \E[38;5;15mBLOCKEAR TORRENT $stsf\E[38;5;18m ┃"
+echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m03\E[38;5;196m|\033[1;37m➜ \E[38;5;15mREMOVER USUÁRIO\E[38;5;196m             |\E[38;5;33m19\E[38;5;196m|\033[1;37m➜ \E[38;5;15mBOT TELEGRAM $stsbot  \E[38;5;18m  ┃"
+echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m04\E[38;5;196m|\033[1;37m➜ \E[38;5;15mMONITOR ONLINE\E[38;5;196m              |\E[38;5;33m20\E[38;5;196m|\033[1;37m➜ \E[38;5;15mAUTO EXECUÇÃO $autm  \E[38;5;18m  ┃"
+echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m05\E[38;5;196m|\033[1;37m➜ \E[38;5;15mMUDAR DATA\E[38;5;196m                  |\E[38;5;33m21\E[38;5;196m|\033[1;37m➜ \E[38;5;15mREINICIAR SISTEMA  \E[38;5;18m  ┃"
+echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m06\E[38;5;196m|\033[1;37m➜ \E[38;5;15mALTERAR LIMITE\E[38;5;196m              |\E[38;5;33m22\E[38;5;196m|\033[1;37m➜ \E[38;5;15mREINICIAR SERVIÇOS \E[38;5;18m  ┃"
+echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m07\E[38;5;196m|\033[1;37m➜ \E[38;5;15mMUDAR SENHA\E[38;5;196m                 |\E[38;5;33m23\E[38;5;196m|\033[1;37m➜ \E[38;5;15mADICIONAR HOST     \E[38;5;18m  ┃"
+echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m08\E[38;5;196m|\033[1;37m➜ \E[38;5;15mREMOVER EXPIRADOS\E[38;5;196m           |\E[38;5;33m24\E[38;5;196m|\033[1;37m➜ \E[38;5;15mREMOVER HOST       \E[38;5;18m  ┃"
+echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m09\E[38;5;196m|\033[1;37m➜ \E[38;5;15mRELATÓRIO USUÁRIOS\E[38;5;196m          |\E[38;5;33m25\E[38;5;196m|\033[1;37m➜ \E[38;5;15mMUDAR SENHA ROOT   \E[38;5;18m  ┃"
+echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m10\E[38;5;196m|\033[1;37m➜ \E[38;5;15mMODO DE CONEXÃO\E[38;5;196m             |\E[38;5;33m26\E[38;5;196m|\033[1;37m➜ \E[38;5;15mINFO VPS           \E[38;5;18m  ┃"
+echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m11\E[38;5;196m|\033[1;37m➜ \E[38;5;15mTESTE DE VELOCIDADE\E[38;5;196m         |\E[38;5;33m27\E[38;5;196m|\033[1;37m➜ \E[38;5;15mCHECKUSERS         \E[38;5;18m  ┃"
+echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m12\E[38;5;196m|\033[1;37m➜ \E[38;5;15mBANNER\E[38;5;196m                      |\E[38;5;33m28\E[38;5;196m|\033[1;37m➜ \E[38;5;15mFERRAMENTAS        \E[38;5;18m  ┃"
+echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m13\E[38;5;196m|\033[1;37m➜ \E[38;5;15mTRÁFEGO DE REDE\E[38;5;196m             |\E[38;5;33m29\E[38;5;196m|\033[1;37m➜ \E[38;5;15mHYSTERIA UDP $stshy  \E[38;5;18m ┃"
+echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m14\E[38;5;196m|\033[1;37m➜ \E[38;5;15mOTIMIZAR SISTEMA\E[38;5;196m            |\E[38;5;33m00\E[38;5;196m|\033[1;37m➜ \E[38;5;15mSAIR \033[1;32m<<<          \E[38;5;18m  ┃"
+echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m15\E[38;5;196m|\033[1;37m➜ \E[38;5;15mBACKUP\E[38;5;196m                      |\E[38;5;33mAT\E[38;5;196m|$var01 \033[1;32mATUALIZAR SCRIPT   \E[38;5;18m  ┃"
+echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m16\E[38;5;196m|\033[1;37m➜ \E[38;5;15mLIMITER $stsl\E[38;5;196m                  |\E[38;5;33mRE\E[38;5;196m|\033[1;37m➜ \033[1;31mREMOVER SCRIPT     \E[38;5;18m  ┃"
 echo -e "\E[38;5;18m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
-echo -ne "\E[38;5;40mQUÉ DESEA HACER \033[1;37m?\033[1;31m?\033[1;37m: "; read x
+echo -ne "\E[38;5;40mO QUE DESEJA FAZER \033[1;37m?\033[1;31m?\033[1;37m: "; read x
 
 case "$x" in
-	1|01)   clear; criarusuario;      echo -ne "\n\033[1;31mENTER \033[1;37mpara volver al \033[1;32mMENÚ!\033[0m"; read ;;
-	2|02)   clear; expcleaner;        echo ""; sleep 3 ;;
+	1|01)   clear; criarusuario;      echo -ne "\n\033[1;31mENTER \033[1;37mpara voltar ao \033[1;32mMENU!\033[0m"; read ;;
+	2|02)   clear; criarteste;        echo -ne "\n\033[1;31mENTER \033[1;37mpara voltar ao \033[1;32mMENU!\033[0m"; read ;;
 	3|03)   clear; remover;           sleep 3 ;;
-	4|04)   clear; sshmonitor;        echo -ne "\n\033[1;31mENTER \033[1;37mpara volver al \033[1;32mMENÚ!\033[0m"; read ;;
+	4|04)   clear; sshmonitor;        echo -ne "\n\033[1;31mENTER \033[1;37mpara voltar ao \033[1;32mMENU!\033[0m"; read ;;
 	5|05)   clear; mddata;            sleep 3 ;;
-	6|06)   clear; alterarsenha;      sleep 3 ;;
-	7|07)   clear; infousers;         echo -ne "\n\033[1;31mENTER \033[1;37mpara volver al \033[1;32mMENÚ!\033[0m"; read ;;
-	8|08)   conexao;                  exit ;;
-	9|09)   clear; banner;            sleep 3 ;;
-	10)     clear; echo -e "\033[1;32mPARA SALIR PRESIONE CTRL + C\E[38;5;33m"; sleep 4; nload ;;
+	6|06)   clear; atlimite;          sleep 3 ;;
+	7|07)   clear; alterarsenha;      sleep 3 ;;
+	8|08)   clear; expcleaner;        echo ""; sleep 3 ;;
+	9|09)   clear; infousers;         echo -ne "\n\033[1;31mENTER \033[1;37mpara voltar ao \033[1;32mMENU!\033[0m"; read ;;
+	10)     conexao;                  exit ;;
 	11)     velocity ;;
-	12)     limit_ssh ;;
-	13)     clear; swapmemory ;;
-	14)     clear; otimizar;          echo -ne "\n\033[1;31mENTER \033[1;37mpara volver al \033[1;32mMENÚ!\033[0m"; read ;;
-	15)     blockt ;;
-	16)     botssh ;;
-	17)     autoexec ;;
-	18)     clear; reiniciarsistema ;;
-	19)     clear; senharoot;         sleep 3 ;;
-	20)     clear; detalhes;          echo -ne "\n\033[1;31mENTER \033[1;37mpara volver al \033[1;32mMENÚ!\033[0m"; read ;;
-	21|0|00)
-		echo -e "\033[1;31mSaliendo...\033[0m"; sleep 2; clear; exit ;;
+	12)     clear; banner;            sleep 3 ;;
+	13)     clear; echo -e "\033[1;32mPARA SAIR PRESSIONE CTRL + C\E[38;5;33m"; sleep 4; nload ;;
+	14)     clear; otimizar;          echo -ne "\n\033[1;31mENTER \033[1;37mpara voltar ao \033[1;32mMENU!\033[0m"; read ;;
+	15)     userbackup;               echo -ne "\n\033[1;31mENTER \033[1;37mpara voltar ao \033[1;32mMENU!\033[0m"; read ;;
+	16)     limit_ssh ;;
+	17)     clear; badvpn;            exit ;;
+	18)     blockt ;;
+	19)     botssh ;;
+	20)     autoexec ;;
+	21)     clear; reiniciarsistema ;;
+	22)     clear; reiniciarservicos; sleep 3 ;;
+	23)     clear; addhost;           echo -ne "\n\033[1;31mENTER \033[1;37mpara voltar ao \033[1;32mMENU!\033[0m"; read; menu ;;
+	24)     clear; delhost;           echo -ne "\n\033[1;31mENTER \033[1;37mpara voltar ao \033[1;32mMENU!\033[0m"; read; menu ;;
+	25)     clear; senharoot;         sleep 3 ;;
+	26)     clear; detalhes;          echo -ne "\n\033[1;31mENTER \033[1;37mpara voltar ao \033[1;32mMENU!\033[0m"; read ;;
+	27)     clear; checkrs;           sleep 0.5 ;;
+	28)     clear; uteis;             sleep 0.5 ;;
+	29)     clear; fun_hysteria_menu ;;
 	at|AT)  attscript ;;
 	re|RE)  clear; delscript ;;
+	30)     menu ;;
+	0|00)
+		echo -e "\033[1;31mSaindo...\033[0m"; sleep 2; clear; exit ;;
 	*)
-		echo -e "\n\033[1;31mOpción inválida!\033[0m"; sleep 2 ;;
+		echo -e "\n\033[1;31mOpção inválida!\033[0m"; sleep 2 ;;
 esac
 done
-}
 menu
 clear
 #fim
