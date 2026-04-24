@@ -1,10 +1,10 @@
 # INSTALADOR Script MSY SSHPLUS
 ```
-wget https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/MSYVPN-SCRIPT && chmod 777 MSYVPN-SCRIPT && ./MSYVPN-SCRIPT
+wget https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/Plus && chmod 777 Plus && ./Plus
 ```
 ou
 
-bash <(wget -qO- https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/MSYVPN-SCRIPT && chmod 777 MSYVPN-SCRIPT && ./MSYVPN-SCRIPT
+bash <(wget -qO- https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/Plus && chmod 777 Plus && ./Plus
 
 # DEFINIR OU ALTERAR SENHA ROOT
 ```
