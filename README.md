@@ -12,5 +12,11 @@ bash <(wget -qO- https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/
 ```
 
 # MSY SCRIPT 
-COMPATIBLE CON UBUNTU 18⚠️ 20☑️ 22✅ 24✅ 25☑️ 26⚠️
+COMPATIBLE CON 
+UBUNTU 18⚠️
+Ubuntu 20☑️ 
+Ubuntu 22✅ 
+Ubuntu 24✅ 
+Ubuntu 25☑️ 
+Ubuntu 26⚠️
 arquitecturas AMD✅ y ARM☑️
