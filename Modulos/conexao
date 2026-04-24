@@ -1,15 +1,26 @@
 #!/bin/bash
 # ============================================================
-# MÓDULO: MODO DE CONEXIÓN — v2.0
+# MSYVPN-SCRIPT — MÓDULO: MODO DE CONEXIÓN — v3.0
 # Compatible: Ubuntu 18 / 20 / 22 / 24 / 25+
+# Arquitectura: AMD64 / ARM / ARM64 (detección automática)
 # FIXES:
 #  - Dropbear 2016 GCC 12/13 (Ubuntu 22/24)
 #  - Broken pipe / Enhanced HTTP Custom
-#  - SSL multi-puerto 443, 444, 8443
-#  - 5 servidores SSH: OpenSSH, Dropbear, DB2016, tinySSH, Lsh, OSSH
+#  - SSL multi-puerto 443, 444, 8443 + Dispatcher SSH/WS
+#  - SlowDNS renovado compatible con todos los servidores
+#  - UDP ZiVPN — soporte AMD64, ARM, ARM64
 #  - Proxy WebSocket multi-conexión mejorado
 #  - Sistema de actualización vía GitHub
 # ============================================================
+
+# ── Detección de arquitectura ─────────────────────────────────
+_ARCH=$(uname -m)
+case "$_ARCH" in
+    x86_64)          _ARCH_TAG="amd64"  ;;
+    aarch64|arm64)   _ARCH_TAG="arm64"  ;;
+    armv7l|armv6l)   _ARCH_TAG="arm"    ;;
+    *)               _ARCH_TAG="amd64"  ;;
+esac
 
 _UBUNTU_VER=$(lsb_release -rs 2>/dev/null | cut -d. -f1 || grep -oP '(?<=Ubuntu )\d+' /etc/issue.net 2>/dev/null || echo "0")
 _GCC_VER=$(gcc -dumpversion 2>/dev/null | cut -d. -f1 || echo "0")
@@ -1174,15 +1185,387 @@ criarteste() {
     echo -e "\033[1;33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
     echo ""
 }
+
+# ============================================================
+# SLOWDNS — renovado, compatible con todos los servidores
+# Rutas: /etc/SSHPlus/slowdns/  (binario + llaves + config)
+# ============================================================
+_SLOW_DIR="/etc/SSHPlus/slowdns"
+_SLOW_BIN="$_SLOW_DIR/dns-server"
+_SLOW_KEY="$_SLOW_DIR/server.key"
+_SLOW_PUB="$_SLOW_DIR/server.pub"
+_SLOW_NS="$_SLOW_DIR/domain_ns"
+_SLOW_PORT="$_SLOW_DIR/puerto"
+
+_slow_status() {
+    pgrep -f "dns-server.*5300" >/dev/null 2>&1
+}
+
+_slow_info() {
+    clear
+    echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
+    echo -e "\033[0;34m┃\E[44;1;37m          INFORMACIÓN SLOWDNS            \E[0m\033[0;34m┃"
+    echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
+    local _ns _pub _pt
+    _ns=$(cat "$_SLOW_NS"  2>/dev/null)
+    _pub=$(cat "$_SLOW_PUB" 2>/dev/null)
+    _pt=$(cat "$_SLOW_PORT" 2>/dev/null)
+    if [[ -z "$_ns" || -z "$_pub" ]]; then
+        echo -e "\033[1;31m⚠ SlowDNS no configurado aún.\033[0m"
+        sleep 2; return
+    fi
+    echo -e "\033[1;33mNS (Nameserver) : \033[1;32m$_ns"
+    echo -e "\033[1;33mClave pública   : \033[1;32m$_pub"
+    echo -e "\033[1;33mPuerto destino  : \033[1;32m$_pt"
+    _slow_status && echo -e "\033[1;33mEstado          : \033[1;32m✓ ACTIVO" || \
+                    echo -e "\033[1;33mEstado          : \033[1;31m✕ INACTIVO"
+    echo ""
+    echo -ne "\033[1;37mPresione ENTER para volver...\033[0m"; read
+}
+
+_slow_download_bin() {
+    mkdir -p "$_SLOW_DIR"
+    # Binario único compatible con amd64, arm64 y arm
+    local _url_base="https://raw.githubusercontent.com/khaledagn/VPS-AGN_English_Official/master/LINKS-LIBRARIES"
+    local _bin_name="dns-server"
+    # Seleccionar binario según arquitectura
+    case "$_ARCH_TAG" in
+        arm64) _url="${_url_base}/dns-server-arm64" ;;
+        arm)   _url="${_url_base}/dns-server-arm"   ;;
+        *)     _url="${_url_base}/dns-server"        ;;
+    esac
+    echo -e "\033[1;33mDescargando binario dns-server [$_ARCH_TAG]...\033[0m"
+    wget -q --timeout=20 "$_url" -O "$_SLOW_BIN" 2>/dev/null || \
+    curl -sL --max-time 20 "$_url" -o "$_SLOW_BIN" 2>/dev/null
+    # Fallback: binario genérico amd64
+    [[ ! -s "$_SLOW_BIN" ]] && {
+        wget -q --timeout=20 "${_url_base}/dns-server" -O "$_SLOW_BIN" 2>/dev/null
+    }
+    if [[ -s "$_SLOW_BIN" ]]; then
+        chmod +x "$_SLOW_BIN"
+        echo -e "\033[1;32m✓ Binario descargado correctamente.\033[0m"
+        return 0
+    else
+        echo -e "\033[1;31m✗ No se pudo descargar el binario.\033[0m"
+        return 1
+    fi
+}
+
+_slow_genkey() {
+    rm -f "$_SLOW_KEY" "$_SLOW_PUB"
+    "$_SLOW_BIN" -gen-key -privkey-file "$_SLOW_KEY" -pubkey-file "$_SLOW_PUB" >/dev/null 2>&1
+    if [[ -s "$_SLOW_PUB" ]]; then
+        echo -e "\033[1;32m✓ Clave generada: \033[1;37m$(cat $_SLOW_PUB)\033[0m"
+        return 0
+    else
+        echo -e "\033[1;31m✗ Error generando clave.\033[0m"
+        return 1
+    fi
+}
+
+_slow_start() {
+    local _ns _pt
+    _ns=$(cat "$_SLOW_NS"   2>/dev/null)
+    _pt=$(cat "$_SLOW_PORT" 2>/dev/null)
+    [[ -z "$_ns" || -z "$_pt" ]] && { echo -e "\033[1;31mFaltan NS o puerto. Configure primero.\033[0m"; return 1; }
+    # Abrir puertos en firewall
+    iptables -I INPUT -p udp --dport 5300 -j ACCEPT 2>/dev/null
+    iptables -t nat -I PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 5300 2>/dev/null
+    command -v ufw &>/dev/null && ufw allow 5300/udp >/dev/null 2>&1
+    # Parar instancia anterior
+    pkill -f "dns-server.*5300" 2>/dev/null
+    screen -ls 2>/dev/null | grep '\.slowdns' | awk '{print $1}' | xargs -I{} screen -r -S {} -X quit 2>/dev/null
+    screen -wipe >/dev/null 2>&1; sleep 0.5
+    # Iniciar
+    screen -dmS slowdns "$_SLOW_BIN" -udp :5300 \
+        -privkey-file "$_SLOW_KEY" "$_ns" "127.0.0.1:$_pt"
+    sleep 1
+    if _slow_status; then
+        echo -e "\033[1;32m✓ SlowDNS iniciado → NS: $_ns | Puerto: $_pt\033[0m"
+        # Guardar en autostart
+        sed -i '/slowdns\|dns-server/d' /etc/autostart 2>/dev/null
+        echo "pgrep -f 'dns-server.*5300' >/dev/null || screen -dmS slowdns ${_SLOW_BIN} -udp :5300 -privkey-file ${_SLOW_KEY} ${_ns} 127.0.0.1:${_pt}" >> /etc/autostart
+        return 0
+    else
+        echo -e "\033[1;31m✗ SlowDNS no respondió. Verifique el NS y el binario.\033[0m"
+        return 1
+    fi
+}
+
+slow_setup() {
+    while true; do
+        clear
+        echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
+        echo -e "\033[0;34m┃\E[44;1;37m            GESTIONAR SLOWDNS            \E[0m\033[0;34m┃"
+        echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
+        _slow_status && _sst="\033[1;32m✓ ACTIVO" || _sst="\033[1;31m✕ INACTIVO"
+        echo -e "\033[1;33mEstado   : $_sst\033[0m"
+        [[ -f "$_SLOW_NS"  ]] && echo -e "\033[1;33mNS       : \033[1;37m$(cat $_SLOW_NS)"
+        [[ -f "$_SLOW_PORT"]] && echo -e "\033[1;33mPuerto   : \033[1;37m$(cat $_SLOW_PORT)"
+        echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
+        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m1\033[1;31m] \033[1;33mVER INFORMACIÓN               \033[0;34m┃"
+        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m2\033[1;31m] \033[1;33mINSTALAR / CONFIGURAR         \033[0;34m┃"
+        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m3\033[1;31m] \033[1;33mINICIAR SlowDNS               \033[0;34m┃"
+        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m4\033[1;31m] \033[1;33mREINICIAR SlowDNS             \033[0;34m┃"
+        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m5\033[1;31m] \033[1;33mDETENER SlowDNS               \033[0;34m┃"
+        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m0\033[1;31m] \033[1;33mVOLVER                        \033[0;34m┃"
+        echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
+        echo -ne "\033[1;32mOpción: \033[1;37m"; read _slow_opt
+
+        case "$_slow_opt" in
+        1) _slow_info ;;
+
+        2) # ── Instalación/configuración completa ──────────
+            clear
+            echo -e "\033[0;34m┃\E[44;1;37m       INSTALAR / CONFIGURAR SLOWDNS     \E[0m\033[0;34m┃\n"
+            mkdir -p "$_SLOW_DIR"
+
+            # Paso 1: binario
+            if [[ ! -x "$_SLOW_BIN" ]]; then
+                _slow_download_bin || { sleep 3; continue; }
+            else
+                echo -e "\033[1;32m✓ Binario ya existe.\033[0m"
+                echo -ne "\033[1;33m¿Descargar de nuevo? [s/N]: \033[1;37m"; read _redown
+                [[ "$_redown" =~ ^[sS]$ ]] && _slow_download_bin
+            fi
+
+            # Paso 2: puerto destino SSH/Proxy
+            echo ""
+            echo -e "\033[1;33mPaso 1 — Puerto de destino (SSH/proxy):\033[0m"
+            # Mostrar puertos disponibles
+            echo -e "\033[1;37mPuertos detectados:\033[0m"
+            ss -tlpn 2>/dev/null | grep -E 'sshd|dropbear|python|stunnel4' | \
+                awk '{print $4}' | rev | cut -d: -f1 | rev | sort -u | \
+                while read _p; do
+                    _svc=$(ss -tlpn 2>/dev/null | grep ":$_p " | \
+                           grep -oP '(?<=\().*(?=,)' | head -1)
+                    echo -e "  \033[1;36m$_p\033[1;37m → $_svc"
+                done
+            echo -ne "\033[1;32mPuerto destino: \033[1;37m"; read _dport
+            [[ -z "$_dport" ]] && { echo -e "\033[1;31mPuerto inválido.\033[0m"; sleep 1; continue; }
+            echo "$_dport" > "$_SLOW_PORT"
+
+            # Paso 3: NS (Nameserver)
+            echo ""
+            echo -e "\033[1;33mPaso 2 — Nameserver (NS) de SlowDNS:\033[0m"
+            echo -e "\033[1;37m  Ejemplo: ns1.misitio.com\033[0m"
+            local _old_ns; _old_ns=$(cat "$_SLOW_NS" 2>/dev/null)
+            [[ -n "$_old_ns" ]] && echo -e "\033[1;37m  NS actual: \033[1;32m$_old_ns\033[0m"
+            echo -ne "\033[1;32mNS domain: \033[1;37m"; read _ns_input
+            [[ -z "$_ns_input" && -n "$_old_ns" ]] && _ns_input="$_old_ns"
+            [[ -z "$_ns_input" ]] && { echo -e "\033[1;31mNS inválido.\033[0m"; sleep 1; continue; }
+            echo "$_ns_input" > "$_SLOW_NS"
+
+            # Paso 4: clave pública
+            echo ""
+            echo -e "\033[1;33mPaso 3 — Clave de cifrado:\033[0m"
+            if [[ -s "$_SLOW_PUB" ]]; then
+                echo -e "\033[1;37m  Clave actual: \033[1;32m$(cat $_SLOW_PUB)\033[0m"
+                echo -ne "\033[1;33m¿Usar clave existente? [S/n]: \033[1;37m"; read _exkey
+                if [[ "$_exkey" =~ ^[nN]$ ]]; then
+                    _slow_genkey || { sleep 2; continue; }
+                fi
+            else
+                _slow_genkey || { sleep 2; continue; }
+            fi
+
+            # Paso 5: iniciar
+            echo ""
+            echo -e "\033[1;33mIniciando SlowDNS...\033[0m"
+            _slow_start
+            sleep 3
+            ;;
+
+        3) echo -e "\n\033[1;33mIniciando SlowDNS...\033[0m"
+           _slow_start; sleep 2 ;;
+
+        4) echo -e "\n\033[1;33mReiniciando SlowDNS...\033[0m"
+           pkill -f "dns-server.*5300" 2>/dev/null
+           screen -ls 2>/dev/null | grep '\.slowdns' | awk '{print $1}' | \
+               xargs -I{} screen -r -S {} -X quit 2>/dev/null
+           sleep 1; _slow_start; sleep 2 ;;
+
+        5) echo -e "\n\033[1;33mDeteniendo SlowDNS...\033[0m"
+           pkill -f "dns-server.*5300" 2>/dev/null
+           screen -ls 2>/dev/null | grep '\.slowdns' | awk '{print $1}' | \
+               xargs -I{} screen -r -S {} -X quit 2>/dev/null
+           sed -i '/slowdns\|dns-server/d' /etc/autostart 2>/dev/null
+           echo -e "\033[1;32m✓ SlowDNS detenido.\033[0m"; sleep 2 ;;
+
+        0) fun_conexao; return ;;
+        *) echo -e "\033[1;31mOpción inválida!\033[0m"; sleep 1 ;;
+        esac
+    done
+}
+
+# ============================================================
+# UDP ZiVPN — compatible AMD64, ARM64, ARM
+# Basado en: github.com/zahidbd2/udp-zivpn
+# ============================================================
+_ZIVPN_BIN="/usr/local/bin/zivpn"
+_ZIVPN_CFG="/etc/zivpn/config.json"
+_ZIVPN_SVC="/etc/systemd/system/zivpn.service"
+
+fun_zivpn() {
+    while true; do
+        clear
+        echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
+        echo -e "\033[0;34m┃\E[44;1;37m             UDP ZiVPN MANAGER           \E[0m\033[0;34m┃"
+        echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
+        systemctl is-active zivpn >/dev/null 2>&1 && \
+            _zvst="\033[1;32m✓ ACTIVO" || _zvst="\033[1;31m✕ INACTIVO"
+        echo -e "\033[1;33mEstado       : $_zvst\033[0m"
+        echo -e "\033[1;33mArquitectura : \033[1;37m$_ARCH [$_ARCH_TAG]\033[0m"
+        [[ -f "$_ZIVPN_CFG" ]] && {
+            local _zport; _zport=$(grep -oP '"port":\s*\K\d+' "$_ZIVPN_CFG" 2>/dev/null | head -1)
+            [[ -n "$_zport" ]] && echo -e "\033[1;33mPuerto UDP   : \033[1;37m$_zport"
+        }
+        echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
+        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m1\033[1;31m] \033[1;33mINSTALAR UDP ZiVPN            \033[0;34m┃"
+        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m2\033[1;31m] \033[1;33mCONFIGURAR (puerto/contraseña)\033[0;34m┃"
+        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m3\033[1;31m] \033[1;33mINICIAR servicio              \033[0;34m┃"
+        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m4\033[1;31m] \033[1;33mREINICIAR servicio            \033[0;34m┃"
+        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m5\033[1;31m] \033[1;33mDETENER servicio              \033[0;34m┃"
+        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m6\033[1;31m] \033[1;33mDESINSTALAR                   \033[0;34m┃"
+        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m0\033[1;31m] \033[1;33mVOLVER                        \033[0;34m┃"
+        echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
+        echo -ne "\033[1;32mOpción: \033[1;37m"; read _zopt
+
+        case "$_zopt" in
+        1) # ── Instalación ──────────────────────────────────
+            clear
+            echo -e "\033[0;34m┃\E[44;1;37m          INSTALAR UDP ZiVPN             \E[0m\033[0;34m┃\n"
+            echo -e "\033[1;33mArquitectura detectada: \033[1;32m$_ARCH [$_ARCH_TAG]\033[0m\n"
+
+            # Seleccionar binario según arquitectura
+            local _zurl_base="https://github.com/zahidbd2/udp-zivpn/releases/download/udp-zivpn_1.4.9"
+            case "$_ARCH_TAG" in
+                arm64) _zbin_url="${_zurl_base}/udp-zivpn-linux-arm64" ;;
+                arm)   _zbin_url="${_zurl_base}/udp-zivpn-linux-arm"   ;;
+                *)     _zbin_url="${_zurl_base}/udp-zivpn-linux-amd64" ;;
+            esac
+
+            echo -e "\033[1;33mDescargando binario ZiVPN...\033[0m"
+            systemctl stop zivpn 2>/dev/null
+            wget -q --timeout=30 "$_zbin_url" -O "$_ZIVPN_BIN" 2>/dev/null || \
+            curl -sL --max-time 30 "$_zbin_url" -o "$_ZIVPN_BIN" 2>/dev/null
+            if [[ ! -s "$_ZIVPN_BIN" ]]; then
+                echo -e "\033[1;31m✗ Error al descargar el binario.\033[0m"; sleep 3; continue
+            fi
+            chmod +x "$_ZIVPN_BIN"
+
+            # Descargar config.json base
+            mkdir -p /etc/zivpn
+            wget -q --timeout=15 \
+                "https://raw.githubusercontent.com/zahidbd2/udp-zivpn/main/config.json" \
+                -O "$_ZIVPN_CFG" 2>/dev/null
+
+            # Generar certificados SSL
+            echo -e "\033[1;33mGenerando certificados SSL...\033[0m"
+            openssl req -new -newkey rsa:2048 -days 3650 -nodes -x509 \
+                -subj "/C=CO/ST=Colombia/L=Bogota/O=MSYVPN/CN=zivpn.local" \
+                -keyout /etc/zivpn/zivpn.key \
+                -out    /etc/zivpn/zivpn.crt >/dev/null 2>&1
+            sysctl -w net.core.rmem_max=16777216 >/dev/null 2>&1
+            sysctl -w net.core.wmem_max=16777216 >/dev/null 2>&1
+
+            # Puerto UDP
+            echo -ne "\n\033[1;32mPuerto UDP ZiVPN \033[1;37m[defecto: 7300]: \033[1;37m"; read _zport
+            [[ -z "$_zport" ]] && _zport=7300
+
+            # Contraseñas
+            echo -ne "\033[1;32mContraseñas (ej: pass1,pass2) \033[1;37m[defecto: zi]: \033[1;37m"; read _zpasses
+            [[ -z "$_zpasses" ]] && _zpasses="zi"
+
+            # Aplicar puerto y contraseñas al config.json
+            if [[ -f "$_ZIVPN_CFG" ]]; then
+                sed -i "s/\"port\": [0-9]*/\"port\": $_zport/" "$_ZIVPN_CFG" 2>/dev/null
+                # Construir array de passwords
+                local _zpass_arr
+                _zpass_arr=$(echo "$_zpasses" | tr ',' '\n' | \
+                             sed 's/^/"/;s/$/"/' | paste -sd ',' -)
+                sed -i -E "s/\"config\": ?\[[^]]*\]/\"config\": [${_zpass_arr}]/" \
+                    "$_ZIVPN_CFG" 2>/dev/null
+            fi
+
+            # Crear servicio systemd
+            cat > "$_ZIVPN_SVC" <<ZISVC
+[Unit]
+Description=UDP ZiVPN Server — MSYVPN-SCRIPT
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=${_ZIVPN_BIN} server --config ${_ZIVPN_CFG}
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+ZISVC
+            systemctl daemon-reload
+            systemctl enable zivpn >/dev/null 2>&1
+            systemctl start  zivpn
+
+            # Abrir puerto UDP en firewall
+            _fw_open $_zport udp
+            iptables -I INPUT -p udp --dport $_zport -j ACCEPT 2>/dev/null
+
+            sleep 1
+            if systemctl is-active zivpn >/dev/null 2>&1; then
+                echo -e "\n\033[1;32m✓ UDP ZiVPN ACTIVO en puerto UDP $_zport!\033[0m"
+                echo -e "\033[1;37m  Arquitectura: \033[1;32m$_ARCH_TAG"
+                echo -e "\033[1;37m  Contraseñas : \033[1;32m$_zpasses\033[0m"
+            else
+                echo -e "\n\033[1;33mVerifique: systemctl status zivpn\033[0m"
+            fi
+            sleep 3 ;;
+
+        2) # ── Reconfigurar puerto y contraseñas ───────────
+            [[ ! -f "$_ZIVPN_CFG" ]] && { echo -e "\033[1;31mInstale primero.\033[0m"; sleep 2; continue; }
+            echo -ne "\033[1;32mNuevo puerto UDP \033[1;37m[actual: $(grep -oP '"port":\s*\K\d+' $_ZIVPN_CFG | head -1)]: \033[1;37m"; read _znp
+            [[ -n "$_znp" ]] && sed -i "s/\"port\": [0-9]*/\"port\": $_znp/" "$_ZIVPN_CFG"
+            echo -ne "\033[1;32mNuevas contraseñas (ej: p1,p2): \033[1;37m"; read _znpass
+            if [[ -n "$_znpass" ]]; then
+                local _znpa; _znpa=$(echo "$_znpass" | tr ',' '\n' | sed 's/^/"/;s/$/"/' | paste -sd ',' -)
+                sed -i -E "s/\"config\": ?\[[^]]*\]/\"config\": [${_znpa}]/" "$_ZIVPN_CFG" 2>/dev/null
+            fi
+            systemctl restart zivpn 2>/dev/null
+            echo -e "\n\033[1;32mConfiguración actualizada y servicio reiniciado.\033[0m"; sleep 2 ;;
+
+        3) systemctl start  zivpn && echo -e "\033[1;32m✓ ZiVPN iniciado.\033[0m" || \
+                                     echo -e "\033[1;31m✗ Error.\033[0m"; sleep 2 ;;
+        4) systemctl restart zivpn && echo -e "\033[1;32m✓ ZiVPN reiniciado.\033[0m" || \
+                                      echo -e "\033[1;31m✗ Error.\033[0m"; sleep 2 ;;
+        5) systemctl stop   zivpn && echo -e "\033[1;32m✓ ZiVPN detenido.\033[0m" || \
+                                     echo -e "\033[1;31m✗ Error.\033[0m"; sleep 2 ;;
+
+        6) # ── Desinstalar ───────────────────────────────────
+            echo -ne "\033[1;31m¿Confirmar desinstalación? [s/N]: \033[1;37m"; read _zdel
+            [[ "$_zdel" =~ ^[sS]$ ]] && {
+                systemctl stop    zivpn 2>/dev/null
+                systemctl disable zivpn 2>/dev/null
+                rm -f "$_ZIVPN_BIN" "$_ZIVPN_SVC"
+                rm -rf /etc/zivpn
+                systemctl daemon-reload
+                echo -e "\033[1;32m✓ ZiVPN desinstalado.\033[0m"
+            }; sleep 2 ;;
+
+        0) fun_conexao; return ;;
+        *) echo -e "\033[1;31mOpción inválida!\033[0m"; sleep 1 ;;
+        esac
+    done
+}
+
 x="ok"; clear
 fun_conexao() {
     while true; do
         clear
         echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-        echo -e "\033[0;34m┃\E[44;1;37m             MODO DE CONEXIÓN            \E[0m\033[0;34m┃"
+        echo -e "\033[0;34m┃\E[44;1;37m          ★ MSYVPN-SCRIPT v3.0 ★        \E[0m\033[0;34m┃"
         echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
         _ssh_ports=$(grep '^Port' /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' | xargs)
-        echo -e "\033[1;32mOPENSSH\033[1;31m: \033[1;37m${_ssh_ports:-22}"
+        echo -e "\033[1;32mOPENSSH\033[1;31m: \033[1;37m${_ssh_ports:-22}  \033[1;33m[$_ARCH_TAG]"
         _db16_on=0
         screen -list 2>/dev/null | grep -q 'dropbear2016' && _db16_on=1
         systemctl is-active dropbear-legacy >/dev/null 2>&1 && _db16_on=1
@@ -1194,11 +1577,12 @@ fun_conexao() {
         _py_active=$(ss -tlpn 2>/dev/null | grep -E 'python|python3' | awk '{print $4}' | rev | cut -d: -f1 | rev | xargs)
         [[ -n "$_py_active" ]]  && { sts4="\033[1;32m✓ "; echo -e "\033[1;32mPROXY SOCKS\033[1;31m: \033[1;37m$_py_active"; } || sts4="\033[1;31m✕ "
         [[ -e "/etc/stunnel/stunnel.conf" ]] && { sts3="\033[1;32m✓ "; echo -e "\033[1;32mSSL\033[1;31m: \033[1;37m$(get_ports_by_process 'stunnel')"; } || sts3="\033[1;31m✕ "
-        ps x | grep 'slowdns' | grep -v grep >/dev/null 2>&1 && sts9="\033[1;32m✓ " || sts9="\033[1;31m✕ "
+        ps x | grep 'dns-server\|slowdns' | grep -v grep >/dev/null 2>&1 && sts9="\033[1;32m✓ " || sts9="\033[1;31m✕ "
         ss -tlpn 2>/dev/null | grep -q 'v2ray'   && xv2ray="\033[1;32m✓ "   || xv2ray="\033[1;31m✕ "
         ss -tlpn 2>/dev/null | grep -q 'trojan'  && trojansts="\033[1;32m✓ " || trojansts="\033[1;31m✕ "
         command -v hysteria-manager &>/dev/null   && hysterasts="\033[1;32m✓ " || hysterasts="\033[1;31m✕ "
         [[ "$_db16_on" != '0' ]] && db16sts="\033[1;32m✓ " || db16sts="\033[1;31m✕ "
+        systemctl is-active zivpn >/dev/null 2>&1 && zivpnsts="\033[1;32m✓ " || zivpnsts="\033[1;31m✕ "
 
         echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m01\033[1;31m] \033[1;33mOPENSSH                              \033[0;34m┃"
@@ -1209,6 +1593,7 @@ fun_conexao() {
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m06\033[1;31m] \033[1;33mTROJAN-GO $trojansts                   \033[0;34m┃"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m07\033[1;31m] \033[1;33mDROPBEAR 2016 $db16sts                 \033[0;34m┃"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m08\033[1;31m] \033[1;33mHYSTERIA UDP $hysterasts               \033[0;34m┃"
+        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m10\033[1;31m] \033[1;33mUDP ZiVPN $zivpnsts                    \033[0;34m┃"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m09\033[1;31m] \033[1;33mVOLVER \033[1;32m<<<                          \033[0;34m┃"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m00\033[1;31m] \033[1;33mSALIR \033[1;32m<<<                            \033[0;34m┃"
         echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
@@ -1224,6 +1609,7 @@ fun_conexao() {
         6|06)  tput reset; trojan-go ;;
         7|07)  tput reset; fun_inst_dropbear2016 ;;
         8|08)  tput reset; fun_hysteria ;;
+        10)    tput reset; fun_zivpn ;;
         9|09)  tput reset; menu ;;
         0|00)  tput reset; echo -e "\033[1;31mSaliendo...\033[0m"; sleep 1; exit ;;
         *)     echo -e "\033[1;31mOpción inválida!\033[0m"; sleep 1 ;;
