@@ -1,384 +1,460 @@
 #!/bin/bash
 # ============================================================
-# MÓDULO SLOWDNS — MSYVPN-SCRIPT
-# Compatible: Ubuntu 18 / 20 / 22 / 24 / 25+ | ARM + AMD64
-# Rutas: /etc/SSHPlus/slowdns/  (keys + binario)
-# Autor base: @rufu99  |  Adaptado por MSYVPN
+# MÓDULO: SLOWDNS — MSYVPN-SCRIPT
+# Autor original: @rufu99 / adaptado: @JUANITOPROSNIFF
+# Compatible: Ubuntu 18 / 20 / 22 / 24 / 25 / 26+
+# Repo: https://github.com/juanitoprosniff/script_msyvpn
+# FIXES v2:
+#   - Detección automática ARM / AMD64 / ARM64
+#   - Binario dns-server descargado desde repo propio
+#   - Compatibilidad iptables / nftables (Ubuntu 22+)
+#   - Autostart con systemd service (más robusto que screen)
+#   - Carpeta /etc/SSHPlus/Slow/ (integrado en árbol MSYvpn)
 # ============================================================
 
-# ── Directorios base ─────────────────────────────────────────
-_SLOW_BASE="/etc/SSHPlus/slowdns"
-_SLOW_KEY="${_SLOW_BASE}/keys"
-_SLOW_BIN="${_SLOW_BASE}/dns-server"
+ADM_inst="/etc/SSHPlus/Slow/install"
+ADM_slow="/etc/SSHPlus/Slow/Key"
 
-# ── Crear directorios si no existen ──────────────────────────
-mkdir -p "$_SLOW_BASE" "$_SLOW_KEY"
+# Repo propio (reemplaza el eliminado de khaledagn)
+_REPO_BASE="https://raw.githubusercontent.com/juanitoprosniff/script_msyvpn/main/Slow"
 
-# ── Detectar arquitectura ─────────────────────────────────────
-_ARCH=$(uname -m)
-case "$_ARCH" in
-    x86_64)         _ARCH_TYPE="amd64" ;;
-    aarch64|arm64)  _ARCH_TYPE="arm64" ;;
-    armv7l|armv6l)  _ARCH_TYPE="arm"   ;;
-    *)              _ARCH_TYPE="amd64" ;;
-esac
+# ── Crear carpetas si no existen ─────────────────────────────
+[[ ! -d "${ADM_inst}" ]] && mkdir -p "${ADM_inst}"
+[[ ! -d "${ADM_slow}" ]] && mkdir -p "${ADM_slow}"
 
-# ── Funciones de color (compatibles sin dependencias externas) ─
-_bar()   { echo -e "\033[1;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"; }
-_verd()  { echo -e "\033[1;32m$*\033[0m"; }
-_verm()  { echo -e "\033[1;31m$*\033[0m"; }
-_ama()   { echo -e "\033[1;33m$*\033[0m"; }
-_azu()   { echo -e "\033[1;36m$*\033[0m"; }
-_bra()   { echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-           echo -e "\033[0;34m┃\E[44;1;37m  $*\E[0m\033[0;34m┃"
-           echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"; }
+# ── Detectar arquitectura ────────────────────────────────────
+_detect_arch() {
+    local _arch
+    _arch=$(uname -m)
+    case "$_arch" in
+        x86_64|amd64)   echo "amd64" ;;
+        aarch64|arm64)  echo "arm64" ;;
+        armv7*|armhf)   echo "arm"   ;;
+        armv6*)         echo "arm"   ;;
+        *)              echo "amd64" ;;  # fallback
+    esac
+}
+_ARCH=$(_detect_arch)
 
-# ── Verificar / descargar binario dns-server ─────────────────
-_check_or_download_bin() {
-    [[ -x "$_SLOW_BIN" ]] && return 0
+# ── Colores y mensajes ───────────────────────────────────────
+msg() {
+    case "$1" in
+        -bar)   echo -e "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m" ;;
+        -bar3)  echo -e "\033[0;34m───────────────────────────────────────\033[0m" ;;
+        -ama)   echo -e "\033[1;33m${2}\033[0m" ;;
+        -verd)  echo -e "\033[1;32m${2}\033[0m" ;;
+        -verm)  echo -e "\033[1;31m${2}\033[0m" ;;
+        -verm2) echo -e "\033[0;31m${2}\033[0m" ;;
+        -azu)   echo -e "\033[1;36m${2}\033[0m" ;;
+        -bra)   echo -e "\033[1;37m${2}\033[0m" ;;
+    esac
+}
 
-    _ama "  Descargando binario dns-server ($_ARCH_TYPE)..."
+menu_func() {
+    local n=1
+    for item in "$@"; do
+        echo -e " \033[1;31m[$n]\033[0m \033[1;33m$item\033[0m"
+        ((n++))
+    done
+    echo -e " \033[1;31m[0]\033[0m \033[1;33mVOLVER\033[0m"
+}
 
-    local _URLS=(
-        "https://raw.githubusercontent.com/khaledagn/VPS-AGN_English_Official/master/LINKS-LIBRARIES/dns-server"
-        "https://github.com/juanitoprosniff/scriptsshmsy/raw/main/installer/dns-server"
-    )
+selection_fun() {
+    local max="$1"
+    local opc
+    while true; do
+        echo -ne " \033[1;32mOpción: \033[1;37m"; read opc
+        [[ "$opc" =~ ^[0-9]+$ ]] && [[ "$opc" -ge 0 ]] && [[ "$opc" -le "$max" ]] && { echo "$opc"; return; }
+        echo -e " \033[1;31mOpción inválida!\033[0m"
+    done
+}
 
-    for _url in "${_URLS[@]}"; do
-        wget -q --timeout=20 "$_url" -O "$_SLOW_BIN" 2>/dev/null
-        if [[ -s "$_SLOW_BIN" ]]; then
-            chmod +x "$_SLOW_BIN"
-            _verd "  ✓ Binario descargado correctamente"
+# ── Firewall: abrir puerto UDP ────────────────────────────────
+_fw_open_udp() {
+    local pt="$1"
+    command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q "active" && \
+        ufw allow ${pt}/udp >/dev/null 2>&1
+    command -v iptables &>/dev/null && {
+        iptables -C INPUT -p udp --dport ${pt} -j ACCEPT 2>/dev/null || \
+        iptables -I INPUT -p udp --dport ${pt} -j ACCEPT >/dev/null 2>&1
+    }
+    # Soporte nftables (Ubuntu 22+)
+    command -v nft &>/dev/null && nft list ruleset 2>/dev/null | grep -q "type filter" && {
+        nft add rule inet filter input udp dport ${pt} accept 2>/dev/null || true
+    }
+}
+
+# ── Descargar binario dns-server desde repo propio ───────────
+_download_dns_server() {
+    msg -ama " Detectando arquitectura: $_ARCH"
+    msg -ama " Descargando dns-server desde repo propio..."
+
+    # Nombre del binario según arch (ajusta según los archivos que subas a tu repo)
+    local _bin_name
+    case "$_ARCH" in
+        amd64) _bin_name="dns-server"      ;;
+        arm64) _bin_name="dns-server-arm64" ;;
+        arm)   _bin_name="dns-server-arm"   ;;
+        *)     _bin_name="dns-server"      ;;
+    esac
+
+    local _url="${_REPO_BASE}/${_bin_name}"
+
+    if wget -q --timeout=30 -O "${ADM_inst}/dns-server" "${_url}" 2>/dev/null; then
+        chmod +x "${ADM_inst}/dns-server"
+        if "${ADM_inst}/dns-server" --help &>/dev/null || \
+           "${ADM_inst}/dns-server" -h &>/dev/null || \
+           file "${ADM_inst}/dns-server" 2>/dev/null | grep -q "ELF"; then
+            msg -verd " [OK] dns-server descargado correctamente ($_ARCH)"
             return 0
         fi
-        rm -f "$_SLOW_BIN" 2>/dev/null
-    done
+    fi
 
-    _verm "  ✗ No se pudo descargar el binario."
-    _ama "  Coloque manualmente dns-server en: $_SLOW_BIN"
+    # Fallback: intentar con curl
+    if curl -fsSL --max-time 30 "${_url}" -o "${ADM_inst}/dns-server" 2>/dev/null; then
+        chmod +x "${ADM_inst}/dns-server"
+        msg -verd " [OK] dns-server (via curl)"
+        return 0
+    fi
+
+    msg -verm " [FAIL] No se pudo descargar dns-server"
+    msg -bar
+    msg -ama " Suba manualmente el binario a:"
+    msg -ama " ${ADM_inst}/dns-server"
     return 1
 }
 
-# ── Mostrar información actual ────────────────────────────────
-info_slow() {
-    clear
-    _bar
-    _bra "    INFORMACIÓN SLOWDNS — MSYVPN-SCRIPT    "
-    _bar
-    echo ""
+# ── Crear servicio systemd para SlowDNS ──────────────────────
+_create_slowdns_service() {
+    local _ns="$1"
+    local _port="$2"
 
-    local _ns _key _port _status
+    cat > /etc/systemd/system/slowdns.service <<EOF
+[Unit]
+Description=SlowDNS Tunnel - MSYVPN-SCRIPT
+After=network.target
+Wants=network.target
 
-    # Leer datos guardados
-    _ns=$(cat "${_SLOW_KEY}/domain_ns" 2>/dev/null)
-    _key=$(cat "${_SLOW_KEY}/server.pub" 2>/dev/null)
-    _port=$(cat "${_SLOW_KEY}/puerto" 2>/dev/null)
+[Service]
+Type=simple
+ExecStart=${ADM_inst}/dns-server -udp :5300 -privkey-file ${ADM_slow}/server.key ${_ns} 127.0.0.1:${_port}
+Restart=always
+RestartSec=5
+KillMode=process
 
-    if [[ -z "$_ns" ]] || [[ -z "$_key" ]]; then
-        _verm "  ✗ SlowDNS no configurado todavía."
-        _ama "  Use la opción [2] para instalar y configurar."
-        echo ""
-        _bar
-        read -p "  Presione ENTER para continuar..." _p
-        return
-    fi
+[Install]
+WantedBy=multi-user.target
+EOF
 
-    # Estado del proceso
-    if screen -ls 2>/dev/null | grep -q "slowdns"; then
-        _status="\033[1;32m● ACTIVO\033[0m"
-    else
-        _status="\033[1;31m● INACTIVO\033[0m"
-    fi
-
-    echo -e "  Estado       : $_status"
-    _bar
-    echo -e "  \033[1;33mNS (Nameserver): \033[1;32m$_ns\033[0m"
-    echo -e "  \033[1;33mClave pública  : \033[1;32m$_key\033[0m"
-    echo -e "  \033[1;33mPuerto SSH/DB  : \033[1;32m${_port:-no configurado}\033[0m"
-    echo -e "  \033[1;33mPuerto SlowDNS : \033[1;32m5300 UDP\033[0m"
-    echo -e "  \033[1;33mArquitectura   : \033[1;32m$_ARCH_TYPE\033[0m"
-    _bar
-    echo ""
-    _ama "  Configuración en tu app cliente:"
-    echo -e "  \033[1;37m  Servidor NS  → \033[1;32m$_ns\033[0m"
-    echo -e "  \033[1;37m  Clave pública → \033[1;32m$_key\033[0m"
-    echo ""
-    _bar
-    read -p "  Presione ENTER para continuar..." _p
+    systemctl daemon-reload 2>/dev/null
+    systemctl enable slowdns 2>/dev/null
 }
 
-# ── Detectar puertos SSH/Dropbear disponibles ─────────────────
-_detect_ports() {
-    local _ports_raw _proto _port
-    declare -g -a _PORT_LIST=()
-    declare -g -a _PROTO_LIST=()
-
-    while read -r _line; do
-        _proto=$(echo "$_line" | awk '{print $1}')
-        _port=$(echo "$_line" | awk '{print $9}' | awk -F: '{print $NF}')
-        [[ -z "$_port" ]] && continue
-
-        case "$_proto" in
-            sshd|dropbear|dropbear-legacy|stunnel4|stunnel|python|python3)
-                _PORT_LIST+=("$_port")
-                _PROTO_LIST+=("$_proto")
-                ;;
-        esac
-    done < <(ss -tlpn 2>/dev/null | grep "LISTEN" | grep -v "COMMAND")
-}
-
-# ── Configurar e iniciar SlowDNS ──────────────────────────────
-ini_slow() {
+# ── Ver información SlowDNS ───────────────────────────────────
+info() {
     clear
-    _bra "        CONFIGURAR SLOWDNS — MSYVPN          "
-    echo ""
-
-    # Verificar / descargar binario
-    _check_or_download_bin || { sleep 3; return; }
-
-    # ── Detectar puertos disponibles ──────────────────────────
-    _ama "  Servicios disponibles para tunelizar:"
-    _bar
-
-    # Recopilar puertos activos con ss
-    declare -A _seen
-    local n=1
-    declare -a _drop_ports=()
-    declare -a _drop_protos=()
-
-    while IFS= read -r _raw; do
-        local _pr _pt
-        _pr=$(echo "$_raw" | awk '{print $1}')
-        _pt=$(echo "$_raw" | awk '{print $4}' | rev | cut -d: -f1 | rev)
-        [[ -z "$_pt" || "${_seen[$_pt]}" ]] && continue
-        case "$_pr" in
-            sshd|dropbear|stunnel4|stunnel|python|python3) : ;;
-            *) continue ;;
-        esac
-        _seen[$_pt]=1
-        printf "  \033[1;31m[%s]\033[0m \033[1;33m%-14s\033[0m \033[1;36m%s\033[0m\n" "$n" "$_pr" "$_pt"
-        _drop_ports+=("$_pt")
-        _drop_protos+=("$_pr")
-        ((n++))
-    done < <(ss -tlpn 2>/dev/null | grep "LISTEN")
-
-    # Agregar SSH manualmente si no apareció
-    local _ssh_p=$(grep '^Port' /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' | head -1)
-    if [[ -n "$_ssh_p" && -z "${_seen[$_ssh_p]}" ]]; then
-        printf "  \033[1;31m[%s]\033[0m \033[1;33m%-14s\033[0m \033[1;36m%s\033[0m\n" "$n" "sshd (manual)" "$_ssh_p"
-        _drop_ports+=("$_ssh_p")
-        ((n++))
-    fi
-
-    _bar
-    local _max=$(( n - 1 ))
-    echo -ne "\033[1;32m  Seleccione el número del servicio [1-$_max]: \033[1;37m"
-    read _sel
-    [[ -z "$_sel" || "$_sel" -lt 1 || "$_sel" -gt "$_max" ]] 2>/dev/null && {
-        _verm "  Opción inválida."; sleep 2; return
+    nodata() {
+        msg -bar
+        msg -ama "!SIN INFORMACIÓN DE SLOWDNS!"
+        msg -bar
+        msg -ama "Use la opción [2] para configurar SlowDNS."
+        sleep 3
+        exit 0
     }
 
-    local _PORT="${_drop_ports[$(( _sel - 1 ))]}"
-    echo "$_PORT" > "${_SLOW_KEY}/puerto"
-    echo -e "\n  \033[1;33mPuerto seleccionado: \033[1;32m$_PORT\033[0m"
-    _bar
+    if [[ -e "${ADM_slow}/domain_ns" ]]; then
+        local ns; ns=$(cat "${ADM_slow}/domain_ns")
+        [[ -z "$ns" ]] && nodata
+    else
+        nodata
+    fi
+
+    if [[ -e "${ADM_slow}/server.pub" ]]; then
+        local key; key=$(cat "${ADM_slow}/server.pub")
+        [[ -z "$key" ]] && nodata
+    else
+        nodata
+    fi
+
+    local _port_file="${ADM_slow}/puerto"
+    local _port="N/D"
+    [[ -e "$_port_file" ]] && _port=$(cat "$_port_file")
+
+    # Estado del servicio
+    local _status="\033[1;31m⬤ INACTIVO\033[0m"
+    if systemctl is-active slowdns &>/dev/null; then
+        _status="\033[1;32m⬤ ACTIVO (systemd)\033[0m"
+    elif screen -ls 2>/dev/null | grep -q "slowdns"; then
+        _status="\033[1;32m⬤ ACTIVO (screen)\033[0m"
+    fi
+
+    echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
+    echo -e "\033[0;34m┃\E[44;1;37m       INFORMACIÓN DE SLOWDNS            \E[0m\033[0;34m┃"
+    echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
+    echo -e " \033[1;33mEstado       : ${_status}"
+    echo -e " \033[1;33mArquitectura : \033[1;37m${_ARCH}"
+    echo -e " \033[1;33mNameserver   : \033[1;32m${ns}"
+    echo -e " \033[1;33mPuerto SSH   : \033[1;32m${_port}"
+    echo -e " \033[1;33mClave pública: \033[1;37m${key}"
+    echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
+    echo ""
+    echo -ne "\033[1;33mPresione ENTER para volver...\033[0m"; read
+    exit 0
+}
+
+# ── Detectar puertos de servicios SSH disponibles ────────────
+drop_port() {
+    local portasVAR
+    if command -v ss &>/dev/null; then
+        portasVAR=$(ss -tlpn 2>/dev/null | grep "LISTEN")
+    else
+        portasVAR=$(netstat -tlpn 2>/dev/null | grep "LISTEN")
+    fi
+
+    local NOREPEAT reQ Port
+    unset DPB
+
+    while read -r port; do
+        reQ=$(echo "${port}" | awk '{print $1}')
+        if command -v ss &>/dev/null; then
+            Port=$(echo "${port}" | awk '{print $4}' | rev | cut -d: -f1 | rev)
+        else
+            Port=$(echo "${port}" | awk '{print $4}' | cut -d: -f2)
+        fi
+
+        [[ -z "$Port" ]] && continue
+        [[ $(echo -e "$NOREPEAT" | grep -w "$Port") ]] && continue
+        NOREPEAT+="$Port\n"
+
+        case ${reQ} in
+            sshd|dropbear|stunnel4|stunnel|python|python3) DPB+=" $reQ:$Port" ;;
+            *) continue ;;
+        esac
+    done <<< "${portasVAR}"
+}
+
+# ── Instalar / Configurar SlowDNS ────────────────────────────
+ini_slow() {
+    clear
+    echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
+    echo -e "\033[0;34m┃\E[44;1;37m       INSTALACIÓN DE SLOWDNS            \E[0m\033[0;34m┃"
+    echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
+    echo -e " \033[1;33mArquitectura detectada: \033[1;32m${_ARCH}\033[0m"
+    msg -bar
+
+    # ── Seleccionar puerto destino ────────────────────────────
+    drop_port
+    if [[ -z "$DPB" ]]; then
+        msg -verm "No se detectaron servicios SSH/proxy activos."
+        msg -ama "Inicie OpenSSH, Dropbear o un proxy primero."
+        sleep 3; return
+    fi
+
+    echo -e " \033[1;33mSeleccione el puerto destino para SlowDNS:\033[0m"
+    msg -bar
+    local n=1
+    local drop=()
+    for i in $DPB; do
+        local proto; proto=$(echo "$i" | awk -F ":" '{print $1}')
+        local proto2; proto2=$(printf '%-12s' "$proto")
+        local port;  port=$(echo "$i"  | awk -F ":" '{print $2}')
+        echo -e " \033[1;31m[$n]\033[0m \033[0;31m▶\033[0m \033[1;33m${proto2}\033[1;36m${port}\033[0m"
+        drop[$n]=$port
+        ((n++))
+    done
+    local num_opc=$((n - 1))
+    msg -bar
+    local opc; opc=$(selection_fun "$num_opc")
+    [[ "$opc" = "0" ]] && return
+
+    echo "${drop[$opc]}" > "${ADM_slow}/puerto"
+    local PORT; PORT=$(cat "${ADM_slow}/puerto")
+
+    echo ""
+    echo -e " \033[1;33mPuerto de conexión vía SlowDNS: \033[1;32m${PORT}\033[0m"
+    msg -bar
 
     # ── Ingresar NS ───────────────────────────────────────────
-    local _NS=""
-    while [[ -z "$_NS" ]]; do
-        echo -ne "  \033[1;33mIngrese su NS (Nameserver): \033[1;37m"
-        read _NS
+    local NS=""
+    while [[ -z "$NS" ]]; do
+        echo -ne " \033[1;33mTu dominio NS (Nameserver): \033[1;37m"; read NS
     done
-    echo "$_NS" > "${_SLOW_KEY}/domain_ns"
-    echo -e "  \033[1;33mNameserver guardado: \033[1;32m$_NS\033[0m"
-    _bar
+    echo "$NS" > "${ADM_slow}/domain_ns"
+    echo -e " \033[1;32m✓ Nameserver guardado: \033[1;37m${NS}\033[0m"
+    msg -bar
 
-    # ── Gestión de clave ──────────────────────────────────────
-    local _pub_existing
-    _pub_existing=$(cat "${_SLOW_KEY}/server.pub" 2>/dev/null)
+    # ── Descargar binario si no existe ───────────────────────
+    if [[ ! -x "${ADM_inst}/dns-server" ]] || \
+       ! file "${ADM_inst}/dns-server" 2>/dev/null | grep -q "ELF"; then
+        _download_dns_server || { sleep 3; return; }
+    else
+        msg -verd " dns-server ya presente, omitiendo descarga."
+    fi
 
-    if [[ -n "$_pub_existing" ]]; then
-        echo -e "  \033[1;33mClave existente encontrada:\033[0m"
-        echo -e "  \033[1;32m$_pub_existing\033[0m"
-        echo -ne "\n  \033[1;33m¿Usar clave existente? \033[1;31m[s/n]: \033[1;37m"
-        read _use_existing
-        case "$_use_existing" in
-            s|S|y|Y)
-                echo -e "  \033[1;32m✓ Usando clave existente.\033[0m"
-                ;;
+    # ── Gestionar llaves ──────────────────────────────────────
+    msg -bar
+    local pub=""
+    [[ -e "${ADM_slow}/server.pub" ]] && pub=$(cat "${ADM_slow}/server.pub")
+
+    if [[ -n "$pub" ]]; then
+        echo -e " \033[1;33mClave existente detectada.\033[0m"
+        echo -e " \033[1;37mClave: \033[1;32m${pub}\033[0m"
+        msg -bar
+        echo -ne " \033[1;33m¿Usar clave existente? [S/n]: \033[1;37m"; read ex_key
+        case "$ex_key" in
             n|N)
-                rm -f "${_SLOW_KEY}/server.key" "${_SLOW_KEY}/server.pub"
-                "$_SLOW_BIN" -gen-key \
-                    -privkey-file "${_SLOW_KEY}/server.key" \
-                    -pubkey-file  "${_SLOW_KEY}/server.pub" 2>/dev/null
-                echo -e "  \033[1;33mNueva clave pública:\033[0m"
-                echo -e "  \033[1;32m$(cat ${_SLOW_KEY}/server.pub)\033[0m"
+                rm -f "${ADM_slow}/server.key" "${ADM_slow}/server.pub"
+                "${ADM_inst}/dns-server" -gen-key \
+                    -privkey-file "${ADM_slow}/server.key" \
+                    -pubkey-file  "${ADM_slow}/server.pub" &>/dev/null
+                echo -e " \033[1;32m✓ Nueva clave generada: \033[1;37m$(cat ${ADM_slow}/server.pub)\033[0m"
+                ;;
+            *)
+                echo -e " \033[1;32m✓ Usando clave existente.\033[0m"
                 ;;
         esac
     else
-        # Generar clave nueva
-        _ama "  Generando par de claves..."
-        rm -f "${_SLOW_KEY}/server.key" "${_SLOW_KEY}/server.pub"
-        "$_SLOW_BIN" -gen-key \
-            -privkey-file "${_SLOW_KEY}/server.key" \
-            -pubkey-file  "${_SLOW_KEY}/server.pub" 2>/dev/null
+        rm -f "${ADM_slow}/server.key" "${ADM_slow}/server.pub"
+        "${ADM_inst}/dns-server" -gen-key \
+            -privkey-file "${ADM_slow}/server.key" \
+            -pubkey-file  "${ADM_slow}/server.pub" &>/dev/null
+        echo -e " \033[1;32m✓ Clave generada: \033[1;37m$(cat ${ADM_slow}/server.pub)\033[0m"
+    fi
 
-        if [[ -s "${_SLOW_KEY}/server.pub" ]]; then
-            echo -e "  \033[1;33mClave pública generada:\033[0m"
-            echo -e "  \033[1;32m$(cat ${_SLOW_KEY}/server.pub)\033[0m"
+    msg -bar
+    msg -ama "    Iniciando SlowDNS..."
+
+    # ── Firewall ──────────────────────────────────────────────
+    _fw_open_udp 5300
+    _fw_open_udp 53
+
+    # Redirigir UDP 53 → 5300 (compatible iptables/nftables)
+    iptables -t nat -D PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 5300 2>/dev/null
+    iptables -t nat -I PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 5300 2>/dev/null
+
+    # ── Crear servicio systemd ────────────────────────────────
+    _create_slowdns_service "$NS" "$PORT"
+
+    # Parar instancias antiguas de screen si las hay
+    screen -ls 2>/dev/null | grep slowdns | awk '{print $1}' | \
+        xargs -I{} screen -S {} -X quit 2>/dev/null
+    screen -wipe >/dev/null 2>&1
+
+    # Iniciar via systemd
+    systemctl start slowdns 2>/dev/null
+
+    sleep 2
+    if systemctl is-active slowdns &>/dev/null; then
+        msg -verd " ✓ SlowDNS iniciado correctamente (systemd)!"
+    else
+        # Fallback: screen
+        msg -ama " Intentando inicio via screen..."
+        screen -dmS slowdns "${ADM_inst}/dns-server" \
+            -udp :5300 -privkey-file "${ADM_slow}/server.key" "$NS" "127.0.0.1:${PORT}"
+        sleep 2
+        if screen -ls 2>/dev/null | grep -q "slowdns"; then
+            msg -verd " ✓ SlowDNS iniciado via screen."
         else
-            _verm "  ✗ No se pudo generar la clave. Verifique el binario."
-            sleep 3; return
+            msg -verm " ✗ Error al iniciar SlowDNS."
+            msg -ama "   Verifique: ${ADM_inst}/dns-server"
         fi
     fi
-    _bar
 
-    # ── Configurar firewall ───────────────────────────────────
-    iptables -I INPUT  -p udp --dport 5300 -j ACCEPT 2>/dev/null
-    iptables -t nat -I PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 5300 2>/dev/null
-    command -v ufw &>/dev/null && ufw allow 5300/udp >/dev/null 2>&1
-
-    # ── Iniciar SlowDNS ───────────────────────────────────────
-    # Matar instancia previa si existe
-    screen -ls 2>/dev/null | grep "slowdns" | cut -d. -f1 | awk '{print $1}' | xargs kill 2>/dev/null
-    sleep 1
-
-    _ama "  Iniciando SlowDNS..."
-    if screen -dmS slowdns "$_SLOW_BIN" -udp :5300 \
-        -privkey-file "${_SLOW_KEY}/server.key" \
-        "$_NS" "127.0.0.1:$_PORT"; then
-        _verd "  ✓ SlowDNS iniciado correctamente!"
-    else
-        _verm "  ✗ Error al iniciar SlowDNS."
-    fi
-
-    # Guardar en autostart para persistencia al reiniciar
-    sed -i '/slowdns/d' /etc/autostart 2>/dev/null
-    echo "screen -ls | grep -q slowdns || screen -dmS slowdns ${_SLOW_BIN} -udp :5300 -privkey-file ${_SLOW_KEY}/server.key \$(cat ${_SLOW_KEY}/domain_ns) 127.0.0.1:\$(cat ${_SLOW_KEY}/puerto)" >> /etc/autostart
-
-    _bar
     echo ""
-    info_slow
+    msg -bar
+    echo -e " \033[1;33mRESUMEN:\033[0m"
+    echo -e " \033[1;37m NS (Nameserver) : \033[1;32m${NS}\033[0m"
+    echo -e " \033[1;37m Puerto destino  : \033[1;32m${PORT}\033[0m"
+    echo -e " \033[1;37m Clave pública   : \033[1;32m$(cat ${ADM_slow}/server.pub 2>/dev/null)\033[0m"
+    echo -e " \033[1;37m Arquitectura    : \033[1;32m${_ARCH}\033[0m"
+    msg -bar
+    echo -ne "\033[1;33mPresione ENTER para continuar...\033[0m"; read
+    exit 0
 }
 
 # ── Reiniciar SlowDNS ─────────────────────────────────────────
 reset_slow() {
     clear
-    _bar
-    _ama "  Reiniciando SlowDNS..."
+    msg -bar
+    msg -ama "    Reiniciando SlowDNS..."
 
-    local _NS=$(cat "${_SLOW_KEY}/domain_ns" 2>/dev/null)
-    local _PORT=$(cat "${_SLOW_KEY}/puerto" 2>/dev/null)
-
-    if [[ -z "$_NS" || -z "$_PORT" ]]; then
-        _verm "  ✗ SlowDNS no está configurado."
-        _ama "  Use la opción [2] para configurarlo primero."
-        sleep 3; return
+    # Intentar systemd primero
+    if systemctl is-enabled slowdns &>/dev/null; then
+        systemctl restart slowdns 2>/dev/null
+        sleep 2
+        if systemctl is-active slowdns &>/dev/null; then
+            msg -verd " ✓ Reiniciado correctamente (systemd)!"
+            sleep 2; exit 0
+        fi
     fi
 
-    [[ ! -x "$_SLOW_BIN" ]] && { _check_or_download_bin || { sleep 3; return; }; }
+    # Fallback: matar screen y re-lanzar
+    screen -ls 2>/dev/null | grep slowdns | awk '{print $1}' | \
+        xargs -I{} screen -S {} -X quit 2>/dev/null
+    screen -wipe >/dev/null 2>&1
 
-    # Matar instancia anterior
-    screen -ls 2>/dev/null | grep "slowdns" | cut -d. -f1 | awk '{print $1}' | xargs kill 2>/dev/null
-    sleep 1
-
-    if screen -dmS slowdns "$_SLOW_BIN" -udp :5300 \
-        -privkey-file "${_SLOW_KEY}/server.key" \
-        "$_NS" "127.0.0.1:$_PORT"; then
-        _verd "  ✓ SlowDNS reiniciado correctamente!"
+    if [[ -e "${ADM_slow}/domain_ns" ]] && [[ -e "${ADM_slow}/puerto" ]] && \
+       [[ -e "${ADM_slow}/server.key" ]]; then
+        local NS; NS=$(cat "${ADM_slow}/domain_ns")
+        local PORT; PORT=$(cat "${ADM_slow}/puerto")
+        screen -dmS slowdns "${ADM_inst}/dns-server" \
+            -udp :5300 -privkey-file "${ADM_slow}/server.key" "$NS" "127.0.0.1:${PORT}"
+        sleep 2
+        screen -ls 2>/dev/null | grep -q "slowdns" && \
+            msg -verd " ✓ Reiniciado via screen." || \
+            msg -verm " ✗ No se pudo reiniciar."
     else
-        _verm "  ✗ Error al reiniciar."
+        msg -verm " Configuración incompleta. Use la opción [2] para configurar."
     fi
-    _bar
-    sleep 2
+    sleep 2; exit 0
 }
 
-# ── Detener SlowDNS ───────────────────────────────────────────
+# ── Parar SlowDNS ─────────────────────────────────────────────
 stop_slow() {
     clear
-    _bar
-    _ama "  Deteniendo SlowDNS..."
-    if screen -ls 2>/dev/null | grep "slowdns" | cut -d. -f1 | awk '{print $1}' | xargs kill 2>/dev/null; then
-        screen -wipe >/dev/null 2>&1
-        _verd "  ✓ SlowDNS detenido."
-    else
-        _verm "  SlowDNS no estaba activo."
-    fi
-    _bar
-    sleep 2
-}
+    msg -bar
+    msg -ama "    Deteniendo SlowDNS..."
 
-# ── Cambiar NS / Puerto ───────────────────────────────────────
-change_config() {
-    clear
-    _bra "    CAMBIAR CONFIGURACIÓN SLOWDNS    "
-    echo ""
-    echo -e "  \033[1;31m[\033[1;36m1\033[1;31m] \033[1;33mCambiar Nameserver (NS)"
-    echo -e "  \033[1;31m[\033[1;36m2\033[1;31m] \033[1;33mCambiar Puerto destino SSH"
-    echo -e "  \033[1;31m[\033[1;36m3\033[1;31m] \033[1;33mRegenenar claves"
-    echo -e "  \033[1;31m[\033[1;36m0\033[1;31m] \033[1;33mVolver"
-    echo ""
-    echo -ne "\033[1;32m  Opción: \033[1;37m"; read _c_opt
+    systemctl stop slowdns 2>/dev/null
+    screen -ls 2>/dev/null | grep slowdns | awk '{print $1}' | \
+        xargs -I{} screen -S {} -X quit 2>/dev/null
+    screen -wipe >/dev/null 2>&1
 
-    case "$_c_opt" in
-    1)
-        echo -ne "\n  \033[1;33mNuevo NS: \033[1;37m"; read _new_ns
-        [[ -n "$_new_ns" ]] && echo "$_new_ns" > "${_SLOW_KEY}/domain_ns" && \
-            _verd "  ✓ NS actualizado. Reinicie SlowDNS." ;;
-    2)
-        echo -ne "\n  \033[1;33mNuevo Puerto: \033[1;37m"; read _new_port
-        [[ -n "$_new_port" ]] && echo "$_new_port" > "${_SLOW_KEY}/puerto" && \
-            _verd "  ✓ Puerto actualizado. Reinicie SlowDNS." ;;
-    3)
-        rm -f "${_SLOW_KEY}/server.key" "${_SLOW_KEY}/server.pub"
-        [[ -x "$_SLOW_BIN" ]] && \
-        "$_SLOW_BIN" -gen-key \
-            -privkey-file "${_SLOW_KEY}/server.key" \
-            -pubkey-file  "${_SLOW_KEY}/server.pub" 2>/dev/null && \
-        _verd "  ✓ Nuevas claves generadas:" && \
-        echo -e "  \033[1;32m$(cat ${_SLOW_KEY}/server.pub)\033[0m" ;;
-    0) return ;;
-    esac
-    sleep 3
+    msg -verd " ✓ SlowDNS detenido."
+    sleep 2; exit 0
 }
 
 # ── Menú principal ────────────────────────────────────────────
-while true; do
+while :; do
     clear
-    echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-    echo -e "\033[0;34m┃\E[44;1;37m         SLOWDNS — MSYVPN-SCRIPT           \E[0m\033[0;34m┃"
-    echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
-    echo ""
+    echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
+    echo -e "\033[0;34m┃\E[44;1;37m           MSYVPN — SLOWDNS              \E[0m\033[0;34m┃"
+    echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
+    echo -e " \033[1;33mArquitectura : \033[1;32m${_ARCH}\033[0m"
 
-    # Estado en tiempo real
-    if screen -ls 2>/dev/null | grep -q "slowdns"; then
-        echo -e "  Estado : \033[1;32m● ACTIVO\033[0m"
+    # Estado rápido
+    if systemctl is-active slowdns &>/dev/null; then
+        echo -e " \033[1;33mEstado       : \033[1;32m⬤ ACTIVO (systemd)\033[0m"
+    elif screen -ls 2>/dev/null | grep -q "slowdns"; then
+        echo -e " \033[1;33mEstado       : \033[1;32m⬤ ACTIVO (screen)\033[0m"
     else
-        echo -e "  Estado : \033[1;31m● INACTIVO\033[0m"
+        echo -e " \033[1;33mEstado       : \033[1;31m⬤ INACTIVO\033[0m"
     fi
-    _ns_cur=$(cat "${_SLOW_KEY}/domain_ns" 2>/dev/null || echo "no configurado")
-    _pt_cur=$(cat "${_SLOW_KEY}/puerto"    2>/dev/null || echo "no configurado")
-    echo -e "  NS     : \033[1;33m$_ns_cur\033[0m"
-    echo -e "  Puerto : \033[1;33m$_pt_cur\033[0m"
-    echo ""
-    echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-    echo -e "\033[0;34m┃\033[1;31m[\033[1;36m1\033[1;31m] \033[1;33mVer información SlowDNS                \033[0;34m┃"
-    echo -e "\033[0;34m┃\033[1;31m[\033[1;36m2\033[1;31m] \033[1;33mInstalar / Configurar SlowDNS          \033[0;34m┃"
-    echo -e "\033[0;34m┃\033[1;31m[\033[1;36m3\033[1;31m] \033[1;32mReiniciar SlowDNS                      \033[0;34m┃"
-    echo -e "\033[0;34m┃\033[1;31m[\033[1;36m4\033[1;31m] \033[1;33mCambiar NS / Puerto / Claves           \033[0;34m┃"
-    echo -e "\033[0;34m┃\033[1;31m[\033[1;36m5\033[1;31m] \033[1;31mDetener SlowDNS                        \033[0;34m┃"
-    echo -e "\033[0;34m┃\033[1;31m[\033[1;36m0\033[1;31m] \033[1;33mVolver                                 \033[0;34m┃"
-    echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
-    echo ""
-    echo -ne "\033[1;32mOpción: \033[1;37m"; read _opcion
 
-    case "$_opcion" in
-        1) info_slow ;;
+    msg -bar
+    menu_func \
+        "Ver información de SlowDNS" \
+        "$(echo -e "\033[1;32mInstalar / Configurar SlowDNS\033[0m")" \
+        "$(echo -e "\033[1;33mReiniciar SlowDNS\033[0m")" \
+        "$(echo -e "\033[1;31mDetener SlowDNS\033[0m")"
+    msg -bar
+
+    opcion=$(selection_fun 4)
+    case $opcion in
+        1) info ;;
         2) ini_slow ;;
         3) reset_slow ;;
-        4) change_config ;;
-        5) stop_slow ;;
+        4) stop_slow ;;
         0) exit 0 ;;
-        *) _verm "  Opción inválida."; sleep 1 ;;
     esac
 done
