@@ -278,6 +278,74 @@ fi
 }
 
 # ============================================================
+# ZIVPN UDP — instalación y desinstalación (auto-detecta ARM/AMD)
+# ============================================================
+fun_zivpn_menu() {
+clear
+echo -e "\E[38;5;18m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
+echo -e "\E[38;5;18m┃\E[44;1;37m            ZiVPN UDP MANAGER            \E[0m\E[38;5;18m┃"
+echo -e "\E[38;5;18m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
+
+# Detectar si ya está instalado
+if command -v zivpn &>/dev/null || [[ -f /usr/local/bin/zivpn ]]; then
+	echo -e "\033[1;32m✓ ZiVPN UDP ya está instalado.\033[0m"
+	echo ""
+	echo -e "\E[38;5;196m|\E[38;5;33m01\E[38;5;196m|\033[1;37m➜ \E[38;5;195mDESINSTALAR ZiVPN UDP"
+	echo -e "\E[38;5;196m|\E[38;5;33m00\E[38;5;196m|\033[1;37m➜ \E[38;5;195mVOLVER"
+	echo ""
+	echo -ne "\033[1;32m¿QUÉ DESEAS HACER \033[1;37m?\033[1;31m?\033[1;37m : "; read opc
+	case "$opc" in
+		1|01)
+			echo -e "\n\033[1;31mDesinstalando ZiVPN UDP...\033[0m"
+			wget -q -O /root/ziun.sh https://raw.githubusercontent.com/zahidbd2/udp-zivpn/main/uninstall.sh 2>/dev/null
+			if [[ -f /root/ziun.sh ]]; then
+				chmod +x /root/ziun.sh
+				sudo bash /root/ziun.sh
+				rm -f /root/ziun.sh
+				echo -e "\n\033[1;32m✓ ZiVPN UDP desinstalado correctamente.\033[0m"
+			else
+				echo -e "\n\033[1;31m⚠ No fue posible descargar el desinstalador.\033[0m"
+				echo -e "\033[1;33mVerifica tu conexión a internet.\033[0m"
+			fi
+			sleep 3; menu
+			;;
+		*) menu; return ;;
+	esac
+	return
+fi
+
+# No instalado — mostrar opción de instalar
+echo -e "\E[38;5;196m|\E[38;5;33m01\E[38;5;196m|\033[1;37m➜ \E[38;5;195mINSTALAR ZiVPN UDP"
+echo -e "\E[38;5;196m|\E[38;5;33m00\E[38;5;196m|\033[1;37m➜ \E[38;5;195mVOLVER"
+echo ""
+echo -ne "\033[1;32m¿QUÉ DESEAS HACER \033[1;37m?\033[1;31m?\033[1;37m : "; read opc
+[[ "$opc" != '1' && "$opc" != '01' ]] && { menu; return; }
+
+# Detectar arquitectura automáticamente
+_arch=$(uname -m)
+echo -e "\n\033[1;33mArquitectura detectada: $_arch\033[0m"
+
+if [[ "$_arch" == "aarch64" || "$_arch" == "armv7l" || "$_arch" == "arm"* ]]; then
+	echo -e "\033[1;32mInstalando ZiVPN UDP para ARM...\033[0m\n"
+	bash <(curl -fsSL https://raw.githubusercontent.com/zahidbd2/udp-zivpn/main/zi2.sh)
+else
+	echo -e "\033[1;32mInstalando ZiVPN UDP para AMD64/x86_64...\033[0m\n"
+	wget -q -O /root/zi.sh https://raw.githubusercontent.com/zahidbd2/udp-zivpn/main/zi.sh 2>/dev/null
+	if [[ -f /root/zi.sh ]]; then
+		chmod +x /root/zi.sh
+		sudo bash /root/zi.sh
+		rm -f /root/zi.sh
+		echo -e "\n\033[1;32m✓ ZiVPN UDP instalado con éxito!\033[0m"
+	else
+		echo -e "\n\033[1;31m⚠ No fue posible descargar ZiVPN UDP.\033[0m"
+		echo -e "\033[1;33mVerifica tu conexión a internet.\033[0m"
+		sleep 3; menu; return
+	fi
+fi
+sleep 2; menu
+}
+
+# ============================================================
 # MENÚ PRINCIPAL
 # ============================================================
 menu() {
@@ -286,6 +354,7 @@ while true; do
 autm=$(grep "menu;" /etc/profile >/dev/null 2>&1 && echo -e "\033[1;32m✓ " || echo -e "\033[1;31m✕ ")
 stsu=$(ps x | grep "udpvpn" | grep -v grep >/dev/null && echo -e "\033[1;32m✓ " || echo -e "\033[1;31m✕ ")
 stshy=$(command -v hysteria-manager &>/dev/null && echo -e "\033[1;32m✓ " || echo -e "\033[1;31m✕ ")
+stszivpn=$({ command -v zivpn &>/dev/null || [[ -f /usr/local/bin/zivpn ]]; } && echo -e "\033[1;32m✓ " || echo -e "\033[1;31m✕ ")
 [[ ! -e /usr/lib/licence ]] && rm -rf /bin >/dev/null 2>&1
 
 # Detectar sistema operativo
@@ -317,7 +386,7 @@ _userexp=$(printf '%-5s' "$_expuser")
 _tuser=$(awk -F: '$3>=1000 {print $1}' /etc/passwd | grep -v nobody | wc -l)
 
 echo -e "\E[38;5;18m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-echo -e "\E[38;5;18m┃\E[38;5;15m                   ⇱ SSHPLUS MANAGER ⇲                      \E[0m\E[38;5;18m┃"
+echo -e "\E[38;5;18m┃\E[38;5;15m                 🐒 MSY MANAGER SCRIPT 🐒                    \E[0m\E[38;5;18m┃"
 echo -e "\E[38;5;18m┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\033[0m"
 echo -e "\E[38;5;18m┃\E[38;5;40mSISTEMA               MEMORIA RAM           PROCESADOR       \E[38;5;18m┃"
 echo -e "\E[38;5;18m┃\033[1;31mOS: \033[1;37m$_system    \033[1;31mTotal:\033[1;37m$_ram     \033[1;31mNúcleos: \033[1;37m$_core\033[0m   \E[38;5;18m┃"
@@ -332,9 +401,9 @@ echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m04\E[38;5;196m|\033[1;37m➜ \E[3
 echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m05\E[38;5;196m|\033[1;37m➜ \E[38;5;15mALTERAR LÍMITE\E[38;5;196m              |\E[38;5;33m16\E[38;5;196m|\033[1;37m➜ \E[38;5;15mCAMBIAR CONTRASEÑA ROOT\E[38;5;18m┃"
 echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m06\E[38;5;196m|\033[1;37m➜ \E[38;5;15mCAMBIAR CONTRASEÑA\E[38;5;196m          |\E[38;5;33m17\E[38;5;196m|\033[1;37m➜ \E[38;5;15mINFO VPS             \E[38;5;18m┃"
 echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m07\E[38;5;196m|\033[1;37m➜ \E[38;5;15mELIMINAR EXPIRADOS\E[38;5;196m          |\E[38;5;33m18\E[38;5;196m|\033[1;37m➜ \E[38;5;15mHYSTERIA UDP $stshy  \E[38;5;18m  ┃"
-echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m08\E[38;5;196m|\033[1;37m➜ \E[38;5;15mREPORTE USUARIOS\E[38;5;196m            |\E[38;5;33m19\E[38;5;196m|\033[1;37m➜ \E[38;5;15mHERRAMIENTAS         \E[38;5;18m┃"
-echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m09\E[38;5;196m|\033[1;37m➜ \E[38;5;15mProtocolos ⚡\E[38;5;196m               |\E[38;5;33m00\E[38;5;196m|\033[1;37m➜ \E[38;5;15mSALIR \033[1;32m<<<          \E[38;5;18m  ┃"
-echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m10\E[38;5;196m|\033[1;37m➜ \E[38;5;15mTRÁFICO DE RED\E[38;5;196m              \E[38;5;18m                          ┃"
+echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m08\E[38;5;196m|\033[1;37m➜ \E[38;5;15mREPORTE USUARIOS\E[38;5;196m            |\E[38;5;33m19\E[38;5;196m|\033[1;37m➜ \E[38;5;15mZiVPN UDP $stszivpn   \E[38;5;18m  ┃"
+echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m09\E[38;5;196m|\033[1;37m➜ \E[38;5;15mProtocolos ⚡\E[38;5;196m               |\E[38;5;33m20\E[38;5;196m|\033[1;37m➜ \E[38;5;15mHERRAMIENTAS         \E[38;5;18m┃"
+echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m10\E[38;5;196m|\033[1;37m➜ \E[38;5;15mTRÁFICO DE RED\E[38;5;196m              |\E[38;5;33m00\E[38;5;196m|\033[1;37m➜ \E[38;5;15mSALIR \033[1;32m<<<          \E[38;5;18m  ┃"
 echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m11\E[38;5;196m|\033[1;37m➜ \E[38;5;15mOPTIMIZAR SISTEMA\E[38;5;196m           \E[38;5;18m                          ┃"
 echo -e "\E[38;5;18m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
 echo -ne "\E[38;5;40m¿QUÉ DESEAS HACER \033[1;37m?\033[1;31m?\033[1;37m: "; read x
@@ -358,7 +427,8 @@ case "$x" in
 	16)     clear; senharoot;         sleep 3 ;;
 	17)     clear; detalhes;          echo -ne "\n\033[1;31mENTER \033[1;37mpara volver al \033[1;32mMENÚ!\033[0m"; read ;;
 	18)     clear; fun_hysteria_menu ;;
-	19)     clear; uteis;             sleep 0.5 ;;
+	19)     clear; fun_zivpn_menu ;;
+	20)     clear; uteis;             sleep 0.5 ;;
 	0|00)
 		echo -e "\033[1;31mSaliendo...\033[0m"; sleep 2; clear; exit ;;
 	*)
