@@ -91,7 +91,7 @@ echo -e "\033[1;37m  UNA MEJOR EXPERIENCIA Y VISUALIZACIÓN!\033[0m"
 echo ""
 echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
 echo -e "\033[0;34m┃\033[1;37m               by:@JUANITOPROSNIFF               \E[0m\033[0;34m┃"
-echo -e "\033[0;34m┃\033[1;37m        github.com/juanitoprosniff/script_msyvpn  \E[0m\033[0;34m┃"
+echo -e "\033[0;34m┃\033[1;37m        github.com/juanitoprosniff/scriptsshmsy  \E[0m\033[0;34m┃"
 echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
 echo ""
 
@@ -102,18 +102,18 @@ sed -i 's/Port 22222/Port 22/g' /etc/ssh/sshd_config > /dev/null 2>&1
 service ssh restart > /dev/null 2>&1
 
 rm $_Ink/list > /dev/null 2>&1
-wget -P $_Ink https://raw.githubusercontent.com/juanitoprosniff/script_msyvpn/main/Install/list > /dev/null 2>&1
+wget -P $_Ink https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/Install/list > /dev/null 2>&1
 verif_key
 
 echo "/bin/menu" > /bin/h && chmod +x /bin/h > /dev/null 2>&1
 rm versao* > /dev/null 2>&1
-wget https://raw.githubusercontent.com/juanitoprosniff/script_msyvpn/main/versao > /dev/null 2>&1
+wget https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/versao > /dev/null 2>&1
 
 cd /bin/ > /dev/null 2>&1
 rm v2raymanager > /dev/null 2>&1
-wget https://raw.githubusercontent.com/juanitoprosniff/script_msyvpn/main/Modulos/v2raymanager > /dev/null 2>&1
+wget https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/Modulos/v2raymanager > /dev/null 2>&1
 chmod 777 v2raymanager > /dev/null 2>&1
-wget https://raw.githubusercontent.com/juanitoprosniff/script_msyvpn/main/Install/ShellBot.sh > /dev/null 2>&1
+wget https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/Install/ShellBot.sh > /dev/null 2>&1
 chmod 777 ShellBot.sh > /dev/null 2>&1
 cd > /dev/null 2>&1
 
@@ -257,7 +257,7 @@ echo ""
 [[ ! -d /etc/SSHPlus/Slow/install ]] && mkdir -p /etc/SSHPlus/Slow/install
 [[ ! -d /etc/SSHPlus/Slow/Key ]]     && mkdir -p /etc/SSHPlus/Slow/Key
 
-_REPO_BASE="https://raw.githubusercontent.com/juanitoprosniff/script_msyvpn/main"
+_REPO_BASE="https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main"
 
 # Descargar wsproxy.py y proxy.py desde el repositorio
 wget -q "${_REPO_BASE}/Modulos/wsproxy.py" -O /etc/SSHPlus/wsproxy.py 2>/dev/null
