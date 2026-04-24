@@ -12,4 +12,4 @@ bash <(wget -qO- https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/
 ```
 
 # SSHPLUS-NEW-msy
-COMPATIBLE CON UBUNTU 18 20 22 24
+COMPATIBLE CON UBUNTU 18 20 22 24 25 26
