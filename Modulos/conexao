@@ -122,7 +122,7 @@ fun_update_script() {
     echo ""
 
     # URL base del repositorio (editar según su GitHub)
-    local _REPO_BASE="https://raw.githubusercontent.com/juanitoprosniff/script_msyvpn/main"
+    local _REPO_BASE="https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main"
     local _VER_REMOTE _VER_LOCAL _VER_FILE="/usr/share/.plus/.version"
 
     echo -e "\033[1;33mVerificando versión remota...\033[0m"
@@ -1194,11 +1194,11 @@ criarteste() {
 }
 # ============================================================
 # SLOWDNS — Lanza el módulo slowdns.sh integrado
-# Repo: juanitoprosniff/script_msyvpn  (reemplaza khaledagn)
+# Repo: juanitoprosniff/scriptsshmsy  (reemplaza khaledagn)
 # ============================================================
 slow_setup() {
     local _slow_script="/bin/slowdns"
-    local _slow_repo="https://raw.githubusercontent.com/juanitoprosniff/script_msyvpn/main/Slow/slowdns.sh"
+    local _slow_repo="https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/Slow/slowdns.sh"
     local _slow_dir="/etc/SSHPlus/Slow"
 
     # Crear carpetas si no existen
