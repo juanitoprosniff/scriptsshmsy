@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
 # encoding: utf-8
-# wsproxy.py — WebSocket Proxy
+# wsproxy.py — WebSocket + SSH Directo Proxy
 # Uso desde conexao:
 #   python3 wsproxy.py <puerto> [host:puerto_destino]
 # Ejemplos:
 #   python3 wsproxy.py 8080 127.0.0.1:143   → Dropbear 2016
 #   python3 wsproxy.py 80   127.0.0.1:22    → OpenSSH
 #   python3 wsproxy.py 8080                 → defecto 127.0.0.1:22
+#
+# MODO DUAL: detecta automáticamente si la conexión es:
+#   - SSH DIRECTO  → buffer empieza con "SSH-" → tunnel sin HTTP
+#   - WEBSOCKET/HTTP → cualquier otra cosa    → responde 101 y tunnel
 
 import socket, threading, select, sys, time
 
 LISTENING_ADDR = '0.0.0.0'
 
-# ── argv[1] = puerto de escucha, argv[2] = destino ───────────
 try:
     LISTENING_PORT = int(sys.argv[1])
 except:
@@ -46,8 +49,6 @@ class Server(threading.Thread):
     def run(self):
         self.soc = socket.socket(socket.AF_INET)
         self.soc.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        # FIX: listen(0) en Linux moderno = backlog=1 → rechaza conexiones
-        # en puertos alternativos (8080/8880/8888). Usar 128 o más.
         self.soc.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         self.soc.settimeout(2)
         self.soc.bind((self.host, self.port))
@@ -130,22 +131,28 @@ class ConnectionHandler(threading.Thread):
         try:
             self.client_buffer = self.client.recv(BUFLEN)
 
-            # Leer destino del header X-Real-Host si existe,
-            # si no usar DEFAULT_HOST (configurado por argv[2])
-            hostPort = self.findHeader(self.client_buffer, 'X-Real-Host')
-            if hostPort == '':
-                hostPort = DEFAULT_HOST
-
-            split = self.findHeader(self.client_buffer, 'X-Split')
-            if split != '':
-                self.client.recv(BUFLEN)
-
-            # Sin lógica de contraseña aqui — la autenticación
-            # la maneja Dropbear/OpenSSH en el destino final
-            if hostPort != '':
-                self.method_CONNECT(hostPort)
+            # ── DETECCIÓN DE MODO ────────────────────────────────
+            # SSH directo: el cliente manda su banner "SSH-2.0-..." o "SSH-1."
+            # al conectar. Si detectamos eso, hacemos tunnel puro sin HTTP.
+            # WebSocket/HTTP: cualquier otra cosa (GET, CONNECT, etc.)
+            if self.client_buffer.startswith(b'SSH-'):
+                # MODO SSH DIRECTO — sin respuesta HTTP, tunnel inmediato
+                self.log += ' - SSH-DIRECT'
+                self.method_DIRECT(DEFAULT_HOST)
             else:
-                self.client.send(b'HTTP/1.1 400 NoHost!\r\n\r\n')
+                # MODO WEBSOCKET/HTTP — comportamiento original
+                hostPort = self.findHeader(self.client_buffer, 'X-Real-Host')
+                if hostPort == '':
+                    hostPort = DEFAULT_HOST
+
+                split = self.findHeader(self.client_buffer, 'X-Split')
+                if split != '':
+                    self.client.recv(BUFLEN)
+
+                if hostPort != '':
+                    self.method_CONNECT(hostPort)
+                else:
+                    self.client.send(b'HTTP/1.1 400 NoHost!\r\n\r\n')
 
         except Exception as e:
             self.log += ' - error: ' + str(e)
@@ -180,6 +187,17 @@ class ConnectionHandler(threading.Thread):
         self.target = socket.socket(soc_family, soc_type, proto)
         self.targetClosed = False
         self.target.connect(address)
+
+    def method_DIRECT(self, path):
+        # SSH directo: conectar al backend y reenviar el buffer SSH
+        # que ya recibimos (el banner del cliente) sin respuesta HTTP
+        self.log += ' - DIRECT ' + path
+        self.connect_target(path)
+        # Reenviar el banner SSH que ya leímos al backend
+        self.target.sendall(self.client_buffer)
+        self.client_buffer = b''
+        self.server.printLog(self.log)
+        self.doCONNECT()
 
     def method_CONNECT(self, path):
         self.log += ' - CONNECT ' + path
@@ -226,6 +244,7 @@ def main():
     print("")
     print("\033[1;33mPUERTO :\033[1;32m " + str(LISTENING_PORT))
     print("\033[1;33mDESTINO:\033[1;32m " + DEFAULT_HOST)
+    print("\033[1;33mMODO   :\033[1;32m DUAL (SSH directo + WebSocket)")
     print("")
     print("\033[0;34m" + "━" * 10 + "\033[1;32m VPSMANAGER \033[0;34m" + "━" * 11 + "\033[0m")
     print("")
