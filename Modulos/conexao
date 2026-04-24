@@ -4,16 +4,11 @@
 # Nombre: MSYVPN-SCRIPT (carpetas internas: /etc/SSHPlus/)
 # Compatible: Ubuntu 18 / 20 / 22 / 24 / 25 / 26+
 # Detección automática: ARM / ARM64 / AMD64
-# PROTOCOLOS UDP:
-#  - UDP ZiVPN   → rango de puertos 1 – 19999
-#  - UDP Hysteria → rango de puertos 20000 – 39999
-# FIXES v3:
-#  - SlowDNS actualizado (repo propio, sin khaledagn)
-#  - UDP ZiVPN integrado con detección ARM/AMD
-#  - Rangos de puertos separados (sin conflictos UDP)
-#  - Dropbear 2016 GCC 12/13 (Ubuntu 22/24)
-#  - SSL multi-puerto 443, 444, 8443
-#  - Sistema de actualización vía GitHub
+# PROTOCOLOS:
+#  - OpenSSH (puertos configurables)
+#  - Dropbear 2016.74 (compilado desde fuente)
+#  - Proxy WebSocket (wsproxy.py)
+#  - SSL Tunnel (stunnel4 + dispatcher inteligente)
 # ============================================================
 
 _UBUNTU_VER=$(lsb_release -rs 2>/dev/null | cut -d. -f1 || grep -oP '(?<=Ubuntu )\d+' /etc/issue.net 2>/dev/null || echo "0")
@@ -112,229 +107,8 @@ _restart_ssh() {
 }
 
 # ============================================================
-# SISTEMA DE ACTUALIZACIÓN VÍA GITHUB
-# ============================================================
-fun_update_script() {
-    clear
-    echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-    echo -e "\033[0;34m┃\E[44;1;37m        ACTUALIZAR MSYVPN-SCRIPT             \E[0m\033[0;34m┃"
-    echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
-    echo ""
-
-    # URL base del repositorio (editar según su GitHub)
-    local _REPO_BASE="https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main"
-    local _VER_REMOTE _VER_LOCAL _VER_FILE="/usr/share/.plus/.version"
-
-    echo -e "\033[1;33mVerificando versión remota...\033[0m"
-
-    # Obtener versión remota
-    _VER_REMOTE=$(curl -s --max-time 8 "${_REPO_BASE}/versao" 2>/dev/null || \
-                  wget -qO- --timeout=8 "${_REPO_BASE}/versao" 2>/dev/null)
-
-    # Versión local
-    _VER_LOCAL=$(cat "$_VER_FILE" 2>/dev/null || echo "0")
-
-    if [[ -z "$_VER_REMOTE" ]]; then
-        echo -e "\033[1;31mNo se pudo contactar el servidor. Verifique su conexión.\033[0m"
-        sleep 3; return
-    fi
-
-    echo -e "\033[1;37mVersión local : \033[1;32m$_VER_LOCAL\033[0m"
-    echo -e "\033[1;37mVersión remota: \033[1;32m$_VER_REMOTE\033[0m"
-    echo ""
-
-    if [[ "$_VER_REMOTE" = "$_VER_LOCAL" ]]; then
-        echo -e "\033[1;32m✓ Ya tienes la versión más reciente.\033[0m"
-        sleep 3; return
-    fi
-
-    echo -e "\033[1;33m¡Hay una nueva versión disponible!\033[0m"
-    echo ""
-    echo -e "\033[0;34m┃\033[1;31m[\033[1;36m1\033[1;31m] \033[1;33mActualizar ahora (para todos los servicios)\033[0;34m┃"
-    echo -e "\033[0;34m┃\033[1;31m[\033[1;36m2\033[1;31m] \033[1;33mActualizar solo módulo conexao              \033[0;34m┃"
-    echo -e "\033[0;34m┃\033[1;31m[\033[1;36m3\033[1;31m] \033[1;33mActualizar solo menú principal              \033[0;34m┃"
-    echo -e "\033[0;34m┃\033[1;31m[\033[1;36m0\033[1;31m] \033[1;33mCancelar                                   \033[0;34m┃"
-    echo -ne "\033[1;32mOpción: \033[1;37m"; read _upd_opt
-
-    case "$_upd_opt" in
-    1)
-        echo -e "\n\033[1;33mDeteniendo servicios activos...\033[0m"
-        # Parar proxies Python
-        for pid in $(screen -ls 2>/dev/null | grep -E '\.proxy|\.ws|openpy' | awk '{print $1}'); do
-            screen -r -S "$pid" -X quit 2>/dev/null
-        done
-        screen -wipe >/dev/null 2>&1
-
-        echo -e "\033[1;33mDescargando actualización completa...\033[0m"
-        _do_update_full "$_REPO_BASE"
-        ;;
-    2)
-        echo -e "\033[1;33mActualizando módulo de conexión...\033[0m"
-        _do_update_file "$_REPO_BASE" "conexao" "/bin/conexao"
-        ;;
-    3)
-        echo -e "\033[1;33mActualizando menú principal...\033[0m"
-        _do_update_file "$_REPO_BASE" "menu" "/bin/menu"
-        ;;
-    0) return ;;
-    esac
-}
-
-_do_update_file() {
-    local base="$1" remote_name="$2" local_path="$3"
-    local tmp="/tmp/_upd_${remote_name}"
-    wget -q --timeout=15 "${base}/${remote_name}" -O "$tmp" 2>/dev/null || \
-    curl -s --max-time 15 "${base}/${remote_name}" -o "$tmp" 2>/dev/null
-
-    if [[ -s "$tmp" ]]; then
-        cp "$local_path" "${local_path}.bak" 2>/dev/null
-        mv "$tmp" "$local_path"
-        chmod 755 "$local_path"
-        echo -e "\033[1;32m✓ $remote_name actualizado!\033[0m"
-    else
-        echo -e "\033[1;31mError al descargar $remote_name\033[0m"
-    fi
-    sleep 2
-}
-
-_do_update_full() {
-    local base="$1"
-    local _ok=0
-
-    for _mod in menu conexao; do
-        local _dest
-        [[ "$_mod" = "menu" ]] && _dest="/bin/menu" || _dest="/bin/conexao"
-        local _tmp="/tmp/_upd_${_mod}"
-        wget -q --timeout=15 "${base}/${_mod}" -O "$_tmp" 2>/dev/null || \
-        curl -s --max-time 15 "${base}/${_mod}" -o "$_tmp" 2>/dev/null
-        if [[ -s "$_tmp" ]]; then
-            cp "$_dest" "${_dest}.bak" 2>/dev/null
-            mv "$_tmp" "$_dest"
-            chmod 755 "$_dest"
-            echo -e "\033[1;32m✓ $_mod actualizado\033[0m"
-            ((_ok++))
-        else
-            echo -e "\033[1;31m✗ Error actualizando $_mod\033[0m"
-        fi
-    done
-
-    # Actualizar versión local
-    if [[ $_ok -gt 0 ]]; then
-        mkdir -p /usr/share/.plus
-        echo "$_VER_REMOTE" > /usr/share/.plus/.version
-        echo -e "\n\033[1;32m✓ Actualización completada ($_ok módulos).\033[0m"
-        echo -e "\033[1;33mReiniciando menú...\033[0m"
-        sleep 2; exec menu
-    fi
-    sleep 3
-}
-
-# ============================================================
-# SQUID
-# ============================================================
-inst_sqd() {
-    if _check_proc 'squid'; then
-        echo -e "\E[41;1;37m            REMOVER SQUID PROXY              \E[0m"
-        echo -ne "\n\033[1;32mREMOVER SQUID? \033[1;31m[s/n]:\033[1;37m "; read resp
-        [[ "$resp" = 's' ]] && {
-            rem_sqd() {
-                for d in /etc/squid /etc/squid3; do
-                    [[ -d "$d" ]] && apt-get remove --purge -y squid squid3 >/dev/null 2>&1 && rm -rf "$d"
-                done; apt autoremove -y >/dev/null 2>&1
-            }; fun_bar 'rem_sqd'
-            echo -e "\n\033[1;32mSQUID ELIMINADO!\033[0m"
-        }; sleep 2; fun_conexao
-    else
-        echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-        echo -e "\033[0;34m┃\E[44;1;37m            INSTALAR SQUID PROXY         \E[0m\033[0;34m┃"
-        echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
-        IP=$(curl -s --max-time 5 ipv4.icanhazip.com || wget -qO- ipv4.icanhazip.com)
-        echo -ne "\033[1;32mCONFIRME SU IP: \033[1;37m"; read -e -i $IP ipdovps
-        echo -ne "\n\033[1;33mPUERTOS (EJ: 80 8080): \033[1;37m"; read portass
-        [[ -z "$portass" ]] && { echo -e "\n\033[1;31mPuerto inválido!"; sleep 2; fun_conexao; return; }
-        for porta in $portass; do verif_ptrs $porta; done
-        fun_bar 'apt update -y' "apt install squid -y"
-        var_sqd="/etc/squid/squid.conf"; [[ -d /etc/squid3 ]] && var_sqd="/etc/squid3/squid.conf"
-        cat > $var_sqd <<-EOF
-			acl url1 dstdomain -i 127.0.0.1
-			acl url2 dstdomain -i localhost
-			acl url3 dstdomain -i $ipdovps
-			acl all src 0.0.0.0/0
-			http_access allow url1
-			http_access allow url2
-			http_access allow url3
-			http_access deny all
-			#Puertos
-			visible_hostname SSHPLUS
-			via off
-			forwarded_for off
-		EOF
-        for Pts in $portass; do
-            echo "http_port $Pts" >> $var_sqd
-            _fw_open $Pts tcp
-        done
-        fun_bar 'service squid restart'
-        echo -e "\n\033[1;32mSQUID INSTALADO!\033[0m"; sleep 2; fun_conexao
-    fi
-}
-
-fun_squid() {
-    if ! _check_proc 'squid'; then inst_sqd; return; fi
-    sqdp=$(get_ports_by_process 'squid')
-    echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-    echo -e "\033[0;34m┃\E[44;1;37m          GESTIONAR SQUID PROXY          \E[0m\033[0;34m┃"
-    echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
-    [[ -n "$sqdp" ]] && echo -e "\033[0;34m╼ \033[1;32mPUERTOS\033[1;37m: $sqdp"
-    echo -e "\033[0;34m┃\033[1;31m[\033[1;36m1\033[1;31m] \033[1;33mINSTALAR/REMOVER  \033[0;34m┃"
-    echo -e "\033[0;34m┃\033[1;31m[\033[1;36m2\033[1;31m] \033[1;33mAGREGAR PUERTO    \033[0;34m┃"
-    echo -e "\033[0;34m┃\033[1;31m[\033[1;36m3\033[1;31m] \033[1;33mELIMINAR PUERTO   \033[0;34m┃"
-    echo -e "\033[0;34m┃\033[1;31m[\033[1;36m0\033[1;31m] \033[1;33mVOLVER            \033[0;34m┃"
-    echo -ne "\033[1;32mOpción: \033[1;37m"; read x; clear
-    case $x in
-    1|01) inst_sqd ;;
-    2|02)
-        var_sqd="/etc/squid/squid.conf"; [[ -f /etc/squid3/squid.conf ]] && var_sqd="/etc/squid3/squid.conf"
-        echo -ne "\033[1;32mPUERTO A AGREGAR: \033[1;37m"; read pt; [[ -z "$pt" ]] && { fun_conexao; return; }
-        sed -i "s/#Puertos/#Puertos\nhttp_port $pt/" $var_sqd
-        _fw_open $pt; fun_bar 'service squid restart' 'service squid3 restart'
-        echo -e "\n\033[1;32mPUERTO AGREGADO!"; sleep 2; fun_squid ;;
-    3|03)
-        var_sqd="/etc/squid/squid.conf"; [[ -f /etc/squid3/squid.conf ]] && var_sqd="/etc/squid3/squid.conf"
-        echo -ne "\033[1;32mPUERTO A ELIMINAR: \033[1;37m"; read pt
-        sed -i "/http_port $pt/d" $var_sqd
-        fun_bar 'service squid restart' 'service squid3 restart'
-        echo -e "\n\033[1;32mPUERTO ELIMINADO!"; sleep 2; fun_squid ;;
-    0|00) fun_conexao ;;
-    *) echo -e "\033[1;31mOpción inválida!"; sleep 1; fun_squid ;;
-    esac
-}
-
-# ============================================================
 # OPENSSH
 # ============================================================
-fun_openssh_legacy() {
-    clear
-    if ss -tlpn 2>/dev/null | grep -q ':23 '; then
-        echo -e "\n\033[1;32mOpenSSH ya activo en puerto 23.\033[0m"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m1\033[1;31m] \033[1;33mDESACTIVAR 23  \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m0\033[1;31m] \033[1;33mVOLVER         \033[0;34m┃"
-        echo -ne "\033[1;32mOpción: \033[1;37m"; read opc
-        [[ "$opc" = '1' ]] && { sed -i '/^Port 23$/d' /etc/ssh/sshd_config; _restart_ssh; echo -e "\n\033[1;32mPuerto 23 eliminado!\033[0m"; }
-        sleep 2; fun_conexao; return
-    fi
-    echo -e "\033[0;34m┃\033[1;31m[\033[1;36m1\033[1;31m] \033[1;33mACTIVAR puerto 23  \033[0;34m┃"
-    echo -e "\033[0;34m┃\033[1;31m[\033[1;36m0\033[1;31m] \033[1;33mVOLVER             \033[0;34m┃"
-    echo -ne "\033[1;32mOpción: \033[1;37m"; read opc
-    if [[ "$opc" = '1' ]]; then
-        verif_ptrs 23
-        grep -q "^Port 23$" /etc/ssh/sshd_config || echo "Port 23" >> /etc/ssh/sshd_config
-        _restart_ssh; _fw_open 23
-        echo -e "\n\033[1;32mOpenSSH activo en 22 y 23!\033[0m"; sleep 2; fun_conexao
-    else
-        fun_conexao
-    fi
-}
-
 fun_openssh() {
     clear
     echo -e "\E[44;1;37m            OPENSSH             \E[0m\n"
@@ -342,7 +116,6 @@ fun_openssh() {
     echo -e "\033[1;33mPUERTOS ACTIVOS: \033[1;37m$_ssh_ports\n"
     echo -e "\033[1;31m[\033[1;36m1\033[1;31m] \033[1;33mAGREGAR PUERTO"
     echo -e "\033[1;31m[\033[1;36m2\033[1;31m] \033[1;33mELIMINAR PUERTO"
-    echo -e "\033[1;31m[\033[1;36m3\033[1;31m] \033[1;33mOPENSSH LEGADO (puerto 23)"
     echo -e "\033[1;31m[\033[1;36m0\033[1;31m] \033[1;33mVOLVER\033[0m"
     echo -ne "\033[1;32mOpción: \033[1;37m"; read resp
     if [[ "$resp" = '1' ]]; then
@@ -354,8 +127,6 @@ fun_openssh() {
         echo -ne "\033[1;32mPUERTO A ELIMINAR: \033[1;37m"; read pt; [[ -z "$pt" ]] && { fun_conexao; return; }
         sed -i "/^Port $pt$/d" /etc/ssh/sshd_config; _restart_ssh
         echo -e "\n\033[1;32mPUERTO $pt ELIMINADO!\033[0m"; sleep 2; fun_conexao
-    elif [[ "$resp" = '3' ]]; then
-        fun_openssh_legacy
     else
         fun_conexao
     fi
@@ -386,27 +157,23 @@ fun_inst_dropbear2016() {
 
     cd /usr/src
 
-    # Descargar Dropbear 2016.74
     if [[ ! -f dropbear-2016.74.tar.bz2 ]] || [[ ! -s dropbear-2016.74.tar.bz2 ]]; then
         echo "Descargando Dropbear 2016.74..."
         wget -q --timeout=60 \
             https://github.com/juanitoprosniff/script_msyvpn/raw/refs/heads/main/installer/dropbear-2016.74.tar.bz2
     fi
 
-    # Verificar descarga
     if [[ ! -s dropbear-2016.74.tar.bz2 ]]; then
         echo -e "\033[1;31mNo se pudo descargar el fuente.\033[0m"
         echo -e "\033[1;33mSuba manualmente dropbear-2016.74.tar.bz2 a /usr/src/ e intente de nuevo.\033[0m"
         sleep 3; fun_conexao; return
     fi
 
-    # Extraer
     echo "Extrayendo archivos..."
     rm -rf dropbear-2016.74 2>/dev/null
     tar xjf dropbear-2016.74.tar.bz2
     cd dropbear-2016.74
 
-    # Modificar identificador SSH
     echo "Modificando identificador SSH..."
     if [[ -f sysoptions.h ]]; then
         sed -i 's|^#define LOCAL_IDENT.*|#define LOCAL_IDENT "SSH-2.0-ByJuanitoProSniff"|' sysoptions.h 2>/dev/null || true
@@ -417,14 +184,12 @@ fun_inst_dropbear2016() {
         echo "✓ Modificado en default_options.h"
     fi
 
-    # Configurar compilación
     echo "Configurando compilación..."
     ./configure --prefix=/opt/dropbear-2016 \
         --disable-zlib \
         --disable-wtmp \
         --disable-lastlog
 
-    # Compilar
     echo "Compilando... (puede tardar 2-3 minutos)"
     if make -j$(nproc) PROGRAMS="dropbear dropbearkey"; then
         echo "Instalando..."
@@ -435,7 +200,6 @@ fun_inst_dropbear2016() {
         cd /root; sleep 3; fun_conexao; return
     fi
 
-    # Verificar instalación del binario
     if [[ ! -f /opt/dropbear-2016/sbin/dropbear ]]; then
         echo -e "\033[1;31m⚠ ERROR: Binario no encontrado tras compilación.\033[0m"
         cd /root; sleep 3; fun_conexao; return
@@ -443,10 +207,8 @@ fun_inst_dropbear2016() {
 
     echo "✓ Dropbear 2016.74 compilado exitosamente"
 
-    # Crear directorio para llaves
     mkdir -p /etc/dropbear-legacy
 
-    # Generar llaves SSH para Dropbear 2016
     echo "Generando llaves SSH para Dropbear 2016..."
     [[ ! -f /etc/dropbear-legacy/dropbear_rsa_host_key ]] && \
         /opt/dropbear-2016/bin/dropbearkey -t rsa \
@@ -456,12 +218,10 @@ fun_inst_dropbear2016() {
         /opt/dropbear-2016/bin/dropbearkey -t dss \
             -f /etc/dropbear-legacy/dropbear_dss_host_key
 
-    # Crear banner
     cat > /etc/dropbear-legacy/banner.txt <<'BANEOF'
 t.me/FREEINTERNETVPNMSY
 BANEOF
 
-    # Crear servicio systemd para Dropbear 2016
     cat > /etc/systemd/system/dropbear-legacy.service <<DBEOF
 [Unit]
 Description=Dropbear SSH Legacy 2016.74 - Puerto $porta_db16
@@ -480,7 +240,6 @@ KillMode=process
 WantedBy=multi-user.target
 DBEOF
 
-    # Activar e iniciar servicio
     systemctl daemon-reload
     systemctl enable dropbear-legacy
     systemctl start dropbear-legacy
@@ -510,16 +269,13 @@ DBEOF
 # Con dispatcher inteligente SSH ↔ WebSocket en mismo puerto
 # ============================================================
 
-# ── Puerto interno del dispatcher ────────────────────────────
 _SSL_DISP_PORT=10443
 _SSL_DISP_SCRIPT="/etc/SSHPlus/ssldispatcher.py"
 
-# Iniciar/reiniciar el dispatcher SSL
 _ssl_start_dispatcher() {
-    local _ssh_dst="$1"   # e.g. 127.0.0.1:143
-    local _ws_dst="$2"    # e.g. 127.0.0.1:80
+    local _ssh_dst="$1"
+    local _ws_dst="$2"
 
-    # Parar instancia anterior si existe
     for pid in $(screen -ls 2>/dev/null | grep '\.ssldispatch' | awk '{print $1}'); do
         screen -r -S "$pid" -X quit 2>/dev/null
     done
@@ -548,7 +304,6 @@ _ssl_start_dispatcher() {
     fi
 }
 
-# Detectar destinos actuales del dispatcher desde autostart
 _ssl_disp_get_targets() {
     local _line
     _line=$(grep 'ssldispatcher.py' /etc/autostart 2>/dev/null | tail -1)
@@ -571,7 +326,6 @@ inst_ssl() {
         sslt=$(ss -tlpn 2>/dev/null | grep 'stunnel' | awk '{print $4}' | rev | cut -d: -f1 | rev | xargs)
         [[ -z "$sslt" ]] && sslt="\033[1;31mINDISPONIBLE"
 
-        # Estado del dispatcher
         local _disp_sts="\033[1;31m✕ INACTIVO"
         ss -tlpn 2>/dev/null | grep -q ":${_SSL_DISP_PORT} " && \
             _disp_sts="\033[1;32m✓ ACTIVO (puerto $_SSL_DISP_PORT)"
@@ -595,7 +349,6 @@ inst_ssl() {
         echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
         echo -ne "\033[1;32mOpción: \033[1;37m"; read resposta; echo ""
 
-        # 1 — Agregar puerto SSL
         if [[ "$resposta" = '1' ]]; then
             echo -ne "\033[1;32mNUEVO PUERTO SSL: \033[1;37m"; read porta
             [[ -z "$porta" ]] && { inst_ssl; return; }
@@ -613,7 +366,6 @@ EOF
             sleep 2; inst_ssl; return
         fi
 
-        # 2 — Eliminar puerto SSL
         if [[ "$resposta" = '2' ]]; then
             echo -ne "\033[1;32mPUERTO A ELIMINAR: \033[1;37m"; read porta
             [[ -z "$porta" ]] && { inst_ssl; return; }
@@ -623,7 +375,6 @@ EOF
             echo -e "\n\033[1;32mPUERTO $porta ELIMINADO!\033[0m"; sleep 2; inst_ssl; return
         fi
 
-        # 3 — Cambiar backends SSH/WS del dispatcher
         if [[ "$resposta" = '3' ]]; then
             echo -e "\033[1;33mDestino SSH actual : \033[1;37m$_DISP_SSH"
             echo -e "\033[1;33mDestino WS  actual : \033[1;37m$_DISP_WS\033[0m\n"
@@ -640,7 +391,6 @@ EOF
             *) _new_ssh="$_DISP_SSH" ;;
             esac
 
-            # Detectar wsproxy activo
             local _auto_ws
             _auto_ws=$(ss -tlpn 2>/dev/null | grep -E 'python|python3' | \
                        grep -v ":${_SSL_DISP_PORT} " | \
@@ -660,7 +410,6 @@ EOF
             *) _new_ws="$_DISP_WS" ;;
             esac
 
-            # Actualizar autostart
             sed -i '/ssldispatcher.py/d' /etc/autostart 2>/dev/null
             echo "ss -tlpn | grep -qw ${_SSL_DISP_PORT} || screen -dmS ssldispatch python3 ${_SSL_DISP_SCRIPT} ${_SSL_DISP_PORT} ${_new_ssh} ${_new_ws}" >> /etc/autostart
 
@@ -668,13 +417,11 @@ EOF
             echo -e "\n\033[1;32mBackends actualizados!\033[0m"; sleep 2; inst_ssl; return
         fi
 
-        # 4 — Reiniciar dispatcher
         if [[ "$resposta" = '4' ]]; then
             _ssl_start_dispatcher "$_DISP_SSH" "$_DISP_WS"
             sleep 2; inst_ssl; return
         fi
 
-        # 5 — Eliminar todo
         if [[ "$resposta" = '5' ]]; then
             pkill stunnel4 2>/dev/null; systemctl stop stunnel4 2>/dev/null
             apt-get remove --purge stunnel4 -y >/dev/null 2>&1
@@ -701,7 +448,6 @@ EOF
     echo -e "\033[1;33mModo: SSL DIRECTO + SSL WEBSOCKET simultáneos\033[0m"
     echo -e "\033[1;37mEl dispatcher detecta el protocolo automáticamente.\033[0m\n"
 
-    # ── Paso 1: Backend SSH ───────────────────────────────────
     echo -e "\033[1;33mPaso 1 — Destino SSH (sin WebSocket):\033[0m"
     echo -e "\033[1;31m[\033[1;36m1\033[1;31m] \033[1;33mOpenSSH puerto 22"
     echo -e "\033[1;31m[\033[1;36m2\033[1;31m] \033[1;33mDropbear 2016 puerto 143"
@@ -715,7 +461,6 @@ EOF
     *) _ssh_dst="127.0.0.1:143" ;;
     esac
 
-    # ── Paso 2: Backend WS ────────────────────────────────────
     local _ws_auto
     _ws_auto=$(ss -tlpn 2>/dev/null | grep -E 'python|python3' | \
                awk '{print $4}' | rev | cut -d: -f1 | rev | head -1)
@@ -751,14 +496,12 @@ EOF
         echo -e "\033[1;31mError al generar certificado!\033[0m"; sleep 2; inst_ssl; return
     }
 
-    # ── Iniciar dispatcher ANTES de configurar stunnel ────────
     echo -e "\n\033[1;33mIniciando dispatcher SSL inteligente...\033[0m"
     if ! _ssl_start_dispatcher "$_ssh_dst" "$_ws_dst"; then
         echo -e "\033[1;31mNo se pudo iniciar el dispatcher. Verifique ssldispatcher.py\033[0m"
         sleep 3; return
     fi
 
-    # ── Configurar stunnel → dispatcher ──────────────────────
     cat > /etc/stunnel/stunnel.conf <<EOF
 cert = /etc/stunnel/stunnel.pem
 client = no
@@ -795,7 +538,6 @@ EOF
         iptables -I INPUT -p tcp --dport $_sslp -j ACCEPT 2>/dev/null
     done
 
-    # Guardar en autostart para reinicio del servidor
     sed -i '/ssldispatcher.py/d' /etc/autostart 2>/dev/null
     echo "ss -tlpn | grep -qw ${_SSL_DISP_PORT} || screen -dmS ssldispatch python3 ${_SSL_DISP_SCRIPT} ${_SSL_DISP_PORT} ${_ssh_dst} ${_ws_dst}" >> /etc/autostart
 
@@ -819,7 +561,7 @@ EOF
 }
 
 # ============================================================
-# PROXY SOCKS + WEBSOCKET — mejorado para multi-conexión
+# PROXY SOCKS + WEBSOCKET
 # ============================================================
 fun_socks() {
     clear
@@ -830,7 +572,6 @@ fun_socks() {
     [[ -n "$_py_ports" ]] && echo -e "\033[0;34m╼ \033[1;32mPUERTOS ACTIVOS\033[1;37m: $_py_ports"
     [[ $(screen -list 2>/dev/null | grep -wc 'proxy') != '0' ]] && var_sks1="\033[1;32m✓" || var_sks1="\033[1;31m✕"
     [[ $(screen -list 2>/dev/null | grep -c '\.ws') != '0' ]] && var_sks2="\033[1;32m✓" || var_sks2="\033[1;31m✕"
-    [[ $(screen -list 2>/dev/null | grep -wc 'openpy') != '0' ]] && sksop="\033[1;32m✓" || sksop="\033[1;31m✕"
     echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
     echo -e "\033[0;34m┃\033[1;31m[\033[1;36m1\033[1;31m] \033[1;33mWEBSOCKET $var_sks2                        \033[0;34m┃"
     echo -e "\033[0;34m┃\033[1;31m[\033[1;36m2\033[1;31m] \033[1;33mCAMBIAR STATUS WEBSOCKET             \033[0;34m┃"
@@ -902,25 +643,18 @@ _fun_socks_menu_destino() {
     [[ -n "$_dst_port" ]] && echo -e "\033[1;33mDestino: 127.0.0.1:$_dst_port\033[0m"
     echo -e "\033[1;32mIniciando $titulo...\033[0m\n"
 
-    # Argumento de destino para cada instancia — esto evita el bug donde
-    # el sed sobre el archivo afecta a todas las instancias por igual
     local _dst_arg=""
     [[ -n "$_dst_port" ]] && _dst_arg="127.0.0.1:${_dst_port}"
 
-    # Usar wsproxy mejorado si existe
     local _use_script="$script"
-    [[ "$script" = "wsproxy.py" && -f /etc/SSHPlus/wsproxy2.py ]] && _use_script="wsproxy2.py"
 
     for porta in $_listen_ports; do
         verif_ptrs $porta
-        # Pasar destino como argumento — cada instancia independiente de las demás
         screen -dmS ${screen_prefix}${porta} python3 /etc/SSHPlus/$_use_script $porta $_dst_arg
         _fw_open $porta tcp
-        # Forzar iptables por si el puerto está bloqueado a nivel de kernel
         iptables -I INPUT -p tcp --dport $porta -j ACCEPT 2>/dev/null
         echo "ss -tlpn | grep -qw $porta || screen -dmS ${screen_prefix}${porta} python3 /etc/SSHPlus/$_use_script $porta $_dst_arg" >> /etc/autostart
         sleep 0.5
-        # Verificar que realmente está escuchando
         if ss -tlpn 2>/dev/null | grep -q ":$porta "; then
             echo -e "\033[1;32mPuerto \033[1;37m$porta \033[1;32mactivado! ✓\033[0m"
         else
@@ -936,10 +670,7 @@ _fun_socks_menu_destino() {
 
 _fun_alterar_status() {
     local script_file="$1" titulo="$2"
-    # Buscar el script activo — puede ser proxy.py, wsproxy.py, wsproxy2.py
     local _real_script="$script_file"
-    [[ "$script_file" = "wsproxy.py" && -f /etc/SSHPlus/wsproxy2.py ]] && \
-        ps x | grep -w wsproxy2.py | grep -v grep >/dev/null 2>&1 && _real_script="wsproxy2.py"
 
     if ps x | grep -w "$_real_script" | grep -v grep >/dev/null 2>&1 || \
        ps x | grep -w "$script_file"  | grep -v grep >/dev/null 2>&1; then
@@ -960,37 +691,29 @@ _fun_alterar_status() {
         4|04) cor_sts='yellow' ;; 5|05) cor_sts='#F535AA' ;; 6|06) cor_sts='cyan' ;;
         7|07) cor_sts='#FF7F00' ;; 8|08) cor_sts='#9932CD' ;; *) cor_sts='null' ;;
         esac
-        # Editar MSG en el script
         msgsocks2=$(grep "MSG\s*=" /etc/SSHPlus/$_use_script | head -1 | awk -F= '{print $2}')
         [[ -n "$msgsocks2" ]] && sed -i "s|$msgsocks2| '$msgg'|" /etc/SSHPlus/$_use_script
-        # Editar color
         cor_old=$(grep 'color=' /etc/SSHPlus/$_use_script 2>/dev/null | head -1 | cut -d'"' -f2)
         [[ -n "$cor_old" && "$cor_old" != "$cor_sts" ]] && \
             sed -i "s|color=\"$cor_old\"|color=\"$cor_sts\"|g" /etc/SSHPlus/$_use_script
 
-        # ── REINICIAR el proxy para aplicar el nuevo status ──
         echo -e "\n\033[1;33mReiniciando proxy para aplicar cambios...\033[0m"
-        # Capturar puertos activos antes de parar
         local _active_ports
         _active_ports=$(ss -tlpn 2>/dev/null | grep -E 'python|python3' | \
             awk '{print $4}' | rev | cut -d: -f1 | rev | xargs)
 
-        # Detectar prefijo de sesión screen
         local _screen_pfx="proxy"
         [[ "$_use_script" = *"wsproxy"* || "$_use_script" = *"ws"* ]] && _screen_pfx="ws"
 
-        # Parar todas las sesiones del script
         for pid in $(screen -ls 2>/dev/null | grep -E "\.${_screen_pfx}|${_screen_pfx}[0-9]" | \
                      awk '{print $1}'); do
             screen -r -S "$pid" -X quit 2>/dev/null
         done
-        # Matar procesos Python del script
         pkill -f "/etc/SSHPlus/$_use_script" 2>/dev/null
         pkill -f "/etc/SSHPlus/$script_file"  2>/dev/null
         screen -wipe >/dev/null 2>&1
         sleep 1
 
-        # Reiniciar en los mismos puertos
         if [[ -n "$_active_ports" ]]; then
             for _pt in $_active_ports; do
                 screen -dmS "${_screen_pfx}${_pt}" python3 /etc/SSHPlus/$_use_script $_pt
@@ -1015,9 +738,7 @@ reiniciar_proxy_socks() {
     echo -e "\033[1;33mReiniciando Proxy Socks y WebSocket...\033[0m"
     local _reiniciados=0
 
-    # Leer los comandos del autostart para proxy/ws
     if [[ -f /etc/autostart ]]; then
-        # Parar todos los procesos python de proxy
         for pid in $(screen -ls 2>/dev/null | grep -E '\.proxy|\.ws[0-9]|\.openpy|proxy[0-9]|ws[0-9]' | \
                      awk '{print $1}'); do
             screen -r -S "$pid" -X quit 2>/dev/null
@@ -1028,7 +749,6 @@ reiniciar_proxy_socks() {
         screen -wipe >/dev/null 2>&1
         sleep 1
 
-        # Relanzar desde /etc/autostart
         while IFS= read -r _cmd; do
             [[ "$_cmd" =~ proxy\.py|wsproxy|open\.py ]] && {
                 eval "$_cmd" 2>/dev/null
@@ -1047,533 +767,6 @@ reiniciar_proxy_socks() {
 # ============================================================
 # MENÚ PRINCIPAL DE CONEXIÓN
 # ============================================================
-
-# ============================================================
-# CREAR USUARIO — compatible con Dropbear 2016 y OpenSSH
-# Dropbear 2016 no usa PAM extendido, pero sí /etc/shadow.
-# El problema usual: passwd interactivo falla en scripts,
-# usar chpasswd que escribe directo en /etc/shadow.
-# ============================================================
-criarusuario() {
-    clear
-    echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-    echo -e "\033[0;34m┃\E[44;1;37m            CRIAR USUÁRIO SSH             \E[0m\033[0;34m┃"
-    echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
-    echo ""
-
-    # Mostrar puertos activos de todos los servicios SSH
-    echo -e "\033[1;33m━━━━━ PUERTOS ACTIVOS ━━━━━\033[0m"
-    _ssh_p=$(grep '^Port' /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' | xargs)
-    [[ -n "$_ssh_p" ]] && echo -e "\033[1;32mOpenSSH  :\033[1;37m $_ssh_p"
-
-    # Dropbear normal
-    _db_p=$(ss -tlpn 2>/dev/null | grep 'dropbear' | grep -v 'dropbear-legacy\|legacy' | \
-            awk '{print $4}' | rev | cut -d: -f1 | rev | xargs)
-    [[ -n "$_db_p" ]] && echo -e "\033[1;32mDropbear :\033[1;37m $_db_p"
-
-    # Dropbear 2016 (legacy)
-    _db16_p=$(systemctl show dropbear-legacy --property=ExecStart 2>/dev/null | \
-              grep -oP '(?<=-p )\d+' | head -1)
-    [[ -z "$_db16_p" ]] && _db16_p=$(ss -tlpn 2>/dev/null | grep 'legacy' | \
-              awk '{print $4}' | rev | cut -d: -f1 | rev | head -1)
-    [[ -n "$_db16_p" ]] && echo -e "\033[1;32mDB 2016  :\033[1;37m $_db16_p"
-
-    # Proxy Socks / WebSocket
-    _py_p=$(ss -tlpn 2>/dev/null | grep -E 'python|python3' | \
-            awk '{print $4}' | rev | cut -d: -f1 | rev | xargs)
-    [[ -n "$_py_p" ]] && echo -e "\033[1;32mProxy/WS :\033[1;37m $_py_p"
-
-    # SSL Stunnel
-    _ssl_p=$(ss -tlpn 2>/dev/null | grep 'stunnel' | \
-             awk '{print $4}' | rev | cut -d: -f1 | rev | xargs)
-    [[ -n "$_ssl_p" ]] && echo -e "\033[1;32mSSL      :\033[1;37m $_ssl_p"
-
-    echo -e "\033[1;33m━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
-    echo ""
-
-    echo -ne "\033[1;32mUSUÁRIO : \033[1;37m"; read usuario
-    [[ -z "$usuario" ]] && { echo -e "\033[1;31mUsuario vacío!\033[0m"; sleep 2; return; }
-
-    # Verificar si ya existe
-    if id "$usuario" &>/dev/null; then
-        echo -e "\033[1;31mUsuario '$usuario' ya existe!\033[0m"; sleep 2; return
-    fi
-
-    echo -ne "\033[1;32mSENHA   : \033[1;37m"; read -s senha; echo ""
-    [[ -z "$senha" ]] && { echo -e "\033[1;31mContraseña vacía!\033[0m"; sleep 2; return; }
-
-    echo -ne "\033[1;32mDIAS    : \033[1;37m"; read dias
-    [[ -z "$dias" ]] && dias=30
-
-    # Crear usuario con home y shell bash
-    # useradd -m -s /bin/bash: crea home, asigna bash
-    # Dropbear 2016 autentica via /etc/shadow, esto lo genera chpasswd
-    useradd -m -s /bin/bash "$usuario" 2>/dev/null
-    if [[ $? -ne 0 ]]; then
-        echo -e "\033[1;31mError creando usuario!\033[0m"; sleep 2; return
-    fi
-
-    # Establecer contraseña con chpasswd (compatible con Dropbear 2016)
-    # Nota: NO usar 'passwd usuario' en scripts porque requiere TTY interactivo
-    echo "${usuario}:${senha}" | chpasswd 2>/dev/null
-    if [[ $? -ne 0 ]]; then
-        # Fallback: openssl passwd + usermod
-        _hash=$(openssl passwd -6 "$senha" 2>/dev/null || openssl passwd -1 "$senha")
-        usermod -p "$_hash" "$usuario" 2>/dev/null
-    fi
-
-    # Establecer fecha de expiración
-    _exp_date=$(date -d "+${dias} days" +%Y-%m-%d 2>/dev/null || \
-                date -v +${dias}d +%Y-%m-%d 2>/dev/null)
-    [[ -n "$_exp_date" ]] && chage -E "$_exp_date" "$usuario" 2>/dev/null
-
-    # Guardar en registro SSHPlus si existe
-    [[ -d /etc/SSHPlus ]] && echo "$usuario $dias" >> /etc/SSHPlus/usuarios 2>/dev/null
-
-    echo ""
-    echo -e "\033[1;32m✓ Usuario creado exitosamente!\033[0m"
-    echo -e "\033[1;33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
-    echo -e "\033[1;32mUsuario  :\033[1;37m $usuario"
-    echo -e "\033[1;32mExpira   :\033[1;37m ${_exp_date:-en $dias días}"
-    echo -e "\033[1;33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
-    echo -e "\033[1;33m  PUERTOS PARA CONECTAR:\033[0m"
-    [[ -n "$_ssh_p"  ]] && echo -e "\033[1;37m  SSH  → \033[1;32m$_ssh_p"
-    [[ -n "$_db_p"   ]] && echo -e "\033[1;37m  DB   → \033[1;32m$_db_p"
-    [[ -n "$_db16_p" ]] && echo -e "\033[1;37m  DB16 → \033[1;32m$_db16_p"
-    [[ -n "$_py_p"   ]] && echo -e "\033[1;37m  Proxy→ \033[1;32m$_py_p"
-    [[ -n "$_ssl_p"  ]] && echo -e "\033[1;37m  SSL  → \033[1;32m$_ssl_p"
-    echo -e "\033[1;33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
-    echo ""
-}
-
-# ============================================================
-# CREAR USUARIO DE PRUEBA (teste)
-# ============================================================
-criarteste() {
-    clear
-    echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-    echo -e "\033[0;34m┃\E[44;1;37m           CRIAR USUÁRIO TESTE            \E[0m\033[0;34m┃"
-    echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
-    echo ""
-    echo -ne "\033[1;32mUSUÁRIO : \033[1;37m"; read usuario
-    [[ -z "$usuario" ]] && { echo -e "\033[1;31mUsuario vacío!\033[0m"; sleep 2; return; }
-    if id "$usuario" &>/dev/null; then
-        echo -e "\033[1;31mUsuario '$usuario' ya existe!\033[0m"; sleep 2; return
-    fi
-    echo -ne "\033[1;32mSENHA   : \033[1;37m"; read -s senha; echo ""
-    [[ -z "$senha" ]] && senha="$usuario"
-    echo -ne "\033[1;32mDIAS    : \033[1;37m"; read dias
-    [[ -z "$dias" ]] && dias=1
-
-    useradd -m -s /bin/bash "$usuario" 2>/dev/null
-    echo "${usuario}:${senha}" | chpasswd 2>/dev/null || {
-        _hash=$(openssl passwd -6 "$senha" 2>/dev/null || openssl passwd -1 "$senha")
-        usermod -p "$_hash" "$usuario" 2>/dev/null
-    }
-    _exp_date=$(date -d "+${dias} days" +%Y-%m-%d 2>/dev/null)
-    [[ -n "$_exp_date" ]] && chage -E "$_exp_date" "$usuario" 2>/dev/null
-
-    _ssh_p=$(grep '^Port' /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' | xargs)
-    _db16_p=$(systemctl show dropbear-legacy --property=ExecStart 2>/dev/null | grep -oP '(?<=-p )\d+' | head -1)
-    _py_p=$(ss -tlpn 2>/dev/null | grep -E 'python|python3' | awk '{print $4}' | rev | cut -d: -f1 | rev | xargs)
-    _ssl_p=$(ss -tlpn 2>/dev/null | grep 'stunnel' | awk '{print $4}' | rev | cut -d: -f1 | rev | xargs)
-
-    echo ""
-    echo -e "\033[1;32m✓ Usuario TESTE creado!\033[0m"
-    echo -e "\033[1;33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
-    echo -e "\033[1;32mUsuario  :\033[1;37m $usuario"
-    echo -e "\033[1;32mSenha    :\033[1;37m $senha"
-    echo -e "\033[1;32mExpira   :\033[1;37m ${_exp_date:-$dias día(s)}"
-    echo -e "\033[1;33m━━━━━ PUERTOS ━━━━━\033[0m"
-    [[ -n "$_ssh_p"  ]] && echo -e "\033[1;37m  SSH  → \033[1;32m$_ssh_p"
-    [[ -n "$_db16_p" ]] && echo -e "\033[1;37m  DB16 → \033[1;32m$_db16_p"
-    [[ -n "$_py_p"   ]] && echo -e "\033[1;37m  Proxy→ \033[1;32m$_py_p"
-    [[ -n "$_ssl_p"  ]] && echo -e "\033[1;37m  SSL  → \033[1;32m$_ssl_p"
-    echo -e "\033[1;33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
-    echo ""
-}
-# ============================================================
-# SLOWDNS — Lanza el módulo slowdns.sh integrado
-# Repo: juanitoprosniff/scriptsshmsy  (reemplaza khaledagn)
-# ============================================================
-slow_setup() {
-    local _slow_script="/bin/slowdns"
-    local _slow_repo="https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/Slow/slowdns.sh"
-    local _slow_dir="/etc/SSHPlus/Slow"
-
-    # Crear carpetas si no existen
-    [[ ! -d "${_slow_dir}/install" ]] && mkdir -p "${_slow_dir}/install"
-    [[ ! -d "${_slow_dir}/Key"     ]] && mkdir -p "${_slow_dir}/Key"
-
-    # Descargar módulo si no existe o está desactualizado
-    if [[ ! -x "$_slow_script" ]]; then
-        echo -e "\033[1;33mDescargando módulo SlowDNS...\033[0m"
-        wget -q --timeout=20 "$_slow_repo" -O "$_slow_script" 2>/dev/null || \
-        curl -fsSL --max-time 20 "$_slow_repo" -o "$_slow_script" 2>/dev/null
-        chmod 755 "$_slow_script" 2>/dev/null
-    fi
-
-    if [[ -x "$_slow_script" ]]; then
-        bash "$_slow_script"
-    else
-        # Lanzar directamente si el binario dns-server ya existe
-        clear
-        echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-        echo -e "\033[0;34m┃\E[44;1;37m           MSYVPN — SLOWDNS              \E[0m\033[0;34m┃"
-        echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
-        echo -e "\033[1;31mNo se pudo descargar el módulo SlowDNS.\033[0m"
-        echo -e "\033[1;33mVerifique su conexión a internet e intente de nuevo.\033[0m"
-        echo -e "\033[1;37mRepo: \033[1;36m${_slow_repo}\033[0m"
-        sleep 4
-    fi
-}
-
-# ============================================================
-# UDP HYSTERIA — Puertos permitidos: 20000 – 39999
-# ============================================================
-fun_hysteria() {
-    clear
-    echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-    echo -e "\033[0;34m┃\E[44;1;37m         UDP HYSTERIA — MSYVPN           \E[0m\033[0;34m┃"
-    echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
-    echo -e " \033[1;33mRango de puertos permitido: \033[1;32m20000 – 39999\033[0m"
-    echo -e " \033[1;33mArquitectura: \033[1;32m${_ARCH}\033[0m"
-    echo ""
-
-    # Estado actual
-    local _hys_active=0
-    systemctl is-active hysteria-server &>/dev/null && _hys_active=1
-    command -v hysteria &>/dev/null && ps aux | grep -q '[h]ysteria' && _hys_active=1
-
-    if [[ "$_hys_active" = "1" ]]; then
-        local _hys_port
-        _hys_port=$(cat /etc/hysteria/config.yaml 2>/dev/null | grep -oP '(?<=:)\d+' | head -1)
-        echo -e " \033[1;32m⬤ HYSTERIA ACTIVO — Puerto: ${_hys_port:-?}\033[0m"
-        echo ""
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m1\033[1;31m] \033[1;33mVer información/estado          \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m2\033[1;31m] \033[1;33mCambiar puerto                  \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m3\033[1;31m] \033[1;33mReiniciar                       \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m4\033[1;31m] \033[1;33mDetener                         \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m5\033[1;31m] \033[1;33mDesinstalar                     \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m0\033[1;31m] \033[1;33mVolver                          \033[0;34m┃"
-        echo -ne "\033[1;32mOpción: \033[1;37m"; read _hopt
-        case "$_hopt" in
-        1)
-            clear
-            echo -e "\033[1;33mEstado Hysteria:\033[0m"
-            systemctl status hysteria-server 2>/dev/null || \
-            journalctl -u hysteria-server --no-pager -n 20 2>/dev/null
-            echo -ne "\n\033[1;33mENTER para volver...\033[0m"; read
-            fun_hysteria ;;
-        2)
-            echo -ne "\n\033[1;32mNuevo puerto (20000-39999): \033[1;37m"; read _nhp
-            if [[ "$_nhp" -lt 20000 ]] || [[ "$_nhp" -gt 39999 ]] 2>/dev/null; then
-                echo -e "\033[1;31m¡Puerto fuera del rango 20000-39999!\033[0m"; sleep 2; fun_hysteria; return
-            fi
-            verif_ptrs "$_nhp"
-            sed -i "s|listen:.*|listen: :${_nhp}|g" /etc/hysteria/config.yaml 2>/dev/null
-            _fw_open "$_nhp" udp
-            systemctl restart hysteria-server 2>/dev/null
-            echo -e "\033[1;32m✓ Puerto cambiado a $_nhp\033[0m"; sleep 2; fun_hysteria ;;
-        3) systemctl restart hysteria-server 2>/dev/null
-           echo -e "\033[1;32m✓ Hysteria reiniciado\033[0m"; sleep 2; fun_hysteria ;;
-        4) systemctl stop hysteria-server 2>/dev/null
-           echo -e "\033[1;32m✓ Hysteria detenido\033[0m"; sleep 2; fun_conexao ;;
-        5)
-            echo -ne "\033[1;31m¿Desinstalar Hysteria? [s/N]: \033[1;37m"; read _conf
-            [[ "$_conf" = "s" || "$_conf" = "S" ]] && {
-                systemctl stop hysteria-server 2>/dev/null
-                systemctl disable hysteria-server 2>/dev/null
-                rm -f /usr/local/bin/hysteria /etc/systemd/system/hysteria-server.service
-                rm -rf /etc/hysteria
-                systemctl daemon-reload 2>/dev/null
-                echo -e "\033[1;32m✓ Hysteria desinstalado\033[0m"
-            }
-            sleep 2; fun_conexao ;;
-        0) fun_conexao ;;
-        esac
-        return
-    fi
-
-    # ── INSTALACIÓN ───────────────────────────────────────────
-    echo -e "\033[1;33mHysteria no está instalado.\033[0m"
-    echo -e "\033[0;34m┃\033[1;31m[\033[1;36m1\033[1;31m] \033[1;33mInstalar Hysteria UDP            \033[0;34m┃"
-    echo -e "\033[0;34m┃\033[1;31m[\033[1;36m0\033[1;31m] \033[1;33mVolver                           \033[0;34m┃"
-    echo -ne "\033[1;32mOpción: \033[1;37m"; read _hopt
-    [[ "$_hopt" != "1" ]] && { fun_conexao; return; }
-
-    # Puerto (rango 20000-39999)
-    local _hys_port=36712
-    echo -ne "\n\033[1;32mPuerto Hysteria (20000-39999, defecto 36712): \033[1;37m"; read _inp
-    [[ -n "$_inp" ]] && _hys_port="$_inp"
-    if [[ "$_hys_port" -lt 20000 ]] || [[ "$_hys_port" -gt 39999 ]] 2>/dev/null; then
-        echo -e "\033[1;31m¡Puerto fuera del rango 20000-39999! Usando 36712.\033[0m"
-        _hys_port=36712
-    fi
-    verif_ptrs "$_hys_port"
-
-    echo -e "\n\033[1;33mDescargando Hysteria ($_ARCH)...\033[0m"
-
-    # URL según arquitectura
-    local _hys_url
-    case "$_ARCH" in
-        amd64) _hys_url="https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64" ;;
-        arm64) _hys_url="https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-arm64" ;;
-        arm)   _hys_url="https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-arm" ;;
-        *)     _hys_url="https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64" ;;
-    esac
-
-    wget -q --timeout=60 "$_hys_url" -O /usr/local/bin/hysteria 2>/dev/null || \
-    curl -fsSL --max-time 60 "$_hys_url" -o /usr/local/bin/hysteria 2>/dev/null
-
-    if [[ ! -s /usr/local/bin/hysteria ]]; then
-        echo -e "\033[1;31mError al descargar Hysteria.\033[0m"; sleep 3; fun_conexao; return
-    fi
-    chmod +x /usr/local/bin/hysteria
-
-    mkdir -p /etc/hysteria
-
-    # Generar certificado
-    echo -e "\033[1;33mGenerando certificado...\033[0m"
-    openssl req -new -newkey rsa:2048 -days 3650 -nodes -x509 \
-        -subj "/C=CO/ST=Colombia/O=MSYVPN/CN=msyvpn.local" \
-        -keyout /etc/hysteria/server.key \
-        -out    /etc/hysteria/server.crt >/dev/null 2>&1
-
-    # Configuración Hysteria v2
-    cat > /etc/hysteria/config.yaml <<EOF
-listen: :${_hys_port}
-
-tls:
-  cert: /etc/hysteria/server.crt
-  key:  /etc/hysteria/server.key
-
-auth:
-  type: disabled
-
-masquerade:
-  type: proxy
-  proxy:
-    url: https://news.ycombinator.com/
-    rewriteHost: true
-EOF
-
-    # Servicio systemd
-    cat > /etc/systemd/system/hysteria-server.service <<EOF
-[Unit]
-Description=Hysteria UDP Server — MSYVPN-SCRIPT
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/hysteria server --config /etc/hysteria/config.yaml
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    systemctl daemon-reload
-    systemctl enable hysteria-server 2>/dev/null
-    systemctl start hysteria-server 2>/dev/null
-
-    _fw_open "$_hys_port" udp
-    iptables -I INPUT -p udp --dport "$_hys_port" -j ACCEPT 2>/dev/null
-
-    sleep 2
-    echo ""
-    if systemctl is-active hysteria-server &>/dev/null; then
-        echo -e "\033[1;32m✓ HYSTERIA UDP ACTIVO!\033[0m"
-        echo -e "\033[1;37m  Puerto  : \033[1;32m${_hys_port} (rango 20000-39999)"
-        echo -e "\033[1;37m  Arch    : \033[1;32m${_ARCH}\033[0m"
-    else
-        echo -e "\033[1;31mHysteria no inició. Verifique: systemctl status hysteria-server\033[0m"
-    fi
-    sleep 3; fun_conexao
-}
-
-# ============================================================
-# UDP ZIVPN — Puertos permitidos: 1 – 19999
-# Detección automática ARM / ARM64 / AMD64
-# ============================================================
-fun_zivpn() {
-    clear
-    echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-    echo -e "\033[0;34m┃\E[44;1;37m         UDP ZIVPN — MSYVPN              \E[0m\033[0;34m┃"
-    echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
-    echo -e " \033[1;33mRango de puertos permitido: \033[1;32m1 – 19999\033[0m"
-    echo -e " \033[1;33mArquitectura: \033[1;32m${_ARCH}\033[0m"
-    echo ""
-
-    # Estado actual
-    local _ziv_active=0
-    systemctl is-active zivpn &>/dev/null && _ziv_active=1
-
-    if [[ "$_ziv_active" = "1" ]]; then
-        local _ziv_port
-        _ziv_port=$(cat /etc/zivpn/config.json 2>/dev/null | grep -oP '"port"\s*:\s*\K\d+' | head -1)
-        echo -e " \033[1;32m⬤ ZIVPN ACTIVO — Puerto UDP: ${_ziv_port:-?}\033[0m"
-        echo ""
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m1\033[1;31m] \033[1;33mVer información/estado          \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m2\033[1;31m] \033[1;33mCambiar puerto                  \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m3\033[1;31m] \033[1;33mReiniciar                       \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m4\033[1;31m] \033[1;33mDetener                         \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m5\033[1;31m] \033[1;33mDesinstalar                     \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m0\033[1;31m] \033[1;33mVolver                          \033[0;34m┃"
-        echo -ne "\033[1;32mOpción: \033[1;37m"; read _zopt
-        case "$_zopt" in
-        1)
-            clear
-            echo -e "\033[1;33mEstado ZiVPN:\033[0m"
-            systemctl status zivpn 2>/dev/null
-            echo -ne "\n\033[1;33mENTER para volver...\033[0m"; read
-            fun_zivpn ;;
-        2)
-            echo -ne "\n\033[1;32mNuevo puerto UDP (1-19999): \033[1;37m"; read _nzp
-            if [[ "$_nzp" -lt 1 ]] || [[ "$_nzp" -gt 19999 ]] 2>/dev/null; then
-                echo -e "\033[1;31m¡Puerto fuera del rango 1-19999!\033[0m"; sleep 2; fun_zivpn; return
-            fi
-            verif_ptrs "$_nzp"
-            # Actualizar config.json
-            if [[ -f /etc/zivpn/config.json ]]; then
-                sed -i "s/\"port\"\s*:\s*[0-9]*/\"port\": ${_nzp}/" /etc/zivpn/config.json
-            fi
-            _fw_open "$_nzp" udp
-            iptables -I INPUT -p udp --dport "$_nzp" -j ACCEPT 2>/dev/null
-            systemctl restart zivpn 2>/dev/null
-            echo -e "\033[1;32m✓ Puerto cambiado a $_nzp\033[0m"; sleep 2; fun_zivpn ;;
-        3) systemctl restart zivpn 2>/dev/null
-           echo -e "\033[1;32m✓ ZiVPN reiniciado\033[0m"; sleep 2; fun_zivpn ;;
-        4) systemctl stop zivpn 2>/dev/null
-           echo -e "\033[1;32m✓ ZiVPN detenido\033[0m"; sleep 2; fun_conexao ;;
-        5)
-            echo -ne "\033[1;31m¿Desinstalar ZiVPN? [s/N]: \033[1;37m"; read _conf
-            [[ "$_conf" = "s" || "$_conf" = "S" ]] && {
-                systemctl stop zivpn 2>/dev/null
-                systemctl disable zivpn 2>/dev/null
-                rm -f /usr/local/bin/zivpn /etc/systemd/system/zivpn.service
-                rm -rf /etc/zivpn
-                systemctl daemon-reload 2>/dev/null
-                echo -e "\033[1;32m✓ ZiVPN desinstalado\033[0m"
-            }
-            sleep 2; fun_conexao ;;
-        0) fun_conexao ;;
-        esac
-        return
-    fi
-
-    # ── INSTALACIÓN ───────────────────────────────────────────
-    echo -e "\033[1;33mZiVPN no está instalado.\033[0m"
-    echo -e "\033[0;34m┃\033[1;31m[\033[1;36m1\033[1;31m] \033[1;33mInstalar ZiVPN UDP               \033[0;34m┃"
-    echo -e "\033[0;34m┃\033[1;31m[\033[1;36m0\033[1;31m] \033[1;33mVolver                           \033[0;34m┃"
-    echo -ne "\033[1;32mOpción: \033[1;37m"; read _zopt
-    [[ "$_zopt" != "1" ]] && { fun_conexao; return; }
-
-    # Puerto (rango 1-19999)
-    local _ziv_port=7300
-    echo -ne "\n\033[1;32mPuerto UDP ZiVPN (1-19999, defecto 7300): \033[1;37m"; read _inp
-    [[ -n "$_inp" ]] && _ziv_port="$_inp"
-    if [[ "$_ziv_port" -lt 1 ]] || [[ "$_ziv_port" -gt 19999 ]] 2>/dev/null; then
-        echo -e "\033[1;31m¡Puerto fuera del rango 1-19999! Usando 7300.\033[0m"
-        _ziv_port=7300
-    fi
-    verif_ptrs "$_ziv_port"
-
-    echo -e "\n\033[1;33mDescargando ZiVPN ($_ARCH)...\033[0m"
-
-    # URL según arquitectura (releases de zahidbd2/udp-zivpn)
-    local _ziv_url
-    case "$_ARCH" in
-        amd64) _ziv_url="https://github.com/zahidbd2/udp-zivpn/releases/download/udp-zivpn_1.4.9/udp-zivpn-linux-amd64" ;;
-        arm64) _ziv_url="https://github.com/zahidbd2/udp-zivpn/releases/download/udp-zivpn_1.4.9/udp-zivpn-linux-arm64" ;;
-        arm)   _ziv_url="https://github.com/zahidbd2/udp-zivpn/releases/download/udp-zivpn_1.4.9/udp-zivpn-linux-arm"   ;;
-        *)     _ziv_url="https://github.com/zahidbd2/udp-zivpn/releases/download/udp-zivpn_1.4.9/udp-zivpn-linux-amd64" ;;
-    esac
-
-    wget -q --timeout=60 "$_ziv_url" -O /usr/local/bin/zivpn 2>/dev/null || \
-    curl -fsSL --max-time 60 "$_ziv_url" -o /usr/local/bin/zivpn 2>/dev/null
-
-    if [[ ! -s /usr/local/bin/zivpn ]]; then
-        echo -e "\033[1;31mError al descargar ZiVPN.\033[0m"; sleep 3; fun_conexao; return
-    fi
-    chmod +x /usr/local/bin/zivpn
-
-    mkdir -p /etc/zivpn
-
-    # Descargar config.json oficial
-    wget -q --timeout=15 \
-        "https://raw.githubusercontent.com/zahidbd2/udp-zivpn/main/config.json" \
-        -O /etc/zivpn/config.json 2>/dev/null || \
-    cat > /etc/zivpn/config.json <<EOF
-{
-  "port": ${_ziv_port},
-  "password": "",
-  "obfs": "",
-  "obfs-param": "",
-  "disable-mtu-discovery": false,
-  "tls": {
-    "cert": "/etc/zivpn/zivpn.crt",
-    "key":  "/etc/zivpn/zivpn.key"
-  }
-}
-EOF
-
-    # Actualizar puerto en config
-    sed -i "s/\"port\"\s*:\s*[0-9]*/\"port\": ${_ziv_port}/" /etc/zivpn/config.json 2>/dev/null
-
-    # Generar certificado
-    echo -e "\033[1;33mGenerando certificado...\033[0m"
-    openssl req -new -newkey rsa:4096 -days 365 -nodes -x509 \
-        -subj "/C=CO/ST=Colombia/O=MSYVPN/CN=zivpn" \
-        -keyout /etc/zivpn/zivpn.key \
-        -out    /etc/zivpn/zivpn.crt >/dev/null 2>&1
-
-    # Actualizar rutas en config
-    sed -i 's|"cert".*|"cert": "/etc/zivpn/zivpn.crt",|' /etc/zivpn/config.json 2>/dev/null
-    sed -i 's|"key".*|"key":  "/etc/zivpn/zivpn.key"|'   /etc/zivpn/config.json 2>/dev/null
-
-    # Optimización de red (recomendada por ZiVPN)
-    sysctl -w net.core.rmem_max=16777216 >/dev/null 2>&1
-    echo "net.core.rmem_max=16777216" >> /etc/sysctl.conf 2>/dev/null
-
-    # Servicio systemd
-    cat > /etc/systemd/system/zivpn.service <<EOF
-[Unit]
-Description=ZiVPN UDP Server — MSYVPN-SCRIPT
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/zivpn /etc/zivpn/config.json
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    systemctl daemon-reload
-    systemctl enable zivpn 2>/dev/null
-    systemctl start zivpn 2>/dev/null
-
-    _fw_open "$_ziv_port" udp
-    iptables -I INPUT -p udp --dport "$_ziv_port" -j ACCEPT 2>/dev/null
-
-    sleep 2
-    echo ""
-    if systemctl is-active zivpn &>/dev/null; then
-        echo -e "\033[1;32m✓ UDP ZIVPN ACTIVO!\033[0m"
-        echo -e "\033[1;37m  Puerto UDP : \033[1;32m${_ziv_port} (rango 1-19999)"
-        echo -e "\033[1;37m  Arch       : \033[1;32m${_ARCH}\033[0m"
-        echo -e "\033[1;37m  Config     : \033[1;32m/etc/zivpn/config.json\033[0m"
-    else
-        echo -e "\033[1;31mZiVPN no inició. Verifique: systemctl status zivpn\033[0m"
-    fi
-    sleep 3; fun_conexao
-}
-
-# ============================================================
 x="ok"; clear
 fun_conexao() {
     while true; do
@@ -1581,8 +774,11 @@ fun_conexao() {
         echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
         echo -e "\033[0;34m┃\E[44;1;37m          MSYVPN-SCRIPT — CONEXIÓN       \E[0m\033[0;34m┃"
         echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
+
+        # ── Mostrar puertos activos ───────────────────────────
         _ssh_ports=$(grep '^Port' /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' | xargs)
         echo -e "\033[1;32mOPENSSH\033[1;31m: \033[1;37m${_ssh_ports:-22}   \033[1;33mARCH: \033[1;32m${_ARCH}\033[0m"
+
         _db16_on=0
         screen -list 2>/dev/null | grep -q 'dropbear2016' && _db16_on=1
         systemctl is-active dropbear-legacy >/dev/null 2>&1 && _db16_on=1
@@ -1591,30 +787,23 @@ fun_conexao() {
             [[ -z "$_db16_port" ]] && _db16_port=$(screen -list 2>/dev/null | grep 'dropbear2016' | grep -oP '\d+(?=\.dropbear2016)' | head -1)
             [[ -n "$_db16_port" ]] && echo -e "\033[1;32mDROPBEAR 2016\033[1;31m: \033[1;37m$_db16_port"
         }
+
         _py_active=$(ss -tlpn 2>/dev/null | grep -E 'python|python3' | awk '{print $4}' | rev | cut -d: -f1 | rev | xargs)
-        [[ -n "$_py_active" ]]  && { sts4="\033[1;32m✓ "; echo -e "\033[1;32mPROXY SOCKS\033[1;31m: \033[1;37m$_py_active"; } || sts4="\033[1;31m✕ "
-        [[ -e "/etc/stunnel/stunnel.conf" ]] && { sts3="\033[1;32m✓ "; echo -e "\033[1;32mSSL\033[1;31m: \033[1;37m$(get_ports_by_process 'stunnel')"; } || sts3="\033[1;31m✕ "
-        # SlowDNS — detectar via systemd o screen
-        { systemctl is-active slowdns &>/dev/null || ps x | grep 'dns-server' | grep -v grep >/dev/null 2>&1; } && sts9="\033[1;32m✓ " || sts9="\033[1;31m✕ "
-        ss -tlpn 2>/dev/null | grep -q 'v2ray'   && xv2ray="\033[1;32m✓ "   || xv2ray="\033[1;31m✕ "
-        ss -tlpn 2>/dev/null | grep -q 'trojan'  && trojansts="\033[1;32m✓ " || trojansts="\033[1;31m✕ "
-        # Hysteria — rango puertos 20000-39999
-        systemctl is-active hysteria-server &>/dev/null && hysterasts="\033[1;32m✓ " || hysterasts="\033[1;31m✕ "
-        # ZiVPN — rango puertos 1-19999
-        systemctl is-active zivpn &>/dev/null && zivsts="\033[1;32m✓ " || zivsts="\033[1;31m✕ "
+        [[ -n "$_py_active" ]] && echo -e "\033[1;32mPROXY SOCKS\033[1;31m: \033[1;37m$_py_active"
+
+        [[ -e "/etc/stunnel/stunnel.conf" ]] && echo -e "\033[1;32mSSL\033[1;31m: \033[1;37m$(get_ports_by_process 'stunnel')"
+
+        # ── Status para el menú ───────────────────────────────
+        [[ -n "$_py_active" ]] && sts4="\033[1;32m✓ " || sts4="\033[1;31m✕ "
+        [[ -e "/etc/stunnel/stunnel.conf" ]] && sts3="\033[1;32m✓ " || sts3="\033[1;31m✕ "
         [[ "$_db16_on" != '0' ]] && db16sts="\033[1;32m✓ " || db16sts="\033[1;31m✕ "
 
         echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m01\033[1;31m] \033[1;33mOPENSSH                              \033[0;34m┃"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m02\033[1;31m] \033[1;33mPROXY SOCKS $sts4                    \033[0;34m┃"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m03\033[1;31m] \033[1;33mSSL TUNNEL $sts3                     \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m04\033[1;31m] \033[1;33mSLOWDNS $sts9                        \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m05\033[1;31m] \033[1;33mV2RAY $xv2ray                          \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m06\033[1;31m] \033[1;33mTROJAN-GO $trojansts                   \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m07\033[1;31m] \033[1;33mDROPBEAR 2016 $db16sts                 \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m08\033[1;31m] \033[1;33mUDP HYSTERIA $hysterasts [20000-39999] \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m10\033[1;31m] \033[1;33mUDP ZIVPN $zivsts [1-19999]            \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m09\033[1;31m] \033[1;33mVOLVER \033[1;32m<<<                          \033[0;34m┃"
+        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m04\033[1;31m] \033[1;33mDROPBEAR 2016 $db16sts                \033[0;34m┃"
+        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m05\033[1;31m] \033[1;33mVOLVER \033[1;32m<<<                          \033[0;34m┃"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m00\033[1;31m] \033[1;33mSALIR \033[1;32m<<<                            \033[0;34m┃"
         echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
         tput civis
@@ -1624,13 +813,8 @@ fun_conexao() {
         1|01)  tput reset; fun_openssh ;;
         2|02)  tput reset; fun_socks ;;
         3|03)  tput reset; inst_ssl ;;
-        4|04)  tput reset; slow_setup ;;
-        5|05)  tput reset; v2raymanager; exit ;;
-        6|06)  tput reset; trojan-go ;;
-        7|07)  tput reset; fun_inst_dropbear2016 ;;
-        8|08)  tput reset; fun_hysteria ;;
-        10)    tput reset; fun_zivpn ;;
-        9|09)  tput reset; menu ;;
+        4|04)  tput reset; fun_inst_dropbear2016 ;;
+        5|05)  tput reset; menu ;;
         0|00)  tput reset; echo -e "\033[1;31mSaliendo...\033[0m"; sleep 1; exit ;;
         *)     echo -e "\033[1;31mOpción inválida!\033[0m"; sleep 1 ;;
         esac
