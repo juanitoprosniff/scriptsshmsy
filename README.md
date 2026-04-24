@@ -12,11 +12,13 @@ bash <(wget -qO- https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/
 ```
 
 # MSY SCRIPT 
-COMPATIBLE CON 
-UBUNTU 18☑️
-Ubuntu 20☑️ 
-Ubuntu 22✅ 
-Ubuntu 24✅ 
-Ubuntu 25☑️ 
-Ubuntu 26✅ Only ADM
-arquitecturas AMD✅ y ARM☑️
+## :heavy_exclamation_mark: Compatibilidad Actual
+
+* Sistema operativo basado en Linux (Ubuntu Server!)
+* **Ubuntu 18.04 AMD y ARM** ☑️no test
+* **Ubuntu 20.04 AMD y ARM** ✅
+* **Ubuntu 22.04 AMD y ARM** ✅(Recomendado)
+* **Ubuntu 24.04 AMD y ARM** ✅(Recomendado)
+* **Ubuntu 25.XX AMD y ARM** ✅
+* **Ubuntu 26.XX AMD** ☑️
+* Se recomienda usar una distribución nueva o formateada
