@@ -13,10 +13,10 @@ bash <(wget -qO- https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/
 
 # MSY SCRIPT 
 COMPATIBLE CON 
-UBUNTU 18⚠️
+UBUNTU 18☑️
 Ubuntu 20☑️ 
 Ubuntu 22✅ 
 Ubuntu 24✅ 
 Ubuntu 25☑️ 
-Ubuntu 26⚠️
+Ubuntu 26✅ Only ADM
 arquitecturas AMD✅ y ARM☑️
