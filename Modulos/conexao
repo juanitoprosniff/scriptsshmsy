@@ -1,6 +1,7 @@
 #!/bin/bash
 # ============================================================
-# MSY VPN SCRIPT — MÓDULO: MODO DE CONEXIÓN v3.0
+# MÓDULO: MODO DE CONEXIÓN — MSYVPN-SCRIPT v3.0
+# Nombre: MSYVPN-SCRIPT (carpetas internas: /etc/SSHPlus/)
 # Compatible: Ubuntu 18 / 20 / 22 / 24 / 25 / 26+
 # Detección automática: ARM / ARM64 / AMD64
 # PROTOCOLOS:
@@ -8,8 +9,6 @@
 #  - Dropbear 2016.74 (compilado desde fuente)
 #  - Proxy WebSocket (wsproxy.py)
 #  - SSL Tunnel (stunnel4 + dispatcher inteligente)
-#  - BAD VPN (udpvpn)
-#  - Hysteria UDP Manager
 # ============================================================
 
 _UBUNTU_VER=$(lsb_release -rs 2>/dev/null | cut -d. -f1 || grep -oP '(?<=Ubuntu )\d+' /etc/issue.net 2>/dev/null || echo "0")
@@ -357,72 +356,117 @@ inst_ssl() {
             cat >> /etc/stunnel/stunnel.conf <<EOF
 
 [sshtunnel${porta}]
-accept  = ${porta}
+accept  = $porta
 connect = 127.0.0.1:${_SSL_DISP_PORT}
 EOF
             systemctl restart stunnel4 2>/dev/null || service stunnel4 restart 2>/dev/null
             _fw_open $porta
-            echo -e "\n\033[1;32mPUERTO SSL $porta AGREGADO!\033[0m"; sleep 2; inst_ssl
-        elif [[ "$resposta" = '2' ]]; then
-            echo -ne "\033[1;32mPUERTO SSL A ELIMINAR: \033[1;37m"; read porta
+            iptables -I INPUT -p tcp --dport $porta -j ACCEPT 2>/dev/null
+            echo -e "\n\033[1;32mPUERTO $porta AGREGADO → dispatcher:$_SSL_DISP_PORT\033[0m"
+            sleep 2; inst_ssl; return
+        fi
+
+        if [[ "$resposta" = '2' ]]; then
+            echo -ne "\033[1;32mPUERTO A ELIMINAR: \033[1;37m"; read porta
             [[ -z "$porta" ]] && { inst_ssl; return; }
-            python3 - <<PYEOF 2>/dev/null
-import re
-with open('/etc/stunnel/stunnel.conf','r') as f: c=f.read()
-c=re.sub(r'\[sshtunnel${porta}\][^\[]*','',c)
-with open('/etc/stunnel/stunnel.conf','w') as f: f.write(c)
-PYEOF
+            sed -i "/\[sshtunnel${porta}\]/,/^$/d" /etc/stunnel/stunnel.conf 2>/dev/null
+            sed -i "/accept  = ${porta}/d"          /etc/stunnel/stunnel.conf 2>/dev/null
             systemctl restart stunnel4 2>/dev/null || service stunnel4 restart 2>/dev/null
-            echo -e "\n\033[1;32mPUERTO SSL $porta ELIMINADO!\033[0m"; sleep 2; inst_ssl
-        elif [[ "$resposta" = '3' ]]; then
-            _ssl_disp_get_targets
-            echo -e "\n\033[1;33mSSH backend actual: \033[1;37m$_DISP_SSH"
-            echo -ne "\033[1;32mNuevo puerto SSH backend (ej: 22 o 143): \033[1;37m"; read _new_ssh
-            [[ -z "$_new_ssh" ]] && { inst_ssl; return; }
-            echo -e "\n\033[1;33mWS backend actual: \033[1;37m$_DISP_WS"
-            echo -ne "\033[1;32mNuevo puerto WS backend: \033[1;37m"; read _new_ws
-            [[ -z "$_new_ws" ]] && { inst_ssl; return; }
-            _ssl_start_dispatcher "127.0.0.1:${_new_ssh}" "127.0.0.1:${_new_ws}"
+            echo -e "\n\033[1;32mPUERTO $porta ELIMINADO!\033[0m"; sleep 2; inst_ssl; return
+        fi
+
+        if [[ "$resposta" = '3' ]]; then
+            echo -e "\033[1;33mDestino SSH actual : \033[1;37m$_DISP_SSH"
+            echo -e "\033[1;33mDestino WS  actual : \033[1;37m$_DISP_WS\033[0m\n"
+
+            echo -e "\033[1;31m[\033[1;36m1\033[1;31m] \033[1;33mSSH → OpenSSH (22)"
+            echo -e "\033[1;31m[\033[1;36m2\033[1;31m] \033[1;33mSSH → Dropbear 2016 (143)"
+            echo -e "\033[1;31m[\033[1;36m3\033[1;31m] \033[1;33mSSH → Puerto personalizado"
+            echo -ne "\033[1;32mDestino SSH: \033[1;37m"; read _ssh_sel
+            case "$_ssh_sel" in
+            1) _new_ssh="127.0.0.1:22"  ;;
+            2) _new_ssh="127.0.0.1:143" ;;
+            3) echo -ne "\033[1;32mPuerto SSH: \033[1;37m"; read _sp
+               _new_ssh="127.0.0.1:${_sp:-22}" ;;
+            *) _new_ssh="$_DISP_SSH" ;;
+            esac
+
+            local _auto_ws
+            _auto_ws=$(ss -tlpn 2>/dev/null | grep -E 'python|python3' | \
+                       grep -v ":${_SSL_DISP_PORT} " | \
+                       awk '{print $4}' | rev | cut -d: -f1 | rev | head -1)
+            echo -e "\n\033[1;33mProxy WS detectado: \033[1;37m${_auto_ws:-ninguno}\033[0m"
+            echo -e "\033[1;31m[\033[1;36m1\033[1;31m] \033[1;33mWS → puerto 80"
+            echo -e "\033[1;31m[\033[1;36m2\033[1;31m] \033[1;33mWS → puerto 8080"
+            echo -e "\033[1;31m[\033[1;36m3\033[1;31m] \033[1;33mWS → detectado automáticamente (${_auto_ws:-80})"
+            echo -e "\033[1;31m[\033[1;36m4\033[1;31m] \033[1;33mWS → puerto personalizado"
+            echo -ne "\033[1;32mDestino WS: \033[1;37m"; read _ws_sel
+            case "$_ws_sel" in
+            1) _new_ws="127.0.0.1:80"   ;;
+            2) _new_ws="127.0.0.1:8080" ;;
+            3) _new_ws="127.0.0.1:${_auto_ws:-80}" ;;
+            4) echo -ne "\033[1;32mPuerto WS: \033[1;37m"; read _wp
+               _new_ws="127.0.0.1:${_wp:-80}" ;;
+            *) _new_ws="$_DISP_WS" ;;
+            esac
+
             sed -i '/ssldispatcher.py/d' /etc/autostart 2>/dev/null
-            echo "ss -tlpn | grep -qw ${_SSL_DISP_PORT} || screen -dmS ssldispatch python3 ${_SSL_DISP_SCRIPT} ${_SSL_DISP_PORT} 127.0.0.1:${_new_ssh} 127.0.0.1:${_new_ws}" >> /etc/autostart
-            echo -e "\n\033[1;32mBACKEND ACTUALIZADO!\033[0m"; sleep 2; inst_ssl
-        elif [[ "$resposta" = '4' ]]; then
-            _ssl_disp_get_targets
+            echo "ss -tlpn | grep -qw ${_SSL_DISP_PORT} || screen -dmS ssldispatch python3 ${_SSL_DISP_SCRIPT} ${_SSL_DISP_PORT} ${_new_ssh} ${_new_ws}" >> /etc/autostart
+
+            _ssl_start_dispatcher "$_new_ssh" "$_new_ws"
+            echo -e "\n\033[1;32mBackends actualizados!\033[0m"; sleep 2; inst_ssl; return
+        fi
+
+        if [[ "$resposta" = '4' ]]; then
             _ssl_start_dispatcher "$_DISP_SSH" "$_DISP_WS"
-            echo -e "\n\033[1;32mDISPATCHER REINICIADO!\033[0m"; sleep 2; inst_ssl
-        elif [[ "$resposta" = '5' ]]; then
-            systemctl stop stunnel4 2>/dev/null; service stunnel4 stop 2>/dev/null
-            systemctl disable stunnel4 2>/dev/null
+            sleep 2; inst_ssl; return
+        fi
+
+        if [[ "$resposta" = '5' ]]; then
+            pkill stunnel4 2>/dev/null; systemctl stop stunnel4 2>/dev/null
+            apt-get remove --purge stunnel4 -y >/dev/null 2>&1
+            rm -f /etc/stunnel/stunnel.conf /etc/stunnel/stunnel.pem \
+                  /etc/stunnel/stunnel.key  /etc/stunnel/stunnel.crt
             for pid in $(screen -ls 2>/dev/null | grep '\.ssldispatch' | awk '{print $1}'); do
                 screen -r -S "$pid" -X quit 2>/dev/null
             done
             pkill -f "ssldispatcher.py" 2>/dev/null
             sed -i '/ssldispatcher.py/d' /etc/autostart 2>/dev/null
-            echo -e "\n\033[1;32mSSL TUNNEL ELIMINADO!\033[0m"; sleep 2; fun_conexao
-        else
-            fun_conexao
+            echo -e "\n\033[1;32mSSL TUNNEL Y DISPATCHER ELIMINADOS!\033[0m"
+            sleep 2; fun_conexao; return
         fi
-        return
+
+        fun_conexao; return
     fi
 
-    # ── Instalación nueva ─────────────────────────────────────
+    # ── INSTALACIÓN INICIAL ───────────────────────────────────
     clear
     echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-    echo -e "\033[0;34m┃\E[44;1;37m         INSTALAR SSL TUNNEL             \E[0m\033[0;34m┃"
+    echo -e "\033[0;34m┃\E[44;1;37m           INSTALAR SSL TUNNEL           \E[0m\033[0;34m┃"
     echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
     echo ""
-    echo -e "\033[1;33mSSL Tunnel cifrará el tráfico SSH + WebSocket en los puertos 443/444/8443."
-    echo -e "Se usa un dispatcher inteligente que detecta si la conexión entrante"
-    echo -e "es SSH raw o HTTP/WebSocket y la enruta al backend correcto.\033[0m\n"
+    echo -e "\033[1;33mModo: SSL DIRECTO + SSL WEBSOCKET simultáneos\033[0m"
+    echo -e "\033[1;37mEl dispatcher detecta el protocolo automáticamente.\033[0m\n"
 
-    echo -ne "\033[1;32mPuerto backend SSH (ej: 22): \033[1;37m"; read _ssh_dst
-    [[ -z "$_ssh_dst" ]] && _ssh_dst=22
-    _ssh_dst="127.0.0.1:${_ssh_dst}"
+    echo -e "\033[1;33mPaso 1 — Destino SSH (sin WebSocket):\033[0m"
+    echo -e "\033[1;31m[\033[1;36m1\033[1;31m] \033[1;33mOpenSSH puerto 22"
+    echo -e "\033[1;31m[\033[1;36m2\033[1;31m] \033[1;33mDropbear 2016 puerto 143"
+    echo -e "\033[1;31m[\033[1;36m3\033[1;31m] \033[1;33mPuerto personalizado"
+    echo -ne "\033[1;32mOpción: \033[1;37m"; read _ssh_sel
+    case "$_ssh_sel" in
+    1) _ssh_dst="127.0.0.1:22"  ;;
+    2) _ssh_dst="127.0.0.1:143" ;;
+    3) echo -ne "\033[1;32mPuerto SSH destino: \033[1;37m"; read _sp
+       _ssh_dst="127.0.0.1:${_sp:-22}" ;;
+    *) _ssh_dst="127.0.0.1:143" ;;
+    esac
 
+    local _ws_auto
     _ws_auto=$(ss -tlpn 2>/dev/null | grep -E 'python|python3' | \
-        awk '{print $4}' | rev | cut -d: -f1 | rev | head -1)
-    [[ -z "$_ws_auto" ]] && _ws_auto="80"
-    echo -e "\n\033[1;33mPuerto WebSocket backend:\033[0m"
+               awk '{print $4}' | rev | cut -d: -f1 | rev | head -1)
+    [[ -z "$_ws_auto" ]] && _ws_auto=80
+
+    echo -e "\n\033[1;33mPaso 2 — Destino WebSocket (wsproxy):\033[0m"
     echo -e "\033[1;37mDetectado automáticamente: \033[1;32m$_ws_auto\033[0m"
     echo -e "\033[1;31m[\033[1;36m1\033[1;31m] \033[1;33mUsar el detectado ($_ws_auto)"
     echo -e "\033[1;31m[\033[1;36m2\033[1;31m] \033[1;33mPuerto personalizado"
@@ -464,6 +508,9 @@ client = no
 socket = a:SO_REUSEADDR=1
 socket = l:TCP_NODELAY=1
 socket = r:TCP_NODELAY=1
+
+# Stunnel descifra SSL y pasa tráfico en crudo al dispatcher.
+# El dispatcher detecta SSH vs HTTP/WS y enruta al backend correcto.
 
 [sshtunnel443]
 accept  = 443
@@ -718,113 +765,19 @@ reiniciar_proxy_socks() {
 }
 
 # ============================================================
-# BAD VPN (UDP VPN)
-# ============================================================
-fun_badvpn() {
-    while true; do
-    clear
-    stsu=$(ps x | grep "udpvpn" | grep -v grep >/dev/null && echo -e "\033[1;32m✓ ACTIVO" || echo -e "\033[1;31m✕ INACTIVO")
-    _udp_port=$(ss -ulpn 2>/dev/null | grep 'udpvpn\|badvpn' | awk '{print $4}' | rev | cut -d: -f1 | rev | xargs)
-    echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-    echo -e "\033[0;34m┃\E[44;1;37m              BAD VPN (UDP)              \E[0m\033[0;34m┃"
-    echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
-    echo -e "\033[0;34m╼ \033[1;32mESTADO   \033[1;37m: $stsu"
-    [[ -n "$_udp_port" ]] && echo -e "\033[0;34m╼ \033[1;32mPUERTO(S)\033[1;37m: $_udp_port"
-    echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-    echo -e "\033[0;34m┃\033[1;31m[\033[1;36m1\033[1;31m] \033[1;33mINICIAR / INSTALAR BAD VPN          \033[0;34m┃"
-    echo -e "\033[0;34m┃\033[1;31m[\033[1;36m2\033[1;31m] \033[1;33mDETENER BAD VPN                     \033[0;34m┃"
-    echo -e "\033[0;34m┃\033[1;31m[\033[1;36m0\033[1;31m] \033[1;33mVOLVER                              \033[0;34m┃"
-    echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
-    echo -ne "\033[1;32mOpción: \033[1;37m"; read bvopt
-    case "$bvopt" in
-    1)
-        clear
-        if ! command -v udpvpn &>/dev/null && ! command -v badvpn-udpgw &>/dev/null; then
-            echo -e "\033[1;33mInstalando BAD VPN...\033[0m"
-            apt-get install -y cmake make gcc >/dev/null 2>&1
-            BASE_URL="https://raw.githubusercontent.com/juanitoprosniff/script_msyvpn/main/installer"
-            wget -q -O /tmp/install_badvpn.sh "$BASE_URL/install_badvpn.sh" 2>/dev/null
-            if [[ -f /tmp/install_badvpn.sh ]]; then
-                chmod +x /tmp/install_badvpn.sh
-                bash /tmp/install_badvpn.sh
-            else
-                echo -e "\033[1;31mNo se pudo descargar el instalador de BAD VPN.\033[0m"
-                sleep 3; fun_badvpn; return
-            fi
-        fi
-        echo -ne "\033[1;32mPUERTO UDP (defecto 7300): \033[1;37m"; read _bvport
-        [[ -z "$_bvport" ]] && _bvport=7300
-        pkill -f 'udpvpn\|badvpn' 2>/dev/null; sleep 1
-        _bv_bin=$(command -v udpvpn || command -v badvpn-udpgw)
-        screen -dmS badvpn $_bv_bin --listen-addr 0.0.0.0:$_bvport 2>/dev/null
-        _fw_open $_bvport udp
-        sed -i '/udpvpn\|badvpn/d' /etc/autostart 2>/dev/null
-        echo "ps x | grep -E 'udpvpn|badvpn' | grep -v grep || screen -dmS badvpn $_bv_bin --listen-addr 0.0.0.0:$_bvport" >> /etc/autostart
-        sleep 1
-        ps x | grep -E 'udpvpn|badvpn' | grep -v grep >/dev/null && \
-            echo -e "\n\033[1;32m✓ BAD VPN ACTIVO EN PUERTO UDP $_bvport!\033[0m" || \
-            echo -e "\n\033[1;31m⚠ BAD VPN no responde. Verifique la instalación.\033[0m"
-        sleep 3; fun_badvpn ;;
-    2)
-        pkill -f 'udpvpn\|badvpn' 2>/dev/null
-        screen -ls 2>/dev/null | grep 'badvpn' | awk '{print $1}' | while read p; do screen -r -S "$p" -X quit 2>/dev/null; done
-        sed -i '/udpvpn\|badvpn/d' /etc/autostart 2>/dev/null
-        echo -e "\n\033[1;31mBAD VPN DETENIDO!\033[0m"; sleep 2; fun_badvpn ;;
-    0) fun_conexao ;;
-    *) echo -e "\033[1;31mOpción inválida!\033[0m"; sleep 1 ;;
-    esac
-    done
-}
-
-# ============================================================
-# HYSTERIA UDP MANAGER
-# ============================================================
-fun_hysteria() {
-    clear
-    echo -e "\E[38;5;18m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-    echo -e "\E[38;5;18m┃\E[44;1;37m          HYSTERIA UDP MANAGER           \E[0m\E[38;5;18m┃"
-    echo -e "\E[38;5;18m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
-    if command -v hysteria-manager &>/dev/null; then
-        echo -e "\033[1;32mHysteria UDP ya instalado. Abriendo manager...\033[0m"
-        sleep 1; hysteria-manager; return
-    fi
-    echo -e "\E[38;5;196m|\E[38;5;33m01\E[38;5;196m|\033[1;37m➜ \E[38;5;195mINSTALAR HYSTERIA UDP"
-    echo -e "\E[38;5;196m|\E[38;5;33m00\E[38;5;196m|\033[1;37m➜ \E[38;5;195mVOLVER"
-    echo ""
-    echo -ne "\033[1;32mQUÉ DESEA HACER \033[1;37m?\033[1;31m?\033[1;37m : "; read opc
-    [[ "$opc" != '1' && "$opc" != '01' ]] && { fun_conexao; return; }
-    echo -e "\n\033[1;32mInstalando Hysteria UDP Manager...\033[0m"
-    BASE_URL="https://raw.githubusercontent.com/juanitoprosniff/script_msyvpn/main/installer"
-    wget -q -O /root/install_agnudp.sh  "$BASE_URL/install_agnudp.sh"  2>/dev/null
-    wget -q -O /root/agnudp_manager.sh  "$BASE_URL/agnudp_manager.sh"  2>/dev/null
-    if [[ -f /root/install_agnudp.sh ]] && [[ -f /root/agnudp_manager.sh ]]; then
-        chmod +x /root/install_agnudp.sh /root/agnudp_manager.sh
-        bash /root/install_agnudp.sh
-        cp /root/agnudp_manager.sh /usr/local/bin/hysteria-manager
-        chmod +x /usr/local/bin/hysteria-manager
-        echo -e "\n\033[1;32m✓ Hysteria UDP instalado con éxito!\033[0m"
-        sleep 1; hysteria-manager
-    else
-        echo -e "\n\033[1;31m⚠ No fue posible descargar Hysteria UDP.\033[0m"
-        echo -e "\033[1;33mVerifique su conexión a internet.\033[0m"
-        sleep 3; fun_conexao
-    fi
-}
-
-# ============================================================
 # MENÚ PRINCIPAL DE CONEXIÓN
 # ============================================================
 x="ok"; clear
 fun_conexao() {
     while true; do
         clear
+        echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
+        echo -e "\033[0;34m┃\E[44;1;37m          MSYVPN-SCRIPT — CONEXIÓN       \E[0m\033[0;34m┃"
+        echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
 
-        # ── Puertos activos ───────────────────────────────────
+        # ── Mostrar puertos activos ───────────────────────────
         _ssh_ports=$(grep '^Port' /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' | xargs)
-        _ws_pts=$(ss -tlpn 2>/dev/null | grep -E 'python|python3' | awk '{print $4}' | rev | cut -d: -f1 | rev | xargs | tr ' ' ',')
-        _ssl_pts=$(ss -tlpn 2>/dev/null | grep 'stunnel' | awk '{print $4}' | rev | cut -d: -f1 | rev | xargs | tr ' ' ',')
-        _udp_pts=$(ss -ulpn 2>/dev/null | grep -E 'udpvpn|badvpn' | awk '{print $4}' | rev | cut -d: -f1 | rev | xargs | tr ' ' ',')
-        _hyst_pts=$(ss -ulpn 2>/dev/null | grep 'hysteria' | awk '{print $4}' | rev | cut -d: -f1 | rev | xargs | tr ' ' ',')
+        echo -e "\033[1;32mOPENSSH\033[1;31m: \033[1;37m${_ssh_ports:-22}   \033[1;33mARCH: \033[1;32m${_ARCH}\033[0m"
 
         _db16_on=0
         screen -list 2>/dev/null | grep -q 'dropbear2016' && _db16_on=1
@@ -832,36 +785,25 @@ fun_conexao() {
         [[ "$_db16_on" != '0' ]] && {
             _db16_port=$(systemctl show dropbear-legacy --property=ExecStart 2>/dev/null | grep -oP '(?<=-p )\d+' | head -1)
             [[ -z "$_db16_port" ]] && _db16_port=$(screen -list 2>/dev/null | grep 'dropbear2016' | grep -oP '\d+(?=\.dropbear2016)' | head -1)
+            [[ -n "$_db16_port" ]] && echo -e "\033[1;32mDROPBEAR 2016\033[1;31m: \033[1;37m$_db16_port"
         }
 
+        _py_active=$(ss -tlpn 2>/dev/null | grep -E 'python|python3' | awk '{print $4}' | rev | cut -d: -f1 | rev | xargs)
+        [[ -n "$_py_active" ]] && echo -e "\033[1;32mPROXY SOCKS\033[1;31m: \033[1;37m$_py_active"
+
+        [[ -e "/etc/stunnel/stunnel.conf" ]] && echo -e "\033[1;32mSSL\033[1;31m: \033[1;37m$(get_ports_by_process 'stunnel')"
+
         # ── Status para el menú ───────────────────────────────
-        [[ -n "$_ws_pts" ]] && sts4="\033[1;32m✓ " || sts4="\033[1;31m✕ "
+        [[ -n "$_py_active" ]] && sts4="\033[1;32m✓ " || sts4="\033[1;31m✕ "
         [[ -e "/etc/stunnel/stunnel.conf" ]] && sts3="\033[1;32m✓ " || sts3="\033[1;31m✕ "
         [[ "$_db16_on" != '0' ]] && db16sts="\033[1;32m✓ " || db16sts="\033[1;31m✕ "
-        stsu=$(ps x | grep "udpvpn\|badvpn" | grep -v grep >/dev/null && echo -e "\033[1;32m✓ " || echo -e "\033[1;31m✕ ")
-        stshy=$(command -v hysteria-manager &>/dev/null && echo -e "\033[1;32m✓ " || echo -e "\033[1;31m✕ ")
-
-        echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-        echo -e "\033[0;34m┃\E[44;1;37m       MSY VPN SCRIPT — CONEXIÓN         \E[0m\033[0;34m┃"
-        echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
-
-        # Puertos activos resumen
-        echo -e "\033[1;32mOPENSSH\033[1;31m : \033[1;37m${_ssh_ports:-22}   \033[1;33mARCH: \033[1;32m${_ARCH}\033[0m"
-        [[ "$_db16_on" != '0' && -n "$_db16_port" ]] && \
-            echo -e "\033[1;32mDROPBEAR\033[1;31m: \033[1;37m$_db16_port"
-        [[ -n "$_ws_pts"   ]] && echo -e "\033[1;32mWEBSOCKET\033[1;31m: \033[1;37m$_ws_pts"
-        [[ -n "$_ssl_pts"  ]] && echo -e "\033[1;32mSSL      \033[1;31m: \033[1;37m$_ssl_pts"
-        [[ -n "$_udp_pts"  ]] && echo -e "\033[1;32mBAD VPN  \033[1;31m: \033[1;37m$_udp_pts (UDP)"
-        [[ -n "$_hyst_pts" ]] && echo -e "\033[1;32mHYSTERIA \033[1;31m: \033[1;37m$_hyst_pts (UDP)"
 
         echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m01\033[1;31m] \033[1;33mOPENSSH                              \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m02\033[1;31m] \033[1;33mPROXY SOCKS / WEBSOCKET $sts4         \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m03\033[1;31m] \033[1;33mSSL TUNNEL $sts3                      \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m04\033[1;31m] \033[1;33mDROPBEAR 2016 $db16sts                 \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m05\033[1;31m] \033[1;33mBAD VPN $stsu                          \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m06\033[1;31m] \033[1;33mHYSTERIA UDP MANAGER $stshy            \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m07\033[1;31m] \033[1;33mVOLVER \033[1;32m<<<                          \033[0;34m┃"
+        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m02\033[1;31m] \033[1;33mPROXY SOCKS $sts4                    \033[0;34m┃"
+        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m03\033[1;31m] \033[1;33mSSL TUNNEL $sts3                     \033[0;34m┃"
+        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m04\033[1;31m] \033[1;33mDROPBEAR 2016 $db16sts                \033[0;34m┃"
+        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m05\033[1;31m] \033[1;33mVOLVER \033[1;32m<<<                          \033[0;34m┃"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m00\033[1;31m] \033[1;33mSALIR \033[1;32m<<<                            \033[0;34m┃"
         echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
         tput civis
@@ -872,9 +814,7 @@ fun_conexao() {
         2|02)  tput reset; fun_socks ;;
         3|03)  tput reset; inst_ssl ;;
         4|04)  tput reset; fun_inst_dropbear2016 ;;
-        5|05)  tput reset; fun_badvpn ;;
-        6|06)  tput reset; fun_hysteria ;;
-        7|07)  tput reset; menu ;;
+        5|05)  tput reset; menu ;;
         0|00)  tput reset; echo -e "\033[1;31mSaliendo...\033[0m"; sleep 1; exit ;;
         *)     echo -e "\033[1;31mOpción inválida!\033[0m"; sleep 1 ;;
         esac
