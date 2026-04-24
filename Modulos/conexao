@@ -185,13 +185,32 @@ fun_inst_dropbear2016() {
     fi
 
     echo "Configurando compilación..."
-    ./configure --prefix=/opt/dropbear-2016 \
-        --disable-zlib \
-        --disable-wtmp \
-        --disable-lastlog
+    # Ubuntu 26 / GCC 14+ eleva estos warnings a errores fatales por defecto.
+    # Los flags -Wno-* los suprimen solo durante esta compilación legacy.
+    # Ubuntu 22+ usa OpenSSL 3.x; --disable-openssl fuerza libtomcrypt
+    # evitando las APIs RSA/DSA deprecadas que rompen la compilación.
+    _CFLAGS_COMPAT="-Wno-implicit-function-declaration \
+-Wno-implicit-int \
+-Wno-incompatible-pointer-types \
+-Wno-int-conversion \
+-Wno-error=deprecated-declarations \
+-Wno-error"
+
+    local _db_configure_opts="--prefix=/opt/dropbear-2016 \
+--disable-zlib \
+--disable-wtmp \
+--disable-lastlog"
+
+    # Ubuntu 22+ (OpenSSL 3.x): deshabilitar openssl evita errores de API deprecada
+    if [[ $_UBUNTU_VER -ge 22 ]]; then
+        _db_configure_opts="$_db_configure_opts --disable-openssl"
+        apt-get install -y libtomcrypt-dev libtommath-dev >/dev/null 2>&1
+    fi
+
+    CFLAGS="$_CFLAGS_COMPAT" ./configure $_db_configure_opts
 
     echo "Compilando... (puede tardar 2-3 minutos)"
-    if make -j$(nproc) PROGRAMS="dropbear dropbearkey"; then
+    if make -j$(nproc) CFLAGS="$_CFLAGS_COMPAT" PROGRAMS="dropbear dropbearkey"; then
         echo "Instalando..."
         make install PROGRAMS="dropbear dropbearkey"
     else
@@ -214,13 +233,23 @@ fun_inst_dropbear2016() {
         /opt/dropbear-2016/bin/dropbearkey -t rsa \
             -f /etc/dropbear-legacy/dropbear_rsa_host_key -s 2048
 
-    [[ ! -f /etc/dropbear-legacy/dropbear_dss_host_key ]] && \
-        /opt/dropbear-2016/bin/dropbearkey -t dss \
-            -f /etc/dropbear-legacy/dropbear_dss_host_key
+    # DSS (DSA) no es compatible con OpenSSL 3.x (Ubuntu 22+), se omite en esos sistemas.
+    if [[ $_UBUNTU_VER -lt 22 ]]; then
+        [[ ! -f /etc/dropbear-legacy/dropbear_dss_host_key ]] && \
+            /opt/dropbear-2016/bin/dropbearkey -t dss \
+                -f /etc/dropbear-legacy/dropbear_dss_host_key
+    fi
 
     cat > /etc/dropbear-legacy/banner.txt <<'BANEOF'
 t.me/FREEINTERNETVPNMSY
 BANEOF
+
+    # En Ubuntu 22+ (OpenSSL 3.x) no se genera ni usa la llave DSS.
+    if [[ $_UBUNTU_VER -ge 22 ]]; then
+        _db_dss_flag=""
+    else
+        _db_dss_flag="-d /etc/dropbear-legacy/dropbear_dss_host_key"
+    fi
 
     cat > /etc/systemd/system/dropbear-legacy.service <<DBEOF
 [Unit]
@@ -230,7 +259,7 @@ Wants=network.target
 
 [Service]
 Type=simple
-ExecStart=/opt/dropbear-2016/sbin/dropbear -F -E -p $porta_db16 -r /etc/dropbear-legacy/dropbear_rsa_host_key -d /etc/dropbear-legacy/dropbear_dss_host_key -b /etc/dropbear-legacy/banner.txt -K 60 -I 300
+ExecStart=/opt/dropbear-2016/sbin/dropbear -F -E -p $porta_db16 -r /etc/dropbear-legacy/dropbear_rsa_host_key $_db_dss_flag -b /etc/dropbear-legacy/banner.txt -K 60 -I 300
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=always
 RestartSec=3
