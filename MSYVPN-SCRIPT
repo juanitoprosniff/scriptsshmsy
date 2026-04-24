@@ -1,0 +1,425 @@
+#!/bin/bash
+# ============================================================
+# INSTALADOR MSYVPN-SCRIPT — Plus
+# Traducido al español latinoamericano
+# Compatible: Ubuntu 18 / 20 / 22 / 24 / 25+
+# FIXES:
+#   - Eliminado iplogger (rastreador de IP)
+#   - Copia wsproxy.py y proxy.py a /etc/SSHPlus/ al instalar
+#   - Compatibilidad Python pip Ubuntu 22+
+#   - Detección automática de arquitectura ARM / AMD64
+#   - UDP ZiVPN integrado
+# ============================================================
+tput reset
+
+[[ "$(whoami)" != "root" ]] && {
+    echo -e "\033[1;33m[\033[1;31mError\033[1;33m] \033[1;37m- \033[1;33mDebe ejecutar como root\033[0m"
+    rm $HOME/MSYVPN-SCRIPT >/dev/null 2>&1
+    exit 0
+}
+
+_lnk=$(echo 'z1:y#x.5s0ul&p4hs$s.0a72d*n-e!v89e032:3r' | sed -e 's/[^a-z.]//ig' | rev)
+_Ink=$(echo '/3×u3#s87r/l32o4×c1a×l1/83×l24×i0b×' | sed -e 's/[^a-z/]//ig')
+_1nk=$(echo '/3×u3#s×87r/83×l2×4×i0b×' | sed -e 's/[^a-z/]//ig')
+cd $HOME
+
+# ── Detectar versión Ubuntu ───────────────────────────────────
+_UBUNTU_VER=$(lsb_release -rs 2>/dev/null | cut -d. -f1 || echo "0")
+
+# ── Detectar arquitectura del sistema ────────────────────────
+_ARCH=$(uname -m)
+case "$_ARCH" in
+    x86_64)         _ARCH_TYPE="amd64";  _ARCH_LABEL="AMD64 / x86_64" ;;
+    aarch64|arm64)  _ARCH_TYPE="arm64";  _ARCH_LABEL="ARM64 / aarch64" ;;
+    armv7l|armv6l)  _ARCH_TYPE="arm";    _ARCH_LABEL="ARM (32-bit)" ;;
+    *)              _ARCH_TYPE="amd64";  _ARCH_LABEL="Desconocida → usando AMD64" ;;
+esac
+
+fun_bar() {
+    comando[0]="$1"
+    comando[1]="$2"
+    (
+        [[ -e $HOME/fim ]] && rm $HOME/fim
+        ${comando[0]} -y > /dev/null 2>&1
+        ${comando[1]} -y > /dev/null 2>&1
+        touch $HOME/fim
+    ) > /dev/null 2>&1 &
+    tput civis
+    echo -ne "  \033[1;37mESPERE \033[1;37m- \033[1;37m["
+    while true; do
+        for((i=0; i<18; i++)); do
+            echo -ne "\033[1;31m#"
+            sleep 0.1s
+        done
+        [[ -e $HOME/fim ]] && rm $HOME/fim && break
+        echo -e "\033[1;37m]"
+        tput cuu1
+        tput dl1
+        echo -ne "  \033[1;37mESPERE \033[1;37m- \033[1;37m["
+    done
+    echo -e "\033[1;37m]\033[1;37m -\033[1;32m LISTO!\033[1;37m"
+    tput cnorm
+}
+
+function verif_key() {
+    chmod +x $_Ink/list > /dev/null 2>&1
+    [[ ! -e "$_Ink/list" ]] && {
+        echo -e "\n\033[1;31mKEY INVÁLIDA!\033[0m"
+        rm -rf $HOME/MSYVPN-SCRIPT > /dev/null 2>&1
+        tput reset; exit 1
+    }
+}
+
+tput reset
+echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
+echo -e "\033[0;34m┃\E[41;1;37m            ⇱ MSYVPN-SCRIPT nzx ⇲             \E[0m\033[0;34m┃"
+echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
+echo ""
+echo -e "             \033[1;31mATENCIÓN! \033[1;37mESTE SCRIPT VA A:\033[0m"
+echo ""
+echo -e "\033[1;31m• \033[1;37mINSTALAR UN CONJUNTO DE SCRIPTS COMO HERRAMIENTAS\033[0m"
+echo -e "\033[1;37m  PARA LA GESTIÓN DE RED, SISTEMA Y USUARIOS\033[0m"
+echo ""
+echo -e "\033[1;32m• \033[1;32mCONSEJO! \033[1;37mUSE EL TEMA OSCURO EN SU TERMINAL PARA\033[0m"
+echo -e "\033[1;37m  UNA MEJOR EXPERIENCIA Y VISUALIZACIÓN!\033[0m"
+echo ""
+echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
+echo -e "\033[0;34m┃\033[1;33m  Arquitectura detectada: \033[1;32m$_ARCH_LABEL\033[0m\033[0;34m          ┃"
+echo -e "\033[0;34m┃\033[1;37m               by:@JUANITOPROSNIFF               \E[0m\033[0;34m┃"
+echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
+echo ""
+
+echo -ne "\033[38;5;118mENTER \033[1;37mpara continuar la \033[1;31mINSTALACIÓN\033[0m"; read x
+[[ $x = @(n|N) ]] && exit
+
+sed -i 's/Port 22222/Port 22/g' /etc/ssh/sshd_config > /dev/null 2>&1
+service ssh restart > /dev/null 2>&1
+
+rm $_Ink/list > /dev/null 2>&1
+wget -P $_Ink https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/Install/list > /dev/null 2>&1
+verif_key
+
+echo "/bin/menu" > /bin/h && chmod +x /bin/h > /dev/null 2>&1
+rm versao* > /dev/null 2>&1
+wget https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/versao > /dev/null 2>&1
+# NOTA: iplogger eliminado — era un rastreador de IP
+
+cd /bin/ > /dev/null 2>&1
+rm v2raymanager > /dev/null 2>&1
+wget https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/Modulos/v2raymanager > /dev/null 2>&1
+chmod 777 v2raymanager > /dev/null 2>&1
+wget https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/Install/ShellBot.sh > /dev/null 2>&1
+chmod 777 ShellBot.sh > /dev/null 2>&1
+cd > /dev/null 2>&1
+
+echo ""
+[[ -f "$HOME/usuarios.db" ]] && {
+    tput reset
+    echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
+    echo -e "\033[0;34m┃                   \033[1;37m• \033[1;31mATENCIÓN \033[1;37m•                   \033[0;34m┃"
+    echo -e "\033[0;34m┠━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┨\033[0m"
+    echo -e "\033[0;34m┃\033[1;37mSe encontró una base de datos de usuarios         \033[0;34m┃"
+    echo -e "\033[0;34m┃\033[1;37m\033[1;32m(usuarios.db)\033[1;37m. ¿Desea mantenerla preservando el \033[0;34m┃"
+    echo -e "\033[0;34m┃\033[1;37mlímite de conexiones simultáneas? ¿O crear una    \033[0;34m┃"
+    echo -e "\033[0;34m┃\033[1;37mnueva base de datos?                              \033[0;34m┃"
+    echo -e "\033[0;34m┠━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┨\033[0m"
+    echo -e "\033[0;34m┃\033[1;37m[\033[1;31m1\033[1;37m] \033[1;37mMantener Base de Datos Actual                \033[0;34m┃"
+    echo -e "\033[0;34m┃\033[1;37m[\033[1;31m2\033[1;37m] \033[1;37mCrear una Nueva Base de Datos                \033[0;34m┃"
+    echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
+    echo ""
+    tput setaf 2; tput bold; read -p "Opción ?: " -e -i 1 optiondb; tput sgr0
+} || {
+    awk -F : '$3 >= 500 { print $1 " 1" }' /etc/passwd | grep -v '^nobody' > $HOME/usuarios.db
+}
+[[ "$optiondb" = '2' ]] && awk -F : '$3 >= 500 { print $1 " 1" }' /etc/passwd | grep -v '^nobody' > $HOME/usuarios.db
+
+# ── Actualizar sistema ───────────────────────────────────────
+tput reset
+tput setaf 7; tput setab 4; tput bold; printf '%35s%s%-18s\n' " ESPERE LA INSTALACIÓN"; tput sgr0
+echo ""
+echo -e "          \033[1;37m[\033[1;31m!\033[1;37m] \033[1;32mACTUALIZANDO SISTEMA \033[1;37m[\033[1;31m!\033[1;37m]\033[0m"
+echo ""
+echo -e "    \033[1;37mLAS ACTUALIZACIONES PUEDEN TARDAR UN POCO!\033[0m"
+echo ""
+fun_attlist() {
+    apt-get update -y
+    [[ ! -d /usr/share/.plus ]] && mkdir /usr/share/.plus
+    echo "crz: $(date)" > /usr/share/.plus/.plus
+}
+fun_bar 'fun_attlist'
+
+# ── Optimizar Python (compatible Ubuntu 18-25) ───────────────
+tput reset
+echo ""
+echo -e "          \033[1;37m[\033[1;31m!\033[1;37m] \033[1;32mESPERE LA INSTALACIÓN \033[1;37m[\033[1;31m!\033[1;37m] \033[0m"
+echo ""
+echo -e "                \033[1;37mOPTIMIZANDO PYTHON \033[0m"
+echo ""
+echo -e "            \033[1;37mPUEDE TARDAR UN POCO!\033[0m"
+echo ""
+
+otimize_python() {
+    apt-get install python3 -y >/dev/null 2>&1
+
+    if [[ "$_UBUNTU_VER" -le 20 ]]; then
+        apt-get install python -y >/dev/null 2>&1
+        apt-get install python2 -y >/dev/null 2>&1
+        apt-get install python3.6 -y >/dev/null 2>&1
+        apt-get install python3.7 -y >/dev/null 2>&1
+        apt-get install python3.8 -y >/dev/null 2>&1
+        update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.6 1 >/dev/null 2>&1
+        update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.7 2 >/dev/null 2>&1
+        update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.8 3 >/dev/null 2>&1
+    fi
+
+    if [[ "$_UBUNTU_VER" -ge 22 ]]; then
+        apt-get install python3-full -y >/dev/null 2>&1
+    fi
+
+    apt install python3-pip -y >/dev/null 2>&1
+    if [[ "$_UBUNTU_VER" -ge 22 ]]; then
+        pip3 install --upgrade pip --break-system-packages >/dev/null 2>&1
+    else
+        apt install pip -y >/dev/null 2>&1
+        pip3 install --upgrade pip >/dev/null 2>&1
+    fi
+
+    apt install socat -y >/dev/null 2>&1
+}
+fun_bar 'otimize_python'
+
+# ── Instalar paquetes necesarios ─────────────────────────────
+tput reset
+echo ""
+echo -e "          \033[1;37m[\033[1;31m!\033[1;37m] \033[1;32mINSTALANDO PAQUETES \033[1;37m[\033[1;31m!\033[1;37m] \033[0m"
+echo ""
+echo -e "\033[1;37mALGUNOS PAQUETES SON EXTREMADAMENTE NECESARIOS!\033[0m"
+echo ""
+
+inst_pct() {
+    _pacotes=("bc" "screen" "nano" "unzip" "lsof" "net-tools" "dos2unix" "nload" "jq" "curl" "figlet" "python3" "openssl")
+    for _prog in ${_pacotes[@]}; do
+        apt install $_prog -y >/dev/null 2>&1
+    done
+
+    apt install net-tools -y >/dev/null 2>&1
+
+    if [[ "$_UBUNTU_VER" -ge 22 ]]; then
+        pip3 install speedtest-cli --break-system-packages >/dev/null 2>&1
+    else
+        pip3 install speedtest-cli >/dev/null 2>&1
+    fi
+
+    _open_fw_port() {
+        local p="$1" pr="${2:-tcp}"
+        command -v ufw &>/dev/null && ufw allow ${p}/${pr} >/dev/null 2>&1
+        command -v iptables &>/dev/null && {
+            iptables -C INPUT -p ${pr} --dport ${p} -j ACCEPT 2>/dev/null || \
+            iptables -I INPUT -p ${pr} --dport ${p} -j ACCEPT 2>/dev/null
+        }
+        command -v firewall-cmd &>/dev/null && firewall-cmd --state 2>/dev/null | grep -q running && {
+            firewall-cmd --zone=public --permanent --add-port=${p}/${pr} >/dev/null 2>&1
+        }
+    }
+    for _p in 80 443 444 3128 5454 8080 8888 8880 8989; do _open_fw_port $_p tcp; done
+    for _p in 7300 36712; do _open_fw_port $_p udp; done
+    command -v firewall-cmd &>/dev/null && firewall-cmd --reload >/dev/null 2>&1
+}
+fun_bar 'inst_pct'
+
+# ── Abrir puertos adicionales con ufw si está activo ─────────
+[[ -f "/usr/sbin/ufw" ]] && {
+    ufw allow 443/tcp >/dev/null 2>&1
+    ufw allow 444/tcp >/dev/null 2>&1
+    ufw allow 80/tcp >/dev/null 2>&1
+    ufw allow 3128/tcp >/dev/null 2>&1
+    ufw allow 8799/tcp >/dev/null 2>&1
+    ufw allow 8080/tcp >/dev/null 2>&1
+    ufw allow 8880/tcp >/dev/null 2>&1
+    ufw allow 8888/tcp >/dev/null 2>&1
+    ufw allow 36712/udp >/dev/null 2>&1
+}
+
+# ── Copiar scripts proxy a /etc/SSHPlus/ ─────────────────────
+# El módulo conexao los busca en /etc/SSHPlus/wsproxy.py y proxy.py
+tput reset
+echo ""
+echo -e "          \033[1;37m[\033[1;31m!\033[1;37m] \033[1;32mCOPIANDO SCRIPTS PROXY \033[1;37m[\033[1;31m!\033[1;37m] \033[0m"
+echo ""
+[[ ! -d /etc/SSHPlus ]] && mkdir -p /etc/SSHPlus
+[[ ! -d /etc/SSHPlus/senha ]] && mkdir -p /etc/SSHPlus/senha
+
+# Descargar wsproxy.py, proxy.py y ssldispatcher.py desde el repositorio
+wget -q https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/Modulos/wsproxy.py \
+    -O /etc/SSHPlus/wsproxy.py 2>/dev/null
+wget -q https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/Modulos/proxy.py \
+    -O /etc/SSHPlus/proxy.py 2>/dev/null
+wget -q https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/Modulos/ssldispatcher.py \
+    -O /etc/SSHPlus/ssldispatcher.py 2>/dev/null
+chmod 755 /etc/SSHPlus/wsproxy.py /etc/SSHPlus/proxy.py /etc/SSHPlus/ssldispatcher.py 2>/dev/null
+
+# Si el repositorio no los tiene aún, copiar desde el instalador mismo si existen localmente
+[[ ! -s /etc/SSHPlus/wsproxy.py ]] && [[ -f $HOME/wsproxy.py ]] && \
+    cp $HOME/wsproxy.py /etc/SSHPlus/wsproxy.py && chmod 755 /etc/SSHPlus/wsproxy.py
+[[ ! -s /etc/SSHPlus/proxy.py ]] && [[ -f $HOME/proxy.py ]] && \
+    cp $HOME/proxy.py /etc/SSHPlus/proxy.py && chmod 755 /etc/SSHPlus/proxy.py
+[[ ! -s /etc/SSHPlus/ssldispatcher.py ]] && [[ -f $HOME/ssldispatcher.py ]] && \
+    cp $HOME/ssldispatcher.py /etc/SSHPlus/ssldispatcher.py && chmod 755 /etc/SSHPlus/ssldispatcher.py
+
+echo -e "    \033[1;32mScripts proxy copiados a /etc/SSHPlus/\033[0m"
+[[ -s /etc/SSHPlus/ssldispatcher.py ]] && \
+    echo -e "    \033[1;32m✓ ssldispatcher.py instalado correctamente\033[0m" || \
+    echo -e "    \033[1;33m⚠ ssldispatcher.py no encontrado — descárguelo manualmente\033[0m"
+
+# ── Instalar UDP ZiVPN (con detección ARM / AMD64) ───────────
+tput reset
+echo ""
+echo -e "          \033[1;37m[\033[1;31m!\033[1;37m] \033[1;32mINSTALANDO UDP ZIVPN \033[1;37m[\033[1;31m!\033[1;37m] \033[0m"
+echo ""
+echo -e "    \033[1;33mArquitectura: \033[1;32m$_ARCH_LABEL\033[0m"
+echo ""
+
+inst_udp_zivpn() {
+    local _ZIVPN_RELEASE="https://github.com/zahidbd2/udp-zivpn/releases/download/udp-zivpn_1.4.9"
+    local _ZIVPN_BIN=""
+
+    # Seleccionar binario según arquitectura
+    case "$_ARCH_TYPE" in
+        amd64)  _ZIVPN_BIN="udp-zivpn-linux-amd64" ;;
+        arm64)  _ZIVPN_BIN="udp-zivpn-linux-arm64" ;;
+        arm)    _ZIVPN_BIN="udp-zivpn-linux-arm"   ;;
+        *)      _ZIVPN_BIN="udp-zivpn-linux-amd64" ;;
+    esac
+
+    systemctl stop zivpn.service 2>/dev/null
+
+    # Descargar binario correcto
+    wget -q "${_ZIVPN_RELEASE}/${_ZIVPN_BIN}" -O /usr/local/bin/zivpn 2>/dev/null
+    chmod +x /usr/local/bin/zivpn
+
+    mkdir -p /etc/zivpn
+
+    # Descargar config
+    wget -q https://raw.githubusercontent.com/zahidbd2/udp-zivpn/main/config.json \
+        -O /etc/zivpn/config.json 2>/dev/null
+
+    # Si no hay config, crear una por defecto
+    [[ ! -s /etc/zivpn/config.json ]] && cat > /etc/zivpn/config.json <<'ZEOF'
+{
+  "listen_addr": ":36712",
+  "cert": "/etc/zivpn/zivpn.crt",
+  "key": "/etc/zivpn/zivpn.key",
+  "config": ["zi"],
+  "obfs": ""
+}
+ZEOF
+
+    # Generar certificados SSL para ZiVPN
+    openssl req -new -newkey rsa:4096 -days 365 -nodes -x509 \
+        -subj "/C=US/ST=California/L=Los Angeles/O=MSYVPN/OU=VPN/CN=zivpn" \
+        -keyout /etc/zivpn/zivpn.key \
+        -out /etc/zivpn/zivpn.crt >/dev/null 2>&1
+
+    # Ajustar buffer de red para mayor rendimiento
+    sysctl -w net.core.rmem_max=16777216 >/dev/null 2>&1
+    sysctl -w net.core.wmem_max=16777216 >/dev/null 2>&1
+
+    # Crear servicio systemd
+    cat > /etc/systemd/system/zivpn.service <<'ZSEOF'
+[Unit]
+Description=UDP ZiVPN Service
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/zivpn server --config /etc/zivpn/config.json
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+ZSEOF
+
+    systemctl daemon-reload
+    systemctl enable zivpn.service >/dev/null 2>&1
+    systemctl start zivpn.service >/dev/null 2>&1
+
+    # Abrir puerto UDP 36712
+    command -v ufw &>/dev/null && ufw allow 36712/udp >/dev/null 2>&1
+    iptables -I INPUT -p udp --dport 36712 -j ACCEPT >/dev/null 2>&1
+}
+fun_bar 'inst_udp_zivpn'
+
+if systemctl is-active zivpn.service >/dev/null 2>&1; then
+    echo -e "    \033[1;32m✓ UDP ZiVPN activo en puerto 36712\033[0m"
+else
+    echo -e "    \033[1;33m⚠ ZiVPN no inició — verifique con: systemctl status zivpn\033[0m"
+fi
+
+# ── Instalar SlowDNS ─────────────────────────────────────────
+tput reset
+echo ""
+echo -e "          \033[1;37m[\033[1;31m!\033[1;37m] \033[1;32mINSTALANDO SLOWDNS \033[1;37m[\033[1;31m!\033[1;37m] \033[0m"
+echo ""
+
+inst_slowdns() {
+    local _SLOW_DIR="/etc/SSHPlus/slowdns"
+    local _SLOW_KEY="/etc/SSHPlus/slowdns/keys"
+    mkdir -p "$_SLOW_DIR" "$_SLOW_KEY"
+
+    local _DNS_BIN=""
+    case "$_ARCH_TYPE" in
+        amd64)  _DNS_BIN="dns-server-linux-amd64" ;;
+        arm64)  _DNS_BIN="dns-server-linux-arm64" ;;
+        arm)    _DNS_BIN="dns-server-linux-arm"   ;;
+        *)      _DNS_BIN="dns-server-linux-amd64" ;;
+    esac
+
+    # Intentar descargar binario SlowDNS (fuente principal y alternativa)
+    if ! wget -q --timeout=15 \
+        "https://raw.githubusercontent.com/khaledagn/VPS-AGN_English_Official/master/LINKS-LIBRARIES/dns-server" \
+        -O "${_SLOW_DIR}/dns-server" 2>/dev/null || [[ ! -s "${_SLOW_DIR}/dns-server" ]]; then
+        # Fallback: intentar desde otro mirror
+        wget -q --timeout=15 \
+            "https://github.com/juanitoprosniff/scriptsshmsy/raw/main/installer/dns-server" \
+            -O "${_SLOW_DIR}/dns-server" 2>/dev/null
+    fi
+
+    [[ -s "${_SLOW_DIR}/dns-server" ]] && chmod +x "${_SLOW_DIR}/dns-server"
+
+    # Instalar el script de gestión slowdns en /bin/
+    wget -q https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/Modulos/slowdns \
+        -O /bin/slowdns 2>/dev/null
+    [[ ! -s /bin/slowdns ]] && cp /bin/slowdns.sh /bin/slowdns 2>/dev/null
+    chmod 755 /bin/slowdns 2>/dev/null
+
+    # Abrir puertos necesarios
+    iptables -I INPUT -p udp --dport 5300 -j ACCEPT 2>/dev/null
+    iptables -t nat -I PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 5300 2>/dev/null
+    command -v ufw &>/dev/null && ufw allow 5300/udp >/dev/null 2>&1
+}
+fun_bar 'inst_slowdns'
+
+# ── Finalizar ────────────────────────────────────────────────
+tput reset
+echo -e "              \033[1;33m[\033[1;31m!\033[1;33m] \033[1;32mFINALIZANDO \033[1;33m[\033[1;31m!\033[1;33m] \033[0m"
+echo ""
+echo -e "      \033[1;37mCONCLUYENDO FUNCIONES Y CONFIGURACIONES! \033[0m"
+echo ""
+fun_bar "$_Ink/list $_lnk $_Ink $_1nk $key"
+
+tput reset
+echo ""
+cd $HOME
+echo -e ""
+echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
+echo -e "\033[0;34m┃\E[42;1;37m           ✓ INSTALACIÓN COMPLETADA            \E[0m\033[0;34m┃"
+echo -e "\033[0;34m┠━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┨\033[0m"
+echo -e "\033[0;34m┃\033[1;37m  Arquitectura : \033[1;32m$_ARCH_LABEL\033[0m\033[0;34m             ┃"
+echo -e "\033[0;34m┃\033[1;37m  UDP ZiVPN    : \033[1;32mpuerto 36712 UDP\033[0m\033[0;34m              ┃"
+echo -e "\033[0;34m┃\033[1;37m  SlowDNS      : \033[1;32mpuerto 5300 UDP\033[0m\033[0;34m               ┃"
+echo -e "\033[0;34m┠━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┨\033[0m"
+echo -e "\033[1;31m \033[1;37mCOMANDO PRINCIPAL: \033[1;32mmenu\033[0m"
+echo -e "\033[1;37m MÁS INFORMACIÓN \033[1;31m(\033[1;36mTELEGRAM\033[1;31m): \033[1;37m@JuanitoProSniff\033[0m"
+echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
+echo ""
