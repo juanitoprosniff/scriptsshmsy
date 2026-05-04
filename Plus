@@ -238,10 +238,18 @@ chmod 755 /etc/SSHPlus/wsproxy.py /etc/SSHPlus/proxy.py 2>/dev/null
 wget -q "${_REPO_BASE}/Modulos/ssldispatcher.py" -O /etc/SSHPlus/ssldispatcher.py 2>/dev/null
 chmod 755 /etc/SSHPlus/ssldispatcher.py 2>/dev/null
 
+# V2Ray Bridge (requerido por V2Ray)
+wget -q "${_REPO_BASE}/Modulos/v2ray_manager.py" -O /etc/SSHPlus/v2ray_manager.py 2>/dev/null
+chmod 755 /etc/SSHPlus/v2ray_manager.py 2>/dev/null
+# Fallback local
+[[ ! -s /etc/SSHPlus/v2ray_manager.py ]] && [[ -f $HOME/v2ray_manager.py ]] && \
+    cp $HOME/v2ray_manager.py /etc/SSHPlus/v2ray_manager.py && chmod 755 /etc/SSHPlus/v2ray_manager.py
+
 # Verificar descargas
-[[ -s /etc/SSHPlus/wsproxy.py      ]] && echo -e "    \033[1;32m✓ wsproxy.py descargado\033[0m"      || echo -e "    \033[1;31m✗ wsproxy.py no encontrado\033[0m"
-[[ -s /etc/SSHPlus/proxy.py        ]] && echo -e "    \033[1;32m✓ proxy.py descargado\033[0m"        || echo -e "    \033[1;31m✗ proxy.py no encontrado\033[0m"
+[[ -s /etc/SSHPlus/wsproxy.py       ]] && echo -e "    \033[1;32m✓ wsproxy.py descargado\033[0m"       || echo -e "    \033[1;31m✗ wsproxy.py no encontrado\033[0m"
+[[ -s /etc/SSHPlus/proxy.py         ]] && echo -e "    \033[1;32m✓ proxy.py descargado\033[0m"         || echo -e "    \033[1;31m✗ proxy.py no encontrado\033[0m"
 [[ -s /etc/SSHPlus/ssldispatcher.py ]] && echo -e "    \033[1;32m✓ ssldispatcher.py descargado\033[0m" || echo -e "    \033[1;31m✗ ssldispatcher.py no encontrado\033[0m"
+[[ -s /etc/SSHPlus/v2ray_manager.py ]] && echo -e "    \033[1;32m✓ v2ray_manager.py descargado\033[0m" || echo -e "    \033[1;31m✗ v2ray_manager.py no encontrado\033[0m"
 
 # ── Finalizar instalación ────────────────────────────────────
 tput reset
