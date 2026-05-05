@@ -2,31 +2,75 @@
 # ============================================================
 # CREAR USUARIO SSH — SSHMSY MANAGER
 # Sin OpenVPN / Sin OpenSSH directo — usa Dropbear 2016
-# FIXES:
-#   - Eliminado todo código OpenVPN
-#   - Días ilimitado: ingresar 0 o 99999
-#   - Muestra puertos activos (Dropbear, Proxy WS, SSL, etc.)
+#
+# CAMBIOS v2:
+#   + Soporte de autenticación por CLAVE PÚBLICA RSA (authorized_keys)
+#   + Crea home mínimo con SOLO ~/.ssh/authorized_keys
+#   + Shell sigue bloqueado en /bin/false (solo túnel, no shell)
+#   + Mantiene contraseña como compat para apps antiguas
+#   + Soporta clave maestra compartida — multi-usuario con la misma key
 # ============================================================
+
 IP=$(cat /etc/IP 2>/dev/null || hostname -I | awk '{print $1}')
 cor1='\033[41;1;37m'
 cor2='\033[44;1;37m'
 scor='\033[0m'
 
-# FIX Dropbear 2016: registrar /bin/false en /etc/shells
-# Dropbear 2016 rechaza el login si la shell del usuario no está
-# en /etc/shells — criarusuario usa -s /bin/false por seguridad
+# Ruta de la clave maestra compartida (todos los usuarios la heredan)
+MASTER_PUBKEY="/etc/SSHPlus/master_pubkey.pub"
+
+# FIX Dropbear 2016: registrar /bin/false y nologin en /etc/shells
 grep -qx '/bin/false' /etc/shells 2>/dev/null || echo '/bin/false' >> /etc/shells
 grep -qx '/usr/sbin/nologin' /etc/shells 2>/dev/null || echo '/usr/sbin/nologin' >> /etc/shells
+
+# ── Función: instalar authorized_keys para un usuario ────────
+# Crea ~/.ssh/authorized_keys con la clave maestra. El shell sigue
+# siendo /bin/false → no hay acceso a shell, solo port-forwarding.
+# Las opciones del prefijo bloquean PTY, X11, agente y comandos:
+#    no-pty             → no se puede pedir terminal
+#    no-X11-forwarding  → no se reenvía X11
+#    no-agent-forwarding→ no se reenvía agente SSH
+#    command="/bin/false" → si alguien intentara ejecutar algo, falla
+# Solo permanecen permitidos: -L, -R, -D (port forwarding) que es
+# exactamente lo que la app VPN necesita para el túnel SOCKS.
+fun_install_authkey() {
+    local usr="$1"
+    local home="/home/$usr"
+
+    [[ ! -f "$MASTER_PUBKEY" ]] && {
+        echo -e "\033[1;33m  ⚠ Clave maestra no configurada (omitiendo authorized_keys)\033[0m"
+        echo -e "\033[1;33m    Generala con: gerar_chave_master.sh\033[0m"
+        return
+    }
+
+    mkdir -p "$home/.ssh"
+    chown -R "$usr:$usr" "$home"
+    chmod 700 "$home" "$home/.ssh"
+
+    local opciones='no-pty,no-X11-forwarding,no-agent-forwarding,command="/bin/false"'
+    local pub_content
+    pub_content=$(cat "$MASTER_PUBKEY" 2>/dev/null)
+    [[ -z "$pub_content" ]] && return
+
+    # Si la línea ya tiene opciones, no las duplicamos
+    if [[ "$pub_content" == ssh-rsa* || "$pub_content" == ssh-ed25519* || "$pub_content" == ecdsa-* ]]; then
+        echo "${opciones} ${pub_content}" > "$home/.ssh/authorized_keys"
+    else
+        echo "$pub_content" > "$home/.ssh/authorized_keys"
+    fi
+
+    chmod 600 "$home/.ssh/authorized_keys"
+    chown "$usr:$usr" "$home/.ssh/authorized_keys"
+
+    echo -e "\033[1;32m  ✓ Clave RSA instalada en $home/.ssh/authorized_keys\033[0m"
+}
 
 # ── Función: mostrar puertos activos ─────────────────────────
 fun_show_ports() {
     echo -e "\033[1;33m━━━━━━━━━━━━━━━━━ PUERTOS ACTIVOS ━━━━━━━━━━━━━━━━━\033[0m"
-
-    # OpenSSH
     _ssh_ports=$(grep '^Port' /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' | xargs)
     [[ -n "$_ssh_ports" ]] && echo -e "\033[1;32mOpenSSH     :\033[1;37m $_ssh_ports\033[0m"
 
-    # Dropbear 2016 (systemd o screen)
     _db16_port=""
     systemctl is-active dropbear-legacy >/dev/null 2>&1 && \
         _db16_port=$(systemctl show dropbear-legacy --property=ExecStart 2>/dev/null | grep -oP '(?<=-p )\d+' | head -1)
@@ -34,21 +78,25 @@ fun_show_ports() {
         _db16_port=$(screen -list 2>/dev/null | grep 'dropbear2016' | grep -oP '\d+(?=\.dropbear2016)' | head -1)
     [[ -n "$_db16_port" ]] && echo -e "\033[1;32mDropbear2016:\033[1;37m $_db16_port\033[0m"
 
-    # Proxy WebSocket / SOCKS (Python)
     _py_ports=$(ss -tlpn 2>/dev/null | grep -E 'python|python3' | awk '{print $4}' | rev | cut -d: -f1 | rev | sort -u | xargs)
     [[ -n "$_py_ports" ]] && echo -e "\033[1;32mProxy WS    :\033[1;37m $_py_ports\033[0m"
 
-    # SSL / Stunnel
     _ssl_ports=$(ss -tlpn 2>/dev/null | grep 'stunnel' | awk '{print $4}' | rev | cut -d: -f1 | rev | sort -u | xargs)
     [[ -n "$_ssl_ports" ]] && echo -e "\033[1;32mSSL/Stunnel :\033[1;37m $_ssl_ports\033[0m"
 
-    # Nginx
     _nginx_ports=$(ss -tlpn 2>/dev/null | grep 'nginx' | awk '{print $4}' | rev | cut -d: -f1 | rev | sort -u | xargs)
     [[ -n "$_nginx_ports" ]] && echo -e "\033[1;32mNginx       :\033[1;37m $_nginx_ports\033[0m"
 
-    # V2Ray / Xray
     _v2_ports=$(ss -tlpn 2>/dev/null | grep -E 'v2ray|xray' | awk '{print $4}' | rev | cut -d: -f1 | rev | sort -u | xargs)
     [[ -n "$_v2_ports" ]] && echo -e "\033[1;32mV2Ray/Xray  :\033[1;37m $_v2_ports\033[0m"
+
+    if [[ -f "$MASTER_PUBKEY" ]]; then
+        local fp
+        fp=$(ssh-keygen -lf "$MASTER_PUBKEY" 2>/dev/null | awk '{print $2}' | head -c 30)
+        echo -e "\033[1;32mMaster Key  :\033[1;37m ${fp}...\033[0m"
+    else
+        echo -e "\033[1;31mMaster Key  :\033[1;37m NO CONFIGURADA\033[0m"
+    fi
 
     echo -e "\033[1;33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
 }
@@ -63,15 +111,9 @@ fun_bar() {
     tput civis
     echo -ne "\033[1;33mAGUARDE \033[1;37m- \033[1;33m["
     while true; do
-        for ((i = 0; i < 18; i++)); do
-            echo -ne "\033[1;31m#"
-            sleep 0.1s
-        done
+        for ((i = 0; i < 18; i++)); do echo -ne "\033[1;31m#"; sleep 0.1s; done
         [[ -e $HOME/fim ]] && rm $HOME/fim && break
-        echo -e "\033[1;33m]"
-        sleep 1s
-        tput cuu1
-        tput dl1
+        echo -e "\033[1;33m]"; sleep 1s; tput cuu1; tput dl1
         echo -ne "\033[1;33mAGUARDE \033[1;37m- \033[1;33m["
     done
     echo -e "\033[1;33m]\033[1;37m -\033[1;32m OK !\033[1;37m"
@@ -109,23 +151,24 @@ fun_usertoken() {
     password=$(cat /etc/SSHPlus/Token.txt 2>/dev/null)
     [[ -z "$password" ]] && { echo -e "\n${cor1}Token master não encontrado em /etc/SSHPlus/Token.txt${scor}\n"; exit 1; }
 
-    # Calcular expiración
     if [[ "$dias" -eq 0 ]]; then
-        final="2099-12-31"
-        gui="Ilimitado"
+        final="2099-12-31"; gui="Ilimitado"
     else
         final=$(date "+%Y-%m-%d" -d "+$dias days")
         gui=$(date "+%d/%m/%Y" -d "+$dias days")
     fi
 
-    # FIX Dropbear 2016: usar hash MD5 ($1$) en vez de DES/SHA-512
-    # Dropbear 2016 no soporta SHA-512 ($6$) que genera Ubuntu 22/24 con salt corto
     pass=$(perl -e 'print crypt($ARGV[0], "\$1\$sshmsy\$")' $password)
-    useradd -e $final -M -s /bin/false -p $pass $username >/dev/null 2>&1
+
+    # Crear con home (-m) para poder instalar authorized_keys.
+    # Shell sigue siendo /bin/false → no hay acceso a shell.
+    useradd -e $final -m -s /bin/false -p $pass $username >/dev/null 2>&1
+
     [[ -d /etc/SSHPlus/senha ]] || mkdir -p /etc/SSHPlus/senha
     echo "$password" >/etc/SSHPlus/senha/$username
     echo "$username $sshlimiter" >>/root/usuarios.db
 
+    fun_install_authkey "$username"
 
     echo -e "\033[0;34m╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯\033[0m"
     echo ""
@@ -133,6 +176,7 @@ fun_usertoken() {
     echo -e "\033[1;32mToken       :\033[1;37m $username\033[0m"
     echo -e "\033[1;32mExpira em   :\033[1;37m $gui\033[0m"
     echo -e "\033[1;32mConexões    :\033[1;37m $sshlimiter\033[0m"
+    echo -e "\033[1;32mAuth        :\033[1;37m Password + Clave RSA Master\033[0m"
     echo ""
     fun_show_ports
 }
@@ -146,6 +190,14 @@ echo -e "\033[0;34m┃\E[44;1;37m            CREAR USUARIO SSH            \E[0m\
 echo -e "\033[0;34m╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯\033[0m"
 tput sgr0
 echo ""
+
+if [[ ! -f "$MASTER_PUBKEY" ]]; then
+    echo -e "\033[1;33m⚠ Clave maestra RSA no configurada.\033[0m"
+    echo -e "\033[1;33m  Los usuarios se crearán SOLO con password.\033[0m"
+    echo -e "\033[1;33m  Generá la clave maestra con: \033[1;32mgerar_chave_master.sh\033[0m"
+    echo ""
+fi
+
 read -p "$(echo -ne "\033[1;32mDeseja usar Token? \033[1;33m[s/n]:\033[1;37m") " -e -i n resp
 
 if [[ "$resp" = 's' ]]; then
@@ -165,9 +217,7 @@ if [[ "$resp" = 's' ]]; then
         sleep 1
         fun_usertoken
     fi
-
 else
-    # ── Crear usuario normal ─────────────────────────────────
     clear
     echo -e "\033[0;34m╭━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮\033[0m"
     echo -e "\033[0;34m┃\E[44;1;37m            CRIAR USUARIO SSH            \E[0m\033[0;34m┃"
@@ -203,22 +253,21 @@ else
         echo -e "\n${cor1}Número de conexões inválido (mín. 1)!${scor}\n"; exit 1
     }
 
-    # Calcular expiración
     if [[ "$dias" -eq 0 ]]; then
-        final="2099-12-31"
-        gui="Ilimitado"
+        final="2099-12-31"; gui="Ilimitado"
     else
         final=$(date "+%Y-%m-%d" -d "+$dias days")
         gui=$(date "+%d/%m/%Y" -d "+$dias days")
     fi
 
-    # FIX Dropbear 2016: usar hash MD5 ($1$) en vez de DES/SHA-512
-    # Dropbear 2016 no soporta SHA-512 ($6$) que genera Ubuntu 22/24 con salt corto
     pass=$(perl -e 'print crypt($ARGV[0], "\$1\$sshmsy\$")' $password)
-    useradd -e $final -M -s /bin/false -p $pass $username >/dev/null 2>&1
+    useradd -e $final -m -s /bin/false -p $pass $username >/dev/null 2>&1
+
     [[ -d /etc/SSHPlus/senha ]] || mkdir -p /etc/SSHPlus/senha
     echo "$password" >/etc/SSHPlus/senha/$username
     echo "$username $sshlimiter" >>/root/usuarios.db
+
+    fun_install_authkey "$username"
 
     clear
     echo -e "\033[0;34m╭━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮\033[0m"
@@ -230,6 +279,11 @@ else
     echo -e "\033[1;32mSenha       :\033[1;37m $password\033[0m"
     echo -e "\033[1;32mExpira em   :\033[1;37m $gui\033[0m"
     echo -e "\033[1;32mConexões    :\033[1;37m $sshlimiter\033[0m"
+    if [[ -f "$MASTER_PUBKEY" ]]; then
+        echo -e "\033[1;32mAuth        :\033[1;37m Password + Clave RSA Master\033[0m"
+    else
+        echo -e "\033[1;32mAuth        :\033[1;37m Solo Password (master no instalada)\033[0m"
+    fi
     echo ""
     fun_show_ports
 fi
