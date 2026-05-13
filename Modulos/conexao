@@ -2,21 +2,22 @@
 # ============================================================
 # * Creado y modificado por t:me/JuanitoProSniif
 # ============================================================
+# ============================================================
 # MÓDULO: MODO DE CONEXIÓN — MSYVPN-SCRIPT v3.1
 # Nombre: MSYVPN-SCRIPT (carpetas internas: /etc/SSHPlus/)
 # Compatible: Ubuntu 18 / 20 / 22 / 24 / 25 / 26+
 # Detección automática: ARM / ARM64 / AMD64
 # PROTOCOLOS:
 #  - OpenSSH (puertos configurables)
-#  - Dropbear 2016.74 / 2020.81 / 2022.83 (compilado/precompilado)
+#  - Dropbear 2016.74 / 2020.81 / 2022.83 (compilado desde fuente)
 #  - Proxy WebSocket (wsproxy.py)
 #  - SSL Tunnel (stunnel4 + dispatcher inteligente)
-#  - TURBO VPN: SSH Compresión + BBR + Buffers optimizados
 # ============================================================
 
 _UBUNTU_VER=$(lsb_release -rs 2>/dev/null | cut -d. -f1 || grep -oP '(?<=Ubuntu )\d+' /etc/issue.net 2>/dev/null || echo "0")
 _GCC_VER=$(gcc -dumpversion 2>/dev/null | cut -d. -f1 || echo "0")
 
+# ── Detección de arquitectura (ARM / AMD64) ───────────────────
 _detect_arch() {
     local _a; _a=$(uname -m)
     case "$_a" in
@@ -28,7 +29,6 @@ _detect_arch() {
     esac
 }
 _ARCH=$(_detect_arch)
-
 _REPO_BASE="https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main"
 _REPO_INST="https://github.com/juanitoprosniff/script_msyvpn/raw/refs/heads/main/installer"
 _MASTER_PUBKEY="/etc/SSHPlus/master_pubkey.pub"
@@ -89,6 +89,7 @@ _check_proc() {
     ss -tlpn 2>/dev/null | grep -q "$1" || netstat -tlpn 2>/dev/null | grep -q "$1" 2>/dev/null
 }
 
+# ── Abrir puerto en TODOS los firewalls activos ───────────────
 _fw_open() {
     local pt="$1" pr="${2:-tcp}"
     command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q "active" && \
@@ -103,6 +104,7 @@ _fw_open() {
     }
 }
 
+# ── Reiniciar servicio SSH correctamente según versión ────────
 _restart_ssh() {
     systemctl restart ssh 2>/dev/null || \
     systemctl restart sshd 2>/dev/null || \
@@ -110,7 +112,9 @@ _restart_ssh() {
     service sshd restart 2>/dev/null
 }
 
-# ── Descargar clave maestra desde GitHub ─────────────────────
+# ============================================================
+# DESCARGAR CLAVE MAESTRA desde GitHub
+# ============================================================
 _descargar_master_pubkey() {
     echo -e "\033[1;33mDescargando clave maestra desde GitHub...\033[0m"
     mkdir -p /etc/SSHPlus
@@ -125,9 +129,345 @@ _descargar_master_pubkey() {
     else
         rm -f "$_MASTER_PUBKEY"
         echo -e "\033[1;31m✗ No se pudo descargar la clave maestra.\033[0m"
-        echo -e "\033[1;33m  Verifique: ${_REPO_BASE}/Modulos/master_pubkey.pub\033[0m"
+        echo -e "\033[1;33m  URL: ${_REPO_BASE}/Modulos/master_pubkey.pub\033[0m"
     fi
     sleep 2
+}
+
+# ============================================================
+# INSTALAR DROPBEAR — función genérica para 2016 / 2020 / 2022
+# Uso: _instalar_dropbear VER PUERTO SERVICIO DIRECTORIO
+# Ej:  _instalar_dropbear "2020.81" "144" "dropbear-2020" "dropbear-2020"
+# ============================================================
+_instalar_dropbear() {
+    local ver="$1" porta="$2" servicio="$3" directorio="$4"
+    local tarball="dropbear-${ver}.tar.bz2"
+    local dir_inst="/opt/${directorio}"
+    local dir_conf="/etc/${directorio}"
+
+    verif_ptrs "$porta"
+
+    # Ubuntu 26+ y versión 2016: usar binario precompilado (GCC 14 no compila 2016)
+    if [[ $_UBUNTU_VER -ge 26 && "$ver" == "2016.74" ]]; then
+        echo -e "\033[1;33mUbuntu $_UBUNTU_VER detectado — instalando binario precompilado Dropbear $ver...\033[0m"
+        apt-get install -y wget >/dev/null 2>&1
+        mkdir -p "${dir_inst}/sbin" "${dir_inst}/bin" "$dir_conf"
+
+        if [[ "$_ARCH" == "arm64" ]]; then
+            _db_url="${_REPO_INST}/dropbear2016-bin-arm64"
+            _dbkey_url="${_REPO_INST}/dropbearkey2016-bin-arm64"
+        else
+            _db_url="${_REPO_INST}/dropbear2016-bin-amd64"
+            _dbkey_url="${_REPO_INST}/dropbearkey2016-bin-amd64"
+        fi
+
+        wget -q --timeout=60 -O "${dir_inst}/sbin/dropbear" "$_db_url"
+        wget -q --timeout=60 -O "${dir_inst}/bin/dropbearkey" "$_dbkey_url"
+
+        if [[ ! -s "${dir_inst}/sbin/dropbear" ]]; then
+            echo -e "\033[1;31m⚠ No se pudo descargar el binario precompilado.\033[0m"
+            echo -e "\033[1;33mSuba manualmente los binarios a ${dir_inst}/sbin/ e intente de nuevo.\033[0m"
+            sleep 3; fun_conexao; return
+        fi
+        chmod +x "${dir_inst}/sbin/dropbear" "${dir_inst}/bin/dropbearkey"
+        echo -e "\033[1;32m✓ Binario Dropbear $ver instalado\033[0m"
+    else
+        # Compilar desde fuente (funciona en Ubuntu 18-25 para todos, Ubuntu 26+ para 2020/2022)
+        echo -e "\033[1;33mCompilando Dropbear $ver... (~3-5 min)\033[0m"
+        apt-get update -y >/dev/null 2>&1
+        apt-get install -y make gcc wget zlib1g-dev build-essential >/dev/null 2>&1
+
+        cd /usr/src
+
+        if [[ ! -s "$tarball" ]]; then
+            echo -e "\033[1;33mDescargando $tarball...\033[0m"
+            wget -q --timeout=90 "${_REPO_INST}/${tarball}" -O "$tarball"
+        fi
+
+        if [[ ! -s "$tarball" ]]; then
+            echo -e "\033[1;31mNo se pudo descargar $tarball\033[0m"
+            sleep 3; fun_conexao; return
+        fi
+
+        rm -rf "dropbear-${ver}" 2>/dev/null
+        tar xjf "$tarball"
+        cd "dropbear-${ver}"
+
+        # Cambiar identificador SSH visible
+        for hdr in sysoptions.h default_options.h; do
+            [[ -f "$hdr" ]] && {
+                sed -i 's|^#define LOCAL_IDENT.*|#define LOCAL_IDENT "SSH-2.0-ByJuanitoProSniff"|' "$hdr" 2>/dev/null
+                sed -i 's/SSH-2.0-dropbear/SSH-2.0-ByJuanitoProSniff/g' "$hdr" 2>/dev/null
+            }
+        done
+
+        ./configure --prefix="$dir_inst" \
+            --disable-zlib \
+            --disable-wtmp \
+            --disable-lastlog >/dev/null 2>&1
+
+        if make -j$(nproc) PROGRAMS="dropbear dropbearkey" >/dev/null 2>&1; then
+            make install PROGRAMS="dropbear dropbearkey" >/dev/null 2>&1
+        else
+            echo -e "\033[1;31m⚠ ERROR: No se pudo compilar Dropbear $ver\033[0m"
+            cd /root; sleep 3; fun_conexao; return
+        fi
+
+        if [[ ! -f "${dir_inst}/sbin/dropbear" ]]; then
+            echo -e "\033[1;31m⚠ ERROR: Binario no encontrado tras compilación.\033[0m"
+            cd /root; sleep 3; fun_conexao; return
+        fi
+        echo -e "\033[1;32m✓ Dropbear $ver compilado exitosamente\033[0m"
+    fi
+
+    # Crear directorio de config y generar claves SSH
+    mkdir -p "$dir_conf"
+
+    [[ ! -f "${dir_conf}/dropbear_rsa_host_key" ]] && \
+        "${dir_inst}/bin/dropbearkey" -t rsa \
+            -f "${dir_conf}/dropbear_rsa_host_key" -s 2048 >/dev/null 2>&1
+
+    # DSS solo si lo soporta esta versión (2016 sí, 2020+ puede no tenerlo)
+    "${dir_inst}/bin/dropbearkey" -t dss \
+        -f "${dir_conf}/dropbear_dss_host_key" >/dev/null 2>&1 || true
+
+    cat > "${dir_conf}/banner.txt" <<'BANEOF'
+t.me/FREEINTERNETVPNMSY
+BANEOF
+
+    # Crear servicio systemd
+    cat > "/etc/systemd/system/${servicio}.service" <<DBEOF
+[Unit]
+Description=Dropbear SSH ${ver} - Puerto ${porta}
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=${dir_inst}/sbin/dropbear -F -E -p ${porta} -r ${dir_conf}/dropbear_rsa_host_key -b ${dir_conf}/banner.txt -K 60 -I 300
+ExecReload=/bin/kill -HUP \$MAINPID
+Restart=always
+RestartSec=3
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target
+DBEOF
+
+    systemctl daemon-reload
+    systemctl enable "$servicio" >/dev/null 2>&1
+    systemctl start "$servicio"
+    _fw_open "$porta"
+
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "Versión Dropbear $ver instalada:"
+    "${dir_inst}/sbin/dropbear" -V 2>&1 | head -n 1
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    sleep 1
+
+    if systemctl is-active "$servicio" >/dev/null 2>&1; then
+        echo -e "\n\033[1;32m✓ DROPBEAR $ver ACTIVO EN PUERTO $porta!\033[0m"
+    else
+        echo -e "\n\033[1;33mVerifique con: systemctl status $servicio\033[0m"
+    fi
+    cd /root; sleep 3; fun_conexao
+}
+
+# ============================================================
+# TURBO VPN — BBR + Buffers TCP + Compresión SSH (zlib)
+# ============================================================
+fun_turbo_vpn() {
+    while true; do
+        clear
+        echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
+        echo -e "\033[0;34m┃\E[42;1;37m         TURBO VPN — POTENCIAR VPS       \E[0m\033[0;34m┃"
+        echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
+
+        # Detectar estado actual de cada opción
+        local bbr_sts comp_sts buf_sts
+        sysctl net.ipv4.tcp_congestion_control 2>/dev/null | grep -q "bbr" \
+            && bbr_sts="\033[1;32m✓ ACTIVO " || bbr_sts="\033[1;31m✕ INACTIVO"
+        grep -q "^Compression yes" /etc/ssh/sshd_config 2>/dev/null \
+            && comp_sts="\033[1;32m✓ ACTIVO " || comp_sts="\033[1;31m✕ INACTIVO"
+        grep -q "^net.core.rmem_max=26214400" /etc/sysctl.conf 2>/dev/null \
+            && buf_sts="\033[1;32m✓ ACTIVO " || buf_sts="\033[1;31m✕ INACTIVO"
+
+        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m1\033[1;31m] \033[1;33mSSH COMPRESIÓN (zlib)  $comp_sts\033[0;34m┃"
+        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m2\033[1;31m] \033[1;33mBBR (Control TCP)      $bbr_sts\033[0;34m┃"
+        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m3\033[1;31m] \033[1;33mBUFFERS DE RED         $buf_sts\033[0;34m┃"
+        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m4\033[1;31m] \033[1;32mACTIVAR TODO  ◄ RECOMENDADO     \033[0;34m┃"
+        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m5\033[1;31m] \033[1;31mDESACTIVAR TODO (restaurar)     \033[0;34m┃"
+        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m6\033[1;31m] \033[1;33mVER ESTADO ACTUAL                \033[0;34m┃"
+        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m0\033[1;31m] \033[1;33mVOLVER                           \033[0;34m┃"
+        echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
+        echo -ne "\033[1;32mOpción: \033[1;37m"; read resp_turbo
+
+        case $resp_turbo in
+        1|01) _turbo_compresion ;;
+        2|02) _turbo_bbr ;;
+        3|03) _turbo_buffers ;;
+        4|04) _turbo_todo_activar ;;
+        5|05) _turbo_todo_desactivar ;;
+        6|06) _turbo_ver_estado; echo -ne "\n\033[1;33mPresiona ENTER...\033[0m"; read ;;
+        0|00) fun_conexao; return ;;
+        *) echo -e "\033[1;31mOpción inválida!\033[0m"; sleep 1 ;;
+        esac
+    done
+}
+
+_turbo_compresion() {
+    if grep -q "^Compression yes" /etc/ssh/sshd_config 2>/dev/null; then
+        sed -i '/^Compression/d' /etc/ssh/sshd_config
+        echo "Compression no" >> /etc/ssh/sshd_config
+        systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null
+        echo -e "\n\033[1;33m✓ Compresión SSH DESACTIVADA\033[0m"
+    else
+        sed -i '/^Compression/d' /etc/ssh/sshd_config
+        echo "Compression yes" >> /etc/ssh/sshd_config
+        systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null
+        echo -e "\n\033[1;32m✓ Compresión SSH (zlib) ACTIVADA\033[0m"
+        echo -e "\033[1;37m  Reduce tráfico en redes lentas. En redes rápidas puede sumar latencia.\033[0m"
+    fi
+    sleep 2
+}
+
+_turbo_bbr() {
+    if sysctl net.ipv4.tcp_congestion_control 2>/dev/null | grep -q "bbr"; then
+        sed -i '/net.core.default_qdisc/d' /etc/sysctl.conf
+        sed -i '/net.ipv4.tcp_congestion_control/d' /etc/sysctl.conf
+        sysctl -p >/dev/null 2>&1
+        echo -e "\n\033[1;33m✓ BBR DESACTIVADO — restaurado a cubic\033[0m"
+    else
+        if ! modprobe tcp_bbr 2>/dev/null; then
+            echo -e "\n\033[1;31m✗ Kernel no soporta BBR (requiere Linux 4.9+)\033[0m"
+            echo -e "\033[1;33m  Kernel actual: $(uname -r)\033[0m"
+            sleep 3; return
+        fi
+        sed -i '/net.core.default_qdisc/d' /etc/sysctl.conf
+        sed -i '/net.ipv4.tcp_congestion_control/d' /etc/sysctl.conf
+        echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
+        echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
+        sysctl -p >/dev/null 2>&1
+        echo -e "\n\033[1;32m✓ BBR ACTIVADO\033[0m"
+        echo -e "\033[1;37m  Mejora velocidad y estabilidad con múltiples clientes simultáneos.\033[0m"
+    fi
+    sleep 2
+}
+
+_turbo_buffers() {
+    if grep -q "^net.core.rmem_max=26214400" /etc/sysctl.conf 2>/dev/null; then
+        sed -i '/net.core.rmem_max/d;/net.core.wmem_max/d;/net.core.rmem_default/d' /etc/sysctl.conf
+        sed -i '/net.core.wmem_default/d;/net.ipv4.tcp_rmem/d;/net.ipv4.tcp_wmem/d' /etc/sysctl.conf
+        sed -i '/net.ipv4.tcp_mem/d;/net.core.netdev_max_backlog/d' /etc/sysctl.conf
+        sed -i '/net.ipv4.tcp_no_metrics_save/d;/net.ipv4.tcp_window_scaling/d' /etc/sysctl.conf
+        sed -i '/# MSYVPN Buffers/d' /etc/sysctl.conf
+        sysctl -p >/dev/null 2>&1
+        echo -e "\n\033[1;33m✓ Buffers RESTAURADOS a valores del sistema\033[0m"
+    else
+        # Limpiar antes de agregar para evitar duplicados
+        sed -i '/net.core.rmem_max/d;/net.core.wmem_max/d;/net.core.rmem_default/d' /etc/sysctl.conf
+        sed -i '/net.core.wmem_default/d;/net.ipv4.tcp_rmem/d;/net.ipv4.tcp_wmem/d' /etc/sysctl.conf
+        sed -i '/net.ipv4.tcp_mem/d;/net.core.netdev_max_backlog/d' /etc/sysctl.conf
+        sed -i '/net.ipv4.tcp_no_metrics_save/d;/net.ipv4.tcp_window_scaling/d' /etc/sysctl.conf
+        sed -i '/# MSYVPN Buffers/d' /etc/sysctl.conf
+        cat >> /etc/sysctl.conf <<'BUFEOF'
+# MSYVPN Buffers
+net.core.rmem_max=26214400
+net.core.wmem_max=26214400
+net.core.rmem_default=1048576
+net.core.wmem_default=1048576
+net.ipv4.tcp_rmem=4096 1048576 26214400
+net.ipv4.tcp_wmem=4096 1048576 26214400
+net.ipv4.tcp_mem=65536 131072 262144
+net.core.netdev_max_backlog=5000
+net.ipv4.tcp_no_metrics_save=1
+net.ipv4.tcp_window_scaling=1
+BUFEOF
+        sysctl -p >/dev/null 2>&1
+        echo -e "\n\033[1;32m✓ Buffers OPTIMIZADOS (25 MB max rmem/wmem)\033[0m"
+        echo -e "\033[1;37m  Permite manejar mejor múltiples túneles VPN simultáneos.\033[0m"
+    fi
+    sleep 2
+}
+
+_turbo_todo_activar() {
+    echo -e "\n\033[1;33m[ TURBO ] Activando todo...\033[0m\n"
+
+    sed -i '/^Compression/d' /etc/ssh/sshd_config
+    echo "Compression yes" >> /etc/ssh/sshd_config
+    systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null
+    echo -e "\033[1;32m  ✓ Compresión SSH (zlib) activada\033[0m"
+
+    if modprobe tcp_bbr 2>/dev/null; then
+        sed -i '/net.core.default_qdisc/d;/net.ipv4.tcp_congestion_control/d' /etc/sysctl.conf
+        echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
+        echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
+        echo -e "\033[1;32m  ✓ BBR activado\033[0m"
+    else
+        echo -e "\033[1;31m  ✗ BBR no disponible (kernel $(uname -r) < 4.9)\033[0m"
+    fi
+
+    sed -i '/net.core.rmem_max/d;/net.core.wmem_max/d;/net.core.rmem_default/d' /etc/sysctl.conf
+    sed -i '/net.core.wmem_default/d;/net.ipv4.tcp_rmem/d;/net.ipv4.tcp_wmem/d' /etc/sysctl.conf
+    sed -i '/net.ipv4.tcp_mem/d;/net.core.netdev_max_backlog/d' /etc/sysctl.conf
+    sed -i '/net.ipv4.tcp_no_metrics_save/d;/net.ipv4.tcp_window_scaling/d' /etc/sysctl.conf
+    sed -i '/# MSYVPN Buffers/d' /etc/sysctl.conf
+    cat >> /etc/sysctl.conf <<'BUFEOF'
+# MSYVPN Buffers
+net.core.rmem_max=26214400
+net.core.wmem_max=26214400
+net.core.rmem_default=1048576
+net.core.wmem_default=1048576
+net.ipv4.tcp_rmem=4096 1048576 26214400
+net.ipv4.tcp_wmem=4096 1048576 26214400
+net.ipv4.tcp_mem=65536 131072 262144
+net.core.netdev_max_backlog=5000
+net.ipv4.tcp_no_metrics_save=1
+net.ipv4.tcp_window_scaling=1
+BUFEOF
+    echo -e "\033[1;32m  ✓ Buffers optimizados\033[0m"
+
+    sysctl -p >/dev/null 2>&1
+    echo -e "\n\033[1;32m✓ TURBO VPN ACTIVADO — VPS lista para máxima velocidad!\033[0m"
+    sleep 3
+}
+
+_turbo_todo_desactivar() {
+    sed -i '/^Compression/d' /etc/ssh/sshd_config
+    echo "Compression no" >> /etc/ssh/sshd_config
+    systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null
+
+    sed -i '/net.core.default_qdisc/d;/net.ipv4.tcp_congestion_control/d' /etc/sysctl.conf
+    sed -i '/net.core.rmem_max/d;/net.core.wmem_max/d;/net.core.rmem_default/d' /etc/sysctl.conf
+    sed -i '/net.core.wmem_default/d;/net.ipv4.tcp_rmem/d;/net.ipv4.tcp_wmem/d' /etc/sysctl.conf
+    sed -i '/net.ipv4.tcp_mem/d;/net.core.netdev_max_backlog/d' /etc/sysctl.conf
+    sed -i '/net.ipv4.tcp_no_metrics_save/d;/net.ipv4.tcp_window_scaling/d' /etc/sysctl.conf
+    sed -i '/# MSYVPN Buffers/d' /etc/sysctl.conf
+    sysctl -p >/dev/null 2>&1
+    echo -e "\n\033[1;33m✓ TURBO VPN DESACTIVADO — configuración original restaurada.\033[0m"
+    sleep 2
+}
+
+_turbo_ver_estado() {
+    clear
+    echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
+    echo -e "\033[0;34m┃\E[44;1;37m        TURBO VPN — ESTADO ACTUAL        \E[0m\033[0;34m┃"
+    echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
+    echo ""
+    echo -e "\033[1;33m── KERNEL ──────────────────────────────────\033[0m"
+    echo -e "  Versión  : $(uname -r)"
+    echo -e "  BBR      : $(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)"
+    echo -e "  qdisc    : $(sysctl -n net.core.default_qdisc 2>/dev/null)"
+    echo -e "\033[1;33m── SSH ─────────────────────────────────────\033[0m"
+    echo -e "  Compresión: $(grep '^Compression' /etc/ssh/sshd_config 2>/dev/null || echo 'no configurado')"
+    echo -e "\033[1;33m── BUFFERS TCP ─────────────────────────────\033[0m"
+    echo -e "  rmem_max : $(sysctl -n net.core.rmem_max 2>/dev/null)"
+    echo -e "  wmem_max : $(sysctl -n net.core.wmem_max 2>/dev/null)"
+    echo -e "  tcp_rmem : $(sysctl -n net.ipv4.tcp_rmem 2>/dev/null)"
+    echo -e "  tcp_wmem : $(sysctl -n net.ipv4.tcp_wmem 2>/dev/null)"
+    echo -e "  backlog  : $(sysctl -n net.core.netdev_max_backlog 2>/dev/null)"
+    echo ""
 }
 
 # ============================================================
@@ -157,114 +497,191 @@ fun_openssh() {
 }
 
 # ============================================================
-# FUNCIÓN INTERNA: Compilar o instalar un Dropbear desde fuente
-# $1=versión (ej: 2016.74) $2=puerto $3=servicio $4=directorio
+# DROPBEAR 2016.74 / 2020.81 / 2022.83
+# Compatible: Ubuntu 18 / 20 / 22 / 24 / 25 / 26+
 # ============================================================
-_instalar_dropbear_generico() {
-    local ver="$1" porta="$2" servicio="$3" directorio="$4"
-    local tarball="dropbear-${ver}.tar.bz2"
-    local url_src="${_REPO_INST}/${tarball}"
-    local dir_inst="/opt/${directorio}"
-    local dir_conf="/etc/${directorio}"
+fun_inst_dropbear2016() {
+    clear
+    echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
+    echo -e "\033[0;34m┃\E[44;1;37m        INSTALAR DROPBEAR 2016.74        \E[0m\033[0;34m┃"
+    echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
+    echo -e "\n\033[1;37mUbuntu: $_UBUNTU_VER  GCC: $_GCC_VER\033[0m"
+    echo -ne "\033[1;32mPUERTO (defecto 143): \033[1;37m"; read porta_db16; [[ -z "$porta_db16" ]] && porta_db16=143
+    verif_ptrs $porta_db16
 
-    verif_ptrs "$porta"
-
-    # Ubuntu 26+ → binario precompilado para 2016
-    # Para 2020 y 2022 compilamos (GCC los soporta bien)
-    if [[ $_UBUNTU_VER -ge 26 && "$ver" == "2016.74" ]]; then
-        echo -e "\033[1;33mUbuntu $_UBUNTU_VER → instalando binario precompilado Dropbear $ver...\033[0m"
-        apt-get install -y wget >/dev/null 2>&1
-        mkdir -p "${dir_inst}/sbin" "${dir_inst}/bin" "$dir_conf"
-
-        local _db_url _dbkey_url
-        if [[ "$_ARCH" == "arm64" ]]; then
-            _db_url="${_REPO_INST}/dropbear2016-bin-arm64"
-            _dbkey_url="${_REPO_INST}/dropbearkey2016-bin-arm64"
-        else
-            _db_url="${_REPO_INST}/dropbear2016-bin-amd64"
-            _dbkey_url="${_REPO_INST}/dropbearkey2016-bin-amd64"
-        fi
-
-        wget -q --timeout=60 -O "${dir_inst}/sbin/dropbear" "$_db_url"
-        wget -q --timeout=60 -O "${dir_inst}/bin/dropbearkey" "$_dbkey_url"
-
-        if [[ ! -s "${dir_inst}/sbin/dropbear" ]]; then
-            echo -e "\033[1;31m⚠ No se pudo descargar el binario precompilado.\033[0m"
-            sleep 3; fun_conexao; return
-        fi
-        chmod +x "${dir_inst}/sbin/dropbear" "${dir_inst}/bin/dropbearkey"
-    else
-        echo -e "\033[1;33mCompilando Dropbear $ver... (~3-5 min)\033[0m"
+    # ── Ubuntu 26+: GCC 14 no compila Dropbear 2016 ──────────
+    # Se descarga el binario precompilado oficial de Dropbear 2016.74
+    # y se instala directamente sin compilar.
+    if [[ $_UBUNTU_VER -ge 26 ]]; then
+        echo -e "\033[1;33mUbuntu $_UBUNTU_VER detectado — instalando binario precompilado Dropbear 2016.74...\033[0m"
         apt-get update -y >/dev/null 2>&1
-        apt-get install -y make gcc wget zlib1g-dev build-essential >/dev/null 2>&1
+        apt-get install -y wget >/dev/null 2>&1
+        mkdir -p /opt/dropbear-2016/sbin /opt/dropbear-2016/bin /etc/dropbear-legacy
 
-        cd /usr/src
-        if [[ ! -s "$tarball" ]]; then
-            echo -e "\033[1;33mDescargando fuente $tarball...\033[0m"
-            wget -q --timeout=90 "${url_src}" -O "$tarball"
+        # Binario precompilado de Dropbear 2016.74 para amd64/arm64
+        # alojado en el mismo repo del script
+        _db_bin_url_amd64="https://github.com/juanitoprosniff/script_msyvpn/raw/refs/heads/main/installer/dropbear2016-bin-amd64"
+        _db_bin_url_arm64="https://github.com/juanitoprosniff/script_msyvpn/raw/refs/heads/main/installer/dropbear2016-bin-arm64"
+        _dbkey_bin_url_amd64="https://github.com/juanitoprosniff/script_msyvpn/raw/refs/heads/main/installer/dropbearkey2016-bin-amd64"
+        _dbkey_bin_url_arm64="https://github.com/juanitoprosniff/script_msyvpn/raw/refs/heads/main/installer/dropbearkey2016-bin-arm64"
+
+        if [[ "$_ARCH" == "arm64" ]]; then
+            _db_url="$_db_bin_url_arm64"
+            _dbkey_url="$_dbkey_bin_url_arm64"
+        else
+            _db_url="$_db_bin_url_amd64"
+            _dbkey_url="$_dbkey_bin_url_amd64"
         fi
 
-        if [[ ! -s "$tarball" ]]; then
-            echo -e "\033[1;31mNo se pudo descargar $tarball\033[0m"
-            echo -e "\033[1;33mURL: ${url_src}\033[0m"
+        echo "Descargando binario dropbear 2016.74 ($_ARCH)..."
+        wget -q --timeout=60 -O /opt/dropbear-2016/sbin/dropbear "$_db_url"
+        wget -q --timeout=60 -O /opt/dropbear-2016/bin/dropbearkey "$_dbkey_url"
+
+        if [[ ! -s /opt/dropbear-2016/sbin/dropbear ]]; then
+            echo -e "\033[1;31m⚠ No se pudo descargar el binario precompilado.\033[0m"
+            echo -e "\033[1;33mSuba manualmente los binarios a /opt/dropbear-2016/sbin/ e intente de nuevo.\033[0m"
             sleep 3; fun_conexao; return
         fi
 
-        rm -rf "dropbear-${ver}" 2>/dev/null
-        tar xjf "$tarball"
-        cd "dropbear-${ver}"
+        chmod +x /opt/dropbear-2016/sbin/dropbear
+        chmod +x /opt/dropbear-2016/bin/dropbearkey
+        echo -e "\033[1;32m✓ Binario Dropbear 2016.74 instalado\033[0m"
 
-        # Modificar identificador SSH
-        for hdr in sysoptions.h default_options.h; do
-            [[ -f "$hdr" ]] && {
-                sed -i 's|^#define LOCAL_IDENT.*|#define LOCAL_IDENT "SSH-2.0-ByJuanitoProSniff"|' "$hdr" 2>/dev/null
-                sed -i 's/SSH-2.0-dropbear/SSH-2.0-ByJuanitoProSniff/g' "$hdr" 2>/dev/null
-            }
-        done
+        echo "Generando llaves SSH para Dropbear 2016..."
+        [[ ! -f /etc/dropbear-legacy/dropbear_rsa_host_key ]] && \
+            /opt/dropbear-2016/bin/dropbearkey -t rsa \
+                -f /etc/dropbear-legacy/dropbear_rsa_host_key -s 2048
 
-        ./configure --prefix="$dir_inst" \
-            --disable-zlib \
-            --disable-wtmp \
-            --disable-lastlog >/dev/null 2>&1
-
-        if make -j$(nproc) PROGRAMS="dropbear dropbearkey" >/dev/null 2>&1; then
-            make install PROGRAMS="dropbear dropbearkey" >/dev/null 2>&1
-        else
-            echo -e "\033[1;31m⚠ ERROR: No se pudo compilar Dropbear $ver\033[0m"
-            cd /root; sleep 3; fun_conexao; return
-        fi
-
-        if [[ ! -f "${dir_inst}/sbin/dropbear" ]]; then
-            echo -e "\033[1;31m⚠ ERROR: Binario no encontrado tras compilación.\033[0m"
-            cd /root; sleep 3; fun_conexao; return
-        fi
-        echo -e "\033[1;32m✓ Dropbear $ver compilado exitosamente\033[0m"
-    fi
-
-    # Crear directorio de configuración y claves
-    mkdir -p "$dir_conf"
-
-    [[ ! -f "${dir_conf}/dropbear_rsa_host_key" ]] && \
-        "${dir_inst}/bin/dropbearkey" -t rsa \
-            -f "${dir_conf}/dropbear_rsa_host_key" -s 2048 >/dev/null 2>&1
-
-    [[ ! -f "${dir_conf}/dropbear_dss_host_key" ]] && \
-        "${dir_inst}/bin/dropbearkey" -t dss \
-            -f "${dir_conf}/dropbear_dss_host_key" >/dev/null 2>&1 || true
-
-    cat > "${dir_conf}/banner.txt" <<'BANEOF'
+        cat > /etc/dropbear-legacy/banner.txt <<'BANEOF'
 t.me/FREEINTERNETVPNMSY
 BANEOF
 
-    cat > "/etc/systemd/system/${servicio}.service" <<DBEOF
+        cat > /etc/systemd/system/dropbear-legacy.service <<DBEOF
 [Unit]
-Description=Dropbear SSH ${ver} - Puerto ${porta}
+Description=Dropbear SSH Legacy 2016.74 - Puerto $porta_db16
 After=network.target
 Wants=network.target
 
 [Service]
 Type=simple
-ExecStart=${dir_inst}/sbin/dropbear -F -E -p ${porta} -r ${dir_conf}/dropbear_rsa_host_key -b ${dir_conf}/banner.txt -K 60 -I 300
+ExecStart=/opt/dropbear-2016/sbin/dropbear -F -E -p $porta_db16 -r /etc/dropbear-legacy/dropbear_rsa_host_key -b /etc/dropbear-legacy/banner.txt -K 60 -I 300
+ExecReload=/bin/kill -HUP \$MAINPID
+Restart=always
+RestartSec=3
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target
+DBEOF
+
+        systemctl daemon-reload
+        systemctl enable dropbear-legacy
+        systemctl start dropbear-legacy
+        _fw_open $porta_db16
+
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "Versión de Dropbear 2016 instalada:"
+        /opt/dropbear-2016/sbin/dropbear -V 2>&1 | head -n 1
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        sleep 1
+        if systemctl is-active dropbear-legacy >/dev/null 2>&1; then
+            echo -e "\n\033[1;32m✓ DROPBEAR 2016.74 ACTIVO EN PUERTO $porta_db16!\033[0m"
+        else
+            echo -e "\n\033[1;33mVerifique con: systemctl status dropbear-legacy\033[0m"
+        fi
+        cd /root; sleep 3; fun_conexao; return
+    fi
+    # ── Fin bloque Ubuntu 26+ ─────────────────────────────────
+
+    echo -e "\033[1;33mCompilación: ~3-5 minutos.\033[0m"
+
+    echo -e "\n\033[1;32mInstalando dependencias...\033[0m"
+    apt-get update -y >/dev/null 2>&1
+    apt-get install -y make gcc wget zlib1g-dev build-essential >/dev/null 2>&1
+
+    echo "=========================================="
+    echo "Compilando Dropbear 2016.74 desde fuente..."
+    echo "Esto puede tardar unos minutos..."
+    echo "=========================================="
+
+    cd /usr/src
+
+    if [[ ! -f dropbear-2016.74.tar.bz2 ]] || [[ ! -s dropbear-2016.74.tar.bz2 ]]; then
+        echo "Descargando Dropbear 2016.74..."
+        wget -q --timeout=60 \
+            https://github.com/juanitoprosniff/script_msyvpn/raw/refs/heads/main/installer/dropbear-2016.74.tar.bz2
+    fi
+
+    if [[ ! -s dropbear-2016.74.tar.bz2 ]]; then
+        echo -e "\033[1;31mNo se pudo descargar el fuente.\033[0m"
+        echo -e "\033[1;33mSuba manualmente dropbear-2016.74.tar.bz2 a /usr/src/ e intente de nuevo.\033[0m"
+        sleep 3; fun_conexao; return
+    fi
+
+    echo "Extrayendo archivos..."
+    rm -rf dropbear-2016.74 2>/dev/null
+    tar xjf dropbear-2016.74.tar.bz2
+    cd dropbear-2016.74
+
+    echo "Modificando identificador SSH..."
+    if [[ -f sysoptions.h ]]; then
+        sed -i 's|^#define LOCAL_IDENT.*|#define LOCAL_IDENT "SSH-2.0-ByJuanitoProSniff"|' sysoptions.h 2>/dev/null || true
+        echo "✓ Modificado en sysoptions.h"
+    elif [[ -f default_options.h ]]; then
+        sed -i 's/#define LOCAL_IDENT "SSH-2.0-dropbear_" DROPBEAR_VERSION/#define LOCAL_IDENT "SSH-2.0-ByJuanitoProSniff"/' default_options.h 2>/dev/null || true
+        sed -i 's/SSH-2.0-dropbear/SSH-2.0-ByJuanitoProSniff/g' default_options.h 2>/dev/null || true
+        echo "✓ Modificado en default_options.h"
+    fi
+
+    echo "Configurando compilación..."
+    ./configure --prefix=/opt/dropbear-2016 \
+        --disable-zlib \
+        --disable-wtmp \
+        --disable-lastlog
+
+    echo "Compilando... (puede tardar 2-3 minutos)"
+    if make -j$(nproc) PROGRAMS="dropbear dropbearkey"; then
+        echo "Instalando..."
+        make install PROGRAMS="dropbear dropbearkey"
+    else
+        echo -e "\033[1;31m⚠ ERROR: No se pudo compilar Dropbear 2016\033[0m"
+        echo -e "\033[1;33mContinuando sin Dropbear Legacy...\033[0m"
+        cd /root; sleep 3; fun_conexao; return
+    fi
+
+    if [[ ! -f /opt/dropbear-2016/sbin/dropbear ]]; then
+        echo -e "\033[1;31m⚠ ERROR: Binario no encontrado tras compilación.\033[0m"
+        cd /root; sleep 3; fun_conexao; return
+    fi
+
+    echo "✓ Dropbear 2016.74 compilado exitosamente"
+
+    mkdir -p /etc/dropbear-legacy
+
+    echo "Generando llaves SSH para Dropbear 2016..."
+    [[ ! -f /etc/dropbear-legacy/dropbear_rsa_host_key ]] && \
+        /opt/dropbear-2016/bin/dropbearkey -t rsa \
+            -f /etc/dropbear-legacy/dropbear_rsa_host_key -s 2048
+
+    [[ ! -f /etc/dropbear-legacy/dropbear_dss_host_key ]] && \
+        /opt/dropbear-2016/bin/dropbearkey -t dss \
+            -f /etc/dropbear-legacy/dropbear_dss_host_key
+
+    cat > /etc/dropbear-legacy/banner.txt <<'BANEOF'
+t.me/FREEINTERNETVPNMSY
+BANEOF
+
+    cat > /etc/systemd/system/dropbear-legacy.service <<DBEOF
+[Unit]
+Description=Dropbear SSH Legacy 2016.74 - Puerto $porta_db16
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=/opt/dropbear-2016/sbin/dropbear -F -E -p $porta_db16 -r /etc/dropbear-legacy/dropbear_rsa_host_key -d /etc/dropbear-legacy/dropbear_dss_host_key -b /etc/dropbear-legacy/banner.txt -K 60 -I 300
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=always
 RestartSec=3
@@ -275,88 +692,69 @@ WantedBy=multi-user.target
 DBEOF
 
     systemctl daemon-reload
-    systemctl enable "$servicio" >/dev/null 2>&1
-    systemctl start "$servicio"
-    _fw_open "$porta"
+    systemctl enable dropbear-legacy
+    systemctl start dropbear-legacy
+
+    _fw_open $porta_db16
 
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "Versión Dropbear $ver instalada:"
-    "${dir_inst}/sbin/dropbear" -V 2>&1 | head -n 1
+    echo "Versión de Dropbear 2016 instalada:"
+    /opt/dropbear-2016/sbin/dropbear -V 2>&1 | head -n 1
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
 
     sleep 1
-    if systemctl is-active "$servicio" >/dev/null 2>&1; then
-        echo -e "\n\033[1;32m✓ DROPBEAR $ver ACTIVO EN PUERTO $porta!\033[0m"
+    if systemctl is-active dropbear-legacy >/dev/null 2>&1; then
+        echo -e "\n\033[1;32m✓ DROPBEAR 2016.74 ACTIVO EN PUERTO $porta_db16!\033[0m"
     else
-        echo -e "\n\033[1;33mVerifique con: systemctl status $servicio\033[0m"
+        echo -e "\n\033[1;33mVerifique con: systemctl status dropbear-legacy\033[0m"
     fi
-    cd /root; sleep 3; fun_conexao
+
+    cd /root
+    sleep 3; fun_conexao
 }
 
-# ============================================================
-# DROPBEAR 2016.74
-# ============================================================
-fun_inst_dropbear2016() {
-    clear
-    echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-    echo -e "\033[0;34m┃\E[44;1;37m        INSTALAR DROPBEAR 2016.74        \E[0m\033[0;34m┃"
-    echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
-    echo -e "\n\033[1;37mUbuntu: $_UBUNTU_VER  GCC: $_GCC_VER  ARCH: $_ARCH\033[0m"
-    echo -ne "\033[1;32mPUERTO (defecto 143): \033[1;37m"; read porta_db16
-    [[ -z "$porta_db16" ]] && porta_db16=143
-    _instalar_dropbear_generico "2016.74" "$porta_db16" "dropbear-legacy" "dropbear-2016"
-}
-
-# ============================================================
-# DROPBEAR 2020.81
-# ============================================================
 fun_inst_dropbear2020() {
     clear
     echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
     echo -e "\033[0;34m┃\E[44;1;37m        INSTALAR DROPBEAR 2020.81        \E[0m\033[0;34m┃"
     echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
     echo -e "\n\033[1;37mUbuntu: $_UBUNTU_VER  GCC: $_GCC_VER  ARCH: $_ARCH\033[0m"
-    echo -ne "\033[1;32mPUERTO (defecto 444): \033[1;37m"; read porta_db20
-    [[ -z "$porta_db20" ]] && porta_db20=444
-    _instalar_dropbear_generico "2020.81" "$porta_db20" "dropbear-2020" "dropbear-2020"
+    echo -ne "\033[1;32mPUERTO (defecto 144): \033[1;37m"; read porta_db20
+    [[ -z "$porta_db20" ]] && porta_db20=144
+    _instalar_dropbear "2020.81" "$porta_db20" "dropbear-2020" "dropbear-2020"
 }
 
-# ============================================================
-# DROPBEAR 2022.83
-# ============================================================
 fun_inst_dropbear2022() {
     clear
     echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
     echo -e "\033[0;34m┃\E[44;1;37m        INSTALAR DROPBEAR 2022.83        \E[0m\033[0;34m┃"
     echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
     echo -e "\n\033[1;37mUbuntu: $_UBUNTU_VER  GCC: $_GCC_VER  ARCH: $_ARCH\033[0m"
-    echo -ne "\033[1;32mPUERTO (defecto 8022): \033[1;37m"; read porta_db22
-    [[ -z "$porta_db22" ]] && porta_db22=8022
-    _instalar_dropbear_generico "2022.83" "$porta_db22" "dropbear-2022" "dropbear-2022"
+    echo -ne "\033[1;32mPUERTO (defecto 145): \033[1;37m"; read porta_db22
+    [[ -z "$porta_db22" ]] && porta_db22=145
+    _instalar_dropbear "2022.83" "$porta_db22" "dropbear-2022" "dropbear-2022"
 }
 
-# ============================================================
-# MENÚ DROPBEAR — Selección de versión
-# ============================================================
 fun_menu_dropbear() {
     while true; do
         clear
         echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-        echo -e "\033[0;34m┃\E[44;1;37m            DROPBEAR — VERSIONES         \E[0m\033[0;34m┃"
+        echo -e "\033[0;34m┃\E[44;1;37m          DROPBEAR — SELECCIONAR         \E[0m\033[0;34m┃"
         echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
 
-        local db16sts db20sts db22sts
+        local s16 s20 s22
         systemctl is-active dropbear-legacy >/dev/null 2>&1 \
-            && db16sts="\033[1;32m✓ ACTIVO" || db16sts="\033[1;31m✕ INACTIVO"
+            && s16="\033[1;32m✓" || s16="\033[1;31m✕"
         systemctl is-active dropbear-2020 >/dev/null 2>&1 \
-            && db20sts="\033[1;32m✓ ACTIVO" || db20sts="\033[1;31m✕ INACTIVO"
+            && s20="\033[1;32m✓" || s20="\033[1;31m✕"
         systemctl is-active dropbear-2022 >/dev/null 2>&1 \
-            && db22sts="\033[1;32m✓ ACTIVO" || db22sts="\033[1;31m✕ INACTIVO"
+            && s22="\033[1;32m✓" || s22="\033[1;31m✕"
 
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m1\033[1;31m] \033[1;33mDROPBEAR 2016.74  $db16sts            \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m2\033[1;31m] \033[1;33mDROPBEAR 2020.81  $db20sts            \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m3\033[1;31m] \033[1;33mDROPBEAR 2022.83  $db22sts            \033[0;34m┃"
+        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m1\033[1;31m] \033[1;33mDROPBEAR 2016.74  (puerto 143)  $s16  \033[0;34m┃"
+        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m2\033[1;31m] \033[1;33mDROPBEAR 2020.81  (puerto 144)  $s20  \033[0;34m┃"
+        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m3\033[1;31m] \033[1;33mDROPBEAR 2022.83  (puerto 145)  $s22  \033[0;34m┃"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m0\033[1;31m] \033[1;33mVOLVER                               \033[0;34m┃"
         echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
         echo -ne "\033[1;32mOpción: \033[1;37m"; read resp_db
@@ -371,318 +769,10 @@ fun_menu_dropbear() {
 }
 
 # ============================================================
-# TURBO VPN — Optimización: Compresión SSH + BBR + Buffers
+# SSL TUNNEL — 3 puertos: 443, 444, 8443
+# Con dispatcher inteligente SSH ↔ WebSocket en mismo puerto
 # ============================================================
-fun_turbo_vpn() {
-    while true; do
-        clear
-        echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-        echo -e "\033[0;34m┃\E[42;1;37m         TURBO VPN — POTENCIAR VPS       \E[0m\033[0;34m┃"
-        echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
 
-        # Detectar estado actual de cada optimización
-        local bbr_sts comp_sts buf_sts
-        local _bbr_act _comp_act _buf_act
-
-        sysctl net.ipv4.tcp_congestion_control 2>/dev/null | grep -q "bbr" \
-            && { bbr_sts="\033[1;32m✓ ACTIVO"; _bbr_act=1; } \
-            || { bbr_sts="\033[1;31m✕ INACTIVO"; _bbr_act=0; }
-
-        grep -q "^Compression yes" /etc/ssh/sshd_config 2>/dev/null \
-            && { comp_sts="\033[1;32m✓ ACTIVO"; _comp_act=1; } \
-            || { comp_sts="\033[1;31m✕ INACTIVO"; _comp_act=0; }
-
-        grep -q "^net.core.rmem_max=26214400" /etc/sysctl.conf 2>/dev/null \
-            && { buf_sts="\033[1;32m✓ ACTIVO"; _buf_act=1; } \
-            || { buf_sts="\033[1;31m✕ INACTIVO"; _buf_act=0; }
-
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m1\033[1;31m] \033[1;33mSSH COMPRESIÓN       $comp_sts     \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m2\033[1;31m] \033[1;33mBBR (Control TCP)    $bbr_sts     \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m3\033[1;31m] \033[1;33mBUFFERS DE RED       $buf_sts     \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m4\033[1;31m] \033[1;32mACTIVAR TODO         (RECOMENDADO)\033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m5\033[1;31m] \033[1;31mDESACTIVAR TODO      (RESTAURAR)  \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m6\033[1;31m] \033[1;33mVER ESTADO DETALLADO               \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m0\033[1;31m] \033[1;33mVOLVER                             \033[0;34m┃"
-        echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
-        echo -ne "\033[1;32mOpción: \033[1;37m"; read resp_turbo
-
-        case $resp_turbo in
-        1|01) _toggle_compresion_ssh ;;
-        2|02) _toggle_bbr ;;
-        3|03) _toggle_buffers ;;
-        4|04) _activar_todo_turbo ;;
-        5|05) _desactivar_todo_turbo ;;
-        6|06) _ver_estado_turbo; echo -ne "\n\033[1;33mPresiona ENTER...\033[0m"; read ;;
-        0|00) fun_conexao; return ;;
-        *) echo -e "\033[1;31mOpción inválida!\033[0m"; sleep 1 ;;
-        esac
-    done
-}
-
-_toggle_compresion_ssh() {
-    if grep -q "^Compression yes" /etc/ssh/sshd_config 2>/dev/null; then
-        sed -i 's/^Compression yes/Compression no/' /etc/ssh/sshd_config
-        sed -i 's/^#Compression.*/Compression no/' /etc/ssh/sshd_config
-        _restart_ssh
-        echo -e "\n\033[1;33m✓ Compresión SSH DESACTIVADA\033[0m"
-    else
-        sed -i '/^Compression/d' /etc/ssh/sshd_config
-        echo "Compression yes" >> /etc/ssh/sshd_config
-        # CompressionLevel 6 = balance velocidad/CPU (1=rápido 9=máximo)
-        sed -i '/^#CompressionLevel/d' /etc/ssh/sshd_config
-        _restart_ssh
-        echo -e "\n\033[1;32m✓ Compresión SSH ACTIVADA (nivel 6 — balance óptimo)\033[0m"
-        echo -e "\033[1;37m  Mejora: tunnels lentos, redes congestionadas\033[0m"
-        echo -e "\033[1;31m  Nota: en redes rápidas puede agregar latencia\033[0m"
-    fi
-    sleep 2
-}
-
-_toggle_bbr() {
-    if sysctl net.ipv4.tcp_congestion_control 2>/dev/null | grep -q "bbr"; then
-        # Restaurar a cubic (default de Linux)
-        sed -i '/net.core.default_qdisc/d' /etc/sysctl.conf
-        sed -i '/net.ipv4.tcp_congestion_control/d' /etc/sysctl.conf
-        sysctl -p >/dev/null 2>&1
-        echo -e "\n\033[1;33m✓ BBR DESACTIVADO — restaurado a cubic\033[0m"
-    else
-        # Verificar soporte del kernel
-        if ! modprobe tcp_bbr 2>/dev/null; then
-            echo -e "\n\033[1;31m✗ Kernel no soporta BBR (requiere Linux 4.9+)\033[0m"
-            echo -e "\033[1;33m  Kernel actual: $(uname -r)\033[0m"
-            sleep 3; return
-        fi
-        sed -i '/net.core.default_qdisc/d' /etc/sysctl.conf
-        sed -i '/net.ipv4.tcp_congestion_control/d' /etc/sysctl.conf
-        echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
-        echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
-        sysctl -p >/dev/null 2>&1
-        echo -e "\n\033[1;32m✓ BBR ACTIVADO\033[0m"
-        echo -e "\033[1;37m  BBR mejora velocidad y estabilidad en redes con pérdida\033[0m"
-        echo -e "\033[1;37m  Ideal para VPN SSH con múltiples clientes simultáneos\033[0m"
-    fi
-    sleep 2
-}
-
-_toggle_buffers() {
-    if grep -q "^net.core.rmem_max=26214400" /etc/sysctl.conf 2>/dev/null; then
-        # Eliminar configuraciones de buffers
-        sed -i '/net.core.rmem_max/d' /etc/sysctl.conf
-        sed -i '/net.core.wmem_max/d' /etc/sysctl.conf
-        sed -i '/net.core.rmem_default/d' /etc/sysctl.conf
-        sed -i '/net.core.wmem_default/d' /etc/sysctl.conf
-        sed -i '/net.ipv4.tcp_rmem/d' /etc/sysctl.conf
-        sed -i '/net.ipv4.tcp_wmem/d' /etc/sysctl.conf
-        sed -i '/net.ipv4.tcp_mem/d' /etc/sysctl.conf
-        sed -i '/net.core.netdev_max_backlog/d' /etc/sysctl.conf
-        sed -i '/net.ipv4.tcp_no_metrics_save/d' /etc/sysctl.conf
-        sed -i '/net.ipv4.tcp_window_scaling/d' /etc/sysctl.conf
-        sysctl -p >/dev/null 2>&1
-        echo -e "\n\033[1;33m✓ Buffers de red RESTAURADOS a valores del sistema\033[0m"
-    else
-        # Eliminar duplicados antes de agregar
-        sed -i '/net.core.rmem_max/d' /etc/sysctl.conf
-        sed -i '/net.core.wmem_max/d' /etc/sysctl.conf
-        sed -i '/net.core.rmem_default/d' /etc/sysctl.conf
-        sed -i '/net.core.wmem_default/d' /etc/sysctl.conf
-        sed -i '/net.ipv4.tcp_rmem/d' /etc/sysctl.conf
-        sed -i '/net.ipv4.tcp_wmem/d' /etc/sysctl.conf
-        sed -i '/net.ipv4.tcp_mem/d' /etc/sysctl.conf
-        sed -i '/net.core.netdev_max_backlog/d' /etc/sysctl.conf
-        sed -i '/net.ipv4.tcp_no_metrics_save/d' /etc/sysctl.conf
-        sed -i '/net.ipv4.tcp_window_scaling/d' /etc/sysctl.conf
-
-        cat >> /etc/sysctl.conf <<'BUFEOF'
-# MSYVPN — Buffers optimizados para VPN SSH
-net.core.rmem_max=26214400
-net.core.wmem_max=26214400
-net.core.rmem_default=1048576
-net.core.wmem_default=1048576
-net.ipv4.tcp_rmem=4096 1048576 26214400
-net.ipv4.tcp_wmem=4096 1048576 26214400
-net.ipv4.tcp_mem=65536 131072 262144
-net.core.netdev_max_backlog=5000
-net.ipv4.tcp_no_metrics_save=1
-net.ipv4.tcp_window_scaling=1
-BUFEOF
-        sysctl -p >/dev/null 2>&1
-        echo -e "\n\033[1;32m✓ Buffers de red OPTIMIZADOS\033[0m"
-        echo -e "\033[1;37m  rmem/wmem: 25MB max — mejor para múltiples clientes VPN\033[0m"
-        echo -e "\033[1;37m  tcp_window_scaling: permite ventanas TCP grandes\033[0m"
-    fi
-    sleep 2
-}
-
-_activar_todo_turbo() {
-    echo -e "\n\033[1;33m[ TURBO VPN ] Activando todas las optimizaciones...\033[0m\n"
-
-    # Compresión SSH
-    sed -i '/^Compression/d' /etc/ssh/sshd_config
-    echo "Compression yes" >> /etc/ssh/sshd_config
-    _restart_ssh
-    echo -e "\033[1;32m  ✓ Compresión SSH activada\033[0m"
-
-    # BBR
-    if modprobe tcp_bbr 2>/dev/null; then
-        sed -i '/net.core.default_qdisc/d' /etc/sysctl.conf
-        sed -i '/net.ipv4.tcp_congestion_control/d' /etc/sysctl.conf
-        echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
-        echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
-        echo -e "\033[1;32m  ✓ BBR activado\033[0m"
-    else
-        echo -e "\033[1;31m  ✗ BBR no disponible (kernel $(uname -r) < 4.9)\033[0m"
-    fi
-
-    # Buffers
-    for _k in net.core.rmem_max net.core.wmem_max net.core.rmem_default \
-               net.core.wmem_default net.ipv4.tcp_rmem net.ipv4.tcp_wmem \
-               net.ipv4.tcp_mem net.core.netdev_max_backlog \
-               net.ipv4.tcp_no_metrics_save net.ipv4.tcp_window_scaling; do
-        sed -i "/${_k}/d" /etc/sysctl.conf
-    done
-    cat >> /etc/sysctl.conf <<'BUFEOF'
-# MSYVPN — Buffers optimizados para VPN SSH
-net.core.rmem_max=26214400
-net.core.wmem_max=26214400
-net.core.rmem_default=1048576
-net.core.wmem_default=1048576
-net.ipv4.tcp_rmem=4096 1048576 26214400
-net.ipv4.tcp_wmem=4096 1048576 26214400
-net.ipv4.tcp_mem=65536 131072 262144
-net.core.netdev_max_backlog=5000
-net.ipv4.tcp_no_metrics_save=1
-net.ipv4.tcp_window_scaling=1
-BUFEOF
-    echo -e "\033[1;32m  ✓ Buffers optimizados\033[0m"
-
-    sysctl -p >/dev/null 2>&1
-    echo -e "\n\033[1;32m✓ TURBO VPN ACTIVADO — VPS optimizada para máxima velocidad!\033[0m"
-    sleep 3
-}
-
-_desactivar_todo_turbo() {
-    echo -e "\n\033[1;33m[ TURBO VPN ] Restaurando configuración original...\033[0m\n"
-
-    sed -i '/^Compression/d' /etc/ssh/sshd_config
-    echo "Compression no" >> /etc/ssh/sshd_config
-    _restart_ssh
-    echo -e "\033[1;33m  ✓ Compresión SSH desactivada\033[0m"
-
-    sed -i '/net.core.default_qdisc/d' /etc/sysctl.conf
-    sed -i '/net.ipv4.tcp_congestion_control/d' /etc/sysctl.conf
-    echo -e "\033[1;33m  ✓ BBR desactivado\033[0m"
-
-    for _k in net.core.rmem_max net.core.wmem_max net.core.rmem_default \
-               net.core.wmem_default net.ipv4.tcp_rmem net.ipv4.tcp_wmem \
-               net.ipv4.tcp_mem net.core.netdev_max_backlog \
-               net.ipv4.tcp_no_metrics_save net.ipv4.tcp_window_scaling; do
-        sed -i "/${_k}/d" /etc/sysctl.conf
-    done
-    sed -i '/# MSYVPN — Buffers/d' /etc/sysctl.conf
-    echo -e "\033[1;33m  ✓ Buffers restaurados\033[0m"
-
-    sysctl -p >/dev/null 2>&1
-    echo -e "\n\033[1;33m✓ Configuración original restaurada.\033[0m"
-    sleep 2
-}
-
-_ver_estado_turbo() {
-    clear
-    echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-    echo -e "\033[0;34m┃\E[44;1;37m        TURBO VPN — ESTADO ACTUAL        \E[0m\033[0;34m┃"
-    echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
-    echo ""
-    echo -e "\033[1;33m── KERNEL ───────────────────────────────────\033[0m"
-    echo -e "  Versión   : $(uname -r)"
-    echo -e "  BBR       : $(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)"
-    echo -e "  qdisc     : $(sysctl -n net.core.default_qdisc 2>/dev/null)"
-    echo ""
-    echo -e "\033[1;33m── SSH COMPRESIÓN ───────────────────────────\033[0m"
-    echo -e "  sshd_config: $(grep '^Compression' /etc/ssh/sshd_config 2>/dev/null || echo 'no configurado')"
-    echo ""
-    echo -e "\033[1;33m── BUFFERS TCP ──────────────────────────────\033[0m"
-    echo -e "  rmem_max  : $(sysctl -n net.core.rmem_max 2>/dev/null)"
-    echo -e "  wmem_max  : $(sysctl -n net.core.wmem_max 2>/dev/null)"
-    echo -e "  tcp_rmem  : $(sysctl -n net.ipv4.tcp_rmem 2>/dev/null)"
-    echo -e "  tcp_wmem  : $(sysctl -n net.ipv4.tcp_wmem 2>/dev/null)"
-    echo -e "  backlog   : $(sysctl -n net.core.netdev_max_backlog 2>/dev/null)"
-    echo ""
-}
-
-# ============================================================
-# CLAVE MAESTRA — Gestión
-# ============================================================
-fun_menu_master_key() {
-    while true; do
-        clear
-        echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-        echo -e "\033[0;34m┃\E[44;1;37m          CLAVE MAESTRA SSH (RSA)        \E[0m\033[0;34m┃"
-        echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
-
-        if [[ -f "$_MASTER_PUBKEY" && -s "$_MASTER_PUBKEY" ]]; then
-            local _fp
-            _fp=$(ssh-keygen -lf "$_MASTER_PUBKEY" 2>/dev/null | awk '{print $2}')
-            echo -e "\033[1;32m✓ Clave instalada: \033[1;37m$_fp\033[0m"
-        else
-            echo -e "\033[1;31m✗ Clave maestra NO configurada\033[0m"
-        fi
-
-        echo ""
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m1\033[1;31m] \033[1;33mDESCARGAR desde GitHub (recomendado)\033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m2\033[1;31m] \033[1;33mPEGAR clave manualmente             \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m3\033[1;31m] \033[1;33mVER clave actual                     \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m4\033[1;31m] \033[1;33mELIMINAR clave maestra               \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m0\033[1;31m] \033[1;33mVOLVER                               \033[0;34m┃"
-        echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
-        echo -ne "\033[1;32mOpción: \033[1;37m"; read resp_mk
-
-        case $resp_mk in
-        1|01)
-            _descargar_master_pubkey
-            ;;
-        2|02)
-            echo -e "\n\033[1;33mPega la clave pública (ssh-rsa ... o ssh-ed25519 ...):\033[0m"
-            echo -ne "\033[1;37m"; read _clave_manual
-            if [[ -z "$_clave_manual" ]]; then
-                echo -e "\033[1;31mClave vacía, operación cancelada.\033[0m"
-            elif [[ "$_clave_manual" != ssh-rsa* && "$_clave_manual" != ssh-ed25519* && "$_clave_manual" != ecdsa-* ]]; then
-                echo -e "\033[1;31mFormato inválido. Debe comenzar con ssh-rsa, ssh-ed25519 o ecdsa-\033[0m"
-            else
-                mkdir -p /etc/SSHPlus
-                echo "$_clave_manual" > "$_MASTER_PUBKEY"
-                chmod 644 "$_MASTER_PUBKEY"
-                echo -e "\033[1;32m✓ Clave guardada en $_MASTER_PUBKEY\033[0m"
-            fi
-            sleep 2
-            ;;
-        3|03)
-            if [[ -f "$_MASTER_PUBKEY" ]]; then
-                echo -e "\n\033[1;33mContenido:\033[0m"
-                cat "$_MASTER_PUBKEY"
-                echo ""
-                ssh-keygen -lf "$_MASTER_PUBKEY" 2>/dev/null
-            else
-                echo -e "\033[1;31mNo hay clave configurada.\033[0m"
-            fi
-            echo -ne "\n\033[1;33mPresiona ENTER...\033[0m"; read
-            ;;
-        4|04)
-            echo -ne "\033[1;31m¿Eliminar clave maestra? [s/N]: \033[1;37m"; read _conf_del
-            [[ "$_conf_del" =~ ^[sS]$ ]] && {
-                rm -f "$_MASTER_PUBKEY"
-                echo -e "\033[1;33m✓ Clave maestra eliminada\033[0m"
-                sleep 1
-            }
-            ;;
-        0|00) fun_conexao; return ;;
-        *) echo -e "\033[1;31mOpción inválida!\033[0m"; sleep 1 ;;
-        esac
-    done
-}
-
-# ============================================================
-# SSL TUNNEL
-# ============================================================
 _SSL_DISP_PORT=10443
 _SSL_DISP_SCRIPT="/etc/SSHPlus/ssldispatcher.py"
 
@@ -699,6 +789,7 @@ _ssl_start_dispatcher() {
 
     if [[ ! -f "$_SSL_DISP_SCRIPT" ]]; then
         echo -e "\033[1;31mERROR: No se encuentra ssldispatcher.py en /etc/SSHPlus/\033[0m"
+        echo -e "\033[1;33mCopie ssldispatcher.py a /etc/SSHPlus/ e intente de nuevo.\033[0m"
         return 1
     fi
 
@@ -791,17 +882,15 @@ EOF
         if [[ "$resposta" = '3' ]]; then
             echo -e "\033[1;33mDestino SSH actual : \033[1;37m$_DISP_SSH"
             echo -e "\033[1;33mDestino WS  actual : \033[1;37m$_DISP_WS\033[0m\n"
+
             echo -e "\033[1;31m[\033[1;36m1\033[1;31m] \033[1;33mSSH → OpenSSH (22)"
             echo -e "\033[1;31m[\033[1;36m2\033[1;31m] \033[1;33mSSH → Dropbear 2016 (143)"
-            echo -e "\033[1;31m[\033[1;36m3\033[1;31m] \033[1;33mSSH → Dropbear 2020"
-            echo -e "\033[1;31m[\033[1;36m4\033[1;31m] \033[1;33mSSH → Puerto personalizado"
+            echo -e "\033[1;31m[\033[1;36m3\033[1;31m] \033[1;33mSSH → Puerto personalizado"
             echo -ne "\033[1;32mDestino SSH: \033[1;37m"; read _ssh_sel
             case "$_ssh_sel" in
             1) _new_ssh="127.0.0.1:22"  ;;
             2) _new_ssh="127.0.0.1:143" ;;
-            3) echo -ne "\033[1;32mPuerto Dropbear 2020: \033[1;37m"; read _dp
-               _new_ssh="127.0.0.1:${_dp:-444}" ;;
-            4) echo -ne "\033[1;32mPuerto SSH: \033[1;37m"; read _sp
+            3) echo -ne "\033[1;32mPuerto SSH: \033[1;37m"; read _sp
                _new_ssh="127.0.0.1:${_sp:-22}" ;;
             *) _new_ssh="$_DISP_SSH" ;;
             esac
@@ -827,11 +916,15 @@ EOF
 
             sed -i '/ssldispatcher.py/d' /etc/autostart 2>/dev/null
             echo "ss -tlpn | grep -qw ${_SSL_DISP_PORT} || screen -dmS ssldispatch python3 ${_SSL_DISP_SCRIPT} ${_SSL_DISP_PORT} ${_new_ssh} ${_new_ws}" >> /etc/autostart
+
             _ssl_start_dispatcher "$_new_ssh" "$_new_ws"
             echo -e "\n\033[1;32mBackends actualizados!\033[0m"; sleep 2; inst_ssl; return
         fi
 
-        [[ "$resposta" = '4' ]] && { _ssl_start_dispatcher "$_DISP_SSH" "$_DISP_WS"; sleep 2; inst_ssl; return; }
+        if [[ "$resposta" = '4' ]]; then
+            _ssl_start_dispatcher "$_DISP_SSH" "$_DISP_WS"
+            sleep 2; inst_ssl; return
+        fi
 
         if [[ "$resposta" = '5' ]]; then
             pkill stunnel4 2>/dev/null; systemctl stop stunnel4 2>/dev/null
@@ -859,18 +952,15 @@ EOF
     echo -e "\033[1;33mModo: SSL DIRECTO + SSL WEBSOCKET simultáneos\033[0m"
     echo -e "\033[1;37mEl dispatcher detecta el protocolo automáticamente.\033[0m\n"
 
-    echo -e "\033[1;33mPaso 1 — Destino SSH:\033[0m"
+    echo -e "\033[1;33mPaso 1 — Destino SSH (sin WebSocket):\033[0m"
     echo -e "\033[1;31m[\033[1;36m1\033[1;31m] \033[1;33mOpenSSH puerto 22"
     echo -e "\033[1;31m[\033[1;36m2\033[1;31m] \033[1;33mDropbear 2016 puerto 143"
-    echo -e "\033[1;31m[\033[1;36m3\033[1;31m] \033[1;33mDropbear 2020 (ingrese puerto)"
-    echo -e "\033[1;31m[\033[1;36m4\033[1;31m] \033[1;33mPuerto personalizado"
+    echo -e "\033[1;31m[\033[1;36m3\033[1;31m] \033[1;33mPuerto personalizado"
     echo -ne "\033[1;32mOpción: \033[1;37m"; read _ssh_sel
     case "$_ssh_sel" in
     1) _ssh_dst="127.0.0.1:22"  ;;
     2) _ssh_dst="127.0.0.1:143" ;;
-    3) echo -ne "\033[1;32mPuerto Dropbear 2020: \033[1;37m"; read _dp
-       _ssh_dst="127.0.0.1:${_dp:-444}" ;;
-    4) echo -ne "\033[1;32mPuerto SSH destino: \033[1;37m"; read _sp
+    3) echo -ne "\033[1;32mPuerto SSH destino: \033[1;37m"; read _sp
        _ssh_dst="127.0.0.1:${_sp:-22}" ;;
     *) _ssh_dst="127.0.0.1:143" ;;
     esac
@@ -923,6 +1013,9 @@ socket = a:SO_REUSEADDR=1
 socket = l:TCP_NODELAY=1
 socket = r:TCP_NODELAY=1
 
+# Stunnel descifra SSL y pasa tráfico en crudo al dispatcher.
+# El dispatcher detecta SSH vs HTTP/WS y enruta al backend correcto.
+
 [sshtunnel443]
 accept  = 443
 connect = 127.0.0.1:${_SSL_DISP_PORT}
@@ -936,99 +1029,156 @@ accept  = 8443
 connect = 127.0.0.1:${_SSL_DISP_PORT}
 EOF
 
-    systemctl restart stunnel4 2>/dev/null || service stunnel4 restart 2>/dev/null
-    systemctl enable stunnel4 2>/dev/null
+    echo -e "\033[1;32mIniciando SSL Tunnel en puertos 443, 444, 8443...\033[0m"
+    if systemctl is-enabled stunnel4 >/dev/null 2>&1; then
+        systemctl enable stunnel4 >/dev/null 2>&1
+        systemctl restart stunnel4 >/dev/null 2>&1
+    else
+        service stunnel4 restart >/dev/null 2>&1
+    fi
 
-    for _p in 443 444 8443; do _fw_open $_p; done
+    for _sslp in 443 444 8443; do
+        _fw_open $_sslp
+        iptables -I INPUT -p tcp --dport $_sslp -j ACCEPT 2>/dev/null
+    done
 
     sed -i '/ssldispatcher.py/d' /etc/autostart 2>/dev/null
     echo "ss -tlpn | grep -qw ${_SSL_DISP_PORT} || screen -dmS ssldispatch python3 ${_SSL_DISP_SCRIPT} ${_SSL_DISP_PORT} ${_ssh_dst} ${_ws_dst}" >> /etc/autostart
 
     sleep 1
-    echo -e "\n\033[1;32m✓ SSL TUNNEL INSTALADO!\033[0m"
-    echo -e "\033[1;37m  Puertos SSL: \033[1;32m443, 444, 8443\033[0m"
-    echo -e "\033[1;37m  Backend SSH: \033[1;32m$_ssh_dst\033[0m"
-    echo -e "\033[1;37m  Backend WS : \033[1;32m$_ws_dst\033[0m"
-    sleep 3; fun_conexao
+    echo ""
+    echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
+    if ss -tlpn 2>/dev/null | grep -q ":443 "; then
+        echo -e "\033[1;32m✓ SSL TUNNEL ACTIVO!\033[0m"
+        echo -e "\033[1;37m  Puertos SSL  : \033[1;32m443, 444, 8443"
+        echo -e "\033[1;37m  → Dispatcher : \033[1;32m127.0.0.1:$_SSL_DISP_PORT"
+        echo -e "\033[1;37m    ├ SSH raw  : \033[1;32m$_ssh_dst"
+        echo -e "\033[1;37m    └ HTTP/WS  : \033[1;32m$_ws_dst\033[0m"
+        if ! ss -tlpn 2>/dev/null | grep -q ":444 "; then
+            echo -e "\033[1;33m⚠ Puerto 444 no visible — verifique el firewall del panel VPS.\033[0m"
+        fi
+    else
+        echo -e "\n\033[1;33mVerifique: systemctl status stunnel4\033[0m"
+    fi
+    echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
+    sleep 4; inst_ssl
 }
 
 # ============================================================
-# PROXY SOCKS / WEBSOCKET
+# PROXY SOCKS + WEBSOCKET
 # ============================================================
 fun_socks() {
-    while true; do
-        clear
-        echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-        echo -e "\033[0;34m┃\E[44;1;37m          PROXY SOCKS / WEBSOCKET        \E[0m\033[0;34m┃"
-        echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
+    clear
+    echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
+    echo -e "\033[0;34m┃\E[44;1;37m          GESTIONAR PROXY SOCKS          \E[0m\033[0;34m┃"
+    echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
+    _py_ports=$(ss -tlpn 2>/dev/null | grep -E 'python|python3' | awk '{print $4}' | rev | cut -d: -f1 | rev | xargs)
+    [[ -n "$_py_ports" ]] && echo -e "\033[0;34m╼ \033[1;32mPUERTOS ACTIVOS\033[1;37m: $_py_ports"
+    [[ $(screen -list 2>/dev/null | grep -wc 'proxy') != '0' ]] && var_sks1="\033[1;32m✓" || var_sks1="\033[1;31m✕"
+    [[ $(screen -list 2>/dev/null | grep -c '\.ws') != '0' ]] && var_sks2="\033[1;32m✓" || var_sks2="\033[1;31m✕"
+    echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
+    echo -e "\033[0;34m┃\033[1;31m[\033[1;36m1\033[1;31m] \033[1;33mWEBSOCKET $var_sks2                        \033[0;34m┃"
+    echo -e "\033[0;34m┃\033[1;31m[\033[1;36m2\033[1;31m] \033[1;33mCAMBIAR STATUS WEBSOCKET             \033[0;34m┃"
+    echo -e "\033[0;34m┃\033[1;31m[\033[1;36m0\033[1;31m] \033[1;33mVOLVER                               \033[0;34m┃"
+    echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
+    echo -ne "\033[1;32mOpción: \033[1;37m"; read resposta
 
-        _py_active=$(ss -tlpn 2>/dev/null | grep -E 'python|python3' | awk '{print $4}' | rev | cut -d: -f1 | rev | xargs)
-        [[ -n "$_py_active" ]] && \
-            echo -e "\033[1;32mPUERTOS ACTIVOS: \033[1;37m$_py_active\033[0m\n" || \
-            echo -e "\033[1;31mNINGÚN PROXY ACTIVO\033[0m\n"
-
-        echo -e "\033[1;31m[\033[1;36m1\033[1;31m] \033[1;33mACTIVAR PROXY SOCKS"
-        echo -e "\033[1;31m[\033[1;36m2\033[1;31m] \033[1;33mACTIVAR WEBSOCKET"
-        echo -e "\033[1;31m[\033[1;36m3\033[1;31m] \033[1;33mCAMBIAR STATUS"
-        echo -e "\033[1;31m[\033[1;36m4\033[1;31m] \033[1;33mDETENER PROXIES"
-        echo -e "\033[1;31m[\033[1;36m0\033[1;31m] \033[1;33mVOLVER\033[0m"
-        echo -ne "\033[1;32mOpción: \033[1;37m"; read resp_sk
-
-        case $resp_sk in
-        1|01) _fun_activar_proxy "proxy.py" "PROXY SOCKS" ;;
-        2|02) _fun_activar_proxy "wsproxy.py" "WEBSOCKET" ;;
-        3|03) _fun_alterar_status "wsproxy.py" "WEBSOCKET" ;;
-        4|04)
-            for pid in $(screen -ls 2>/dev/null | grep -E '\.proxy|\.ws[0-9]|proxy[0-9]|ws[0-9]' | awk '{print $1}'); do
-                screen -r -S "$pid" -X quit 2>/dev/null
-            done
-            pkill -f "/etc/SSHPlus/proxy.py" 2>/dev/null
-            pkill -f "/etc/SSHPlus/wsproxy.py" 2>/dev/null
-            screen -wipe >/dev/null 2>&1
-            echo -e "\n\033[1;32mProxies detenidos!\033[0m"; sleep 2
-            ;;
-        0|00) fun_conexao; return ;;
-        *) echo -e "\033[1;31mOpción inválida!\033[0m"; sleep 1 ;;
-        esac
-    done
+    case "$resposta" in
+    1)
+        _ws_count=$(screen -list 2>/dev/null | grep -c '\.ws')
+        if [[ $_ws_count -gt 0 ]]; then
+            echo -e "\E[44;1;37m   WEBSOCKET ACTIVO   \E[0m"
+            echo -e "\033[1;31m[\033[1;36m1\033[1;31m] \033[1;33mDESACTIVAR TODOS"
+            echo -e "\033[1;31m[\033[1;36m2\033[1;31m] \033[1;33mAGREGAR PUERTO"
+            echo -e "\033[1;31m[\033[1;36m0\033[1;31m] \033[1;33mVOLVER"
+            echo -ne "\033[1;32mOpción: \033[1;37m"; read ws_opt
+            if [[ "$ws_opt" = '1' ]]; then
+                for pid in $(screen -ls | grep "\.ws" | awk '{print $1}'); do screen -r -S "$pid" -X quit 2>/dev/null; done
+                sed -i '/wsproxy/d' /etc/autostart 2>/dev/null; screen -wipe >/dev/null 2>&1
+                echo -e "\n\033[1;32mTODOS LOS WEBSOCKETS DESACTIVADOS!\033[0m"; sleep 2; fun_socks
+            elif [[ "$ws_opt" = '2' ]]; then
+                _fun_socks_menu_destino "WEBSOCKET ADICIONAL" "ws" "wsproxy.py"
+            else
+                fun_socks
+            fi
+        else
+            _fun_socks_menu_destino "WEBSOCKET" "ws" "wsproxy.py"
+        fi ;;
+    2) _fun_alterar_status "wsproxy.py" "WEBSOCKET" ;;
+    0) fun_conexao ;;
+    *) echo -e "\033[1;31mOpción inválida!\033[0m"; sleep 1; fun_socks ;;
+    esac
 }
 
-_fun_activar_proxy() {
-    local script_file="$1" titulo="$2"
-    echo -ne "\n\033[1;32mPUERTO para $titulo: \033[1;37m"; read porta
-    [[ -z "$porta" ]] && { fun_socks; return; }
-    verif_ptrs "$porta"
+_fun_socks_menu_destino() {
+    local titulo="$1" screen_prefix="$2" script="$3"
+    clear
+    echo -e "\E[44;1;37m   $titulo — CONFIGURAR   \E[0m\n"
+    echo -e "\033[1;33mPaso 1 — Destino:\033[0m\n"
+    echo -e "\033[1;31m[\033[1;36m1\033[1;31m] \033[1;33m→ OpenSSH (22)"
+    echo -e "\033[1;31m[\033[1;36m2\033[1;31m] \033[1;33m→ Dropbear 2016 (143)"
+    echo -ne "\033[1;32mOpción: \033[1;37m"; read dst_sel
+    case "$dst_sel" in
+    1) _dst_port=22 ;;
+    2) _dst_port=143 ;;
+    *) echo -e "\033[1;31mOpción inválida!"; sleep 1; fun_socks; return ;;
+    esac
 
-    local _use_script="$script_file"
-    [[ ! -f /etc/SSHPlus/$_use_script ]] && {
-        echo -e "\033[1;31mScript $_use_script no encontrado en /etc/SSHPlus/\033[0m"
-        sleep 2; fun_socks; return
-    }
-
-    local _screen_pfx="proxy"
-    [[ "$script_file" = *"wsproxy"* || "$script_file" = *"ws"* ]] && _screen_pfx="ws"
-
-    screen -dmS "${_screen_pfx}${porta}" python3 /etc/SSHPlus/$_use_script $porta
-    echo "screen -dmS ${_screen_pfx}${porta} python3 /etc/SSHPlus/$_use_script $porta" >> /etc/autostart
-
-    sleep 0.5
-    if ss -tlpn 2>/dev/null | grep -q ":$porta "; then
-        echo -e "\033[1;32mPuerto \033[1;37m$porta \033[1;32mactivado! ✓\033[0m"
-    else
-        echo -e "\033[1;33mEsperando inicio del proxy en puerto $porta...\033[0m"
-        sleep 1
-        ss -tlpn 2>/dev/null | grep -q ":$porta " && \
-            echo -e "\033[1;32m  ✓ Puerto $porta OK\033[0m" || \
-            echo -e "\033[1;31m  ✕ Puerto $porta no responde — verifique $_use_script\033[0m"
+    if [[ -f /etc/SSHPlus/$script ]] && [[ -n "$_dst_port" ]]; then
+        sed -i "s|DEFAULT_HOST = ['\"]127\.0\.0\.1:[0-9]*['\"]|DEFAULT_HOST = '127.0.0.1:${_dst_port}'|" /etc/SSHPlus/$script 2>/dev/null
     fi
-    echo -e "\n\033[1;32m$titulo ACTIVADO EN PUERTO $porta!\033[0m"; sleep 2; fun_socks
+
+    echo -e "\n\033[1;33mPaso 2 — Puerto(s) de escucha:\033[0m\n"
+    echo -e "\033[1;31m[\033[1;36m1\033[1;31m] \033[1;33mPuerto 80"
+    echo -e "\033[1;31m[\033[1;36m2\033[1;31m] \033[1;33mPuerto 8080"
+    echo -e "\033[1;31m[\033[1;36m3\033[1;31m] \033[1;33mPuerto 8880"
+    echo -e "\033[1;31m[\033[1;36m4\033[1;31m] \033[1;33mPuerto 8888"
+    echo -e "\033[1;31m[\033[1;36m5\033[1;31m] \033[1;33mTODOS (80, 8080, 8880, 8888)"
+    echo -e "\033[1;31m[\033[1;36m6\033[1;31m] \033[1;33mPuerto personalizado\033[0m"
+    echo -ne "\033[1;32mOpción: \033[1;37m"; read listen_sel
+    case "$listen_sel" in
+    1) _listen_ports="80" ;;  2) _listen_ports="8080" ;; 3) _listen_ports="8880" ;;
+    4) _listen_ports="8888" ;; 5) _listen_ports="80 8080 8880 8888" ;;
+    6) echo -ne "\033[1;32mPUERTO(S): \033[1;37m"; read _listen_ports; [[ -z "$_listen_ports" ]] && { fun_socks; return; } ;;
+    *) echo -e "\033[1;31mOpción inválida!"; sleep 1; fun_socks; return ;;
+    esac
+
+    sed -i "/$script/d" /etc/autostart 2>/dev/null
+    [[ -n "$_dst_port" ]] && echo -e "\033[1;33mDestino: 127.0.0.1:$_dst_port\033[0m"
+    echo -e "\033[1;32mIniciando $titulo...\033[0m\n"
+
+    local _dst_arg=""
+    [[ -n "$_dst_port" ]] && _dst_arg="127.0.0.1:${_dst_port}"
+
+    local _use_script="$script"
+
+    for porta in $_listen_ports; do
+        verif_ptrs $porta
+        screen -dmS ${screen_prefix}${porta} python3 /etc/SSHPlus/$_use_script $porta $_dst_arg
+        _fw_open $porta tcp
+        iptables -I INPUT -p tcp --dport $porta -j ACCEPT 2>/dev/null
+        echo "ss -tlpn | grep -qw $porta || screen -dmS ${screen_prefix}${porta} python3 /etc/SSHPlus/$_use_script $porta $_dst_arg" >> /etc/autostart
+        sleep 0.5
+        if ss -tlpn 2>/dev/null | grep -q ":$porta "; then
+            echo -e "\033[1;32mPuerto \033[1;37m$porta \033[1;32mactivado! ✓\033[0m"
+        else
+            echo -e "\033[1;33mPuerto \033[1;37m$porta \033[1;33m— esperando inicio del proxy...\033[0m"
+            sleep 1
+            ss -tlpn 2>/dev/null | grep -q ":$porta " && \
+                echo -e "\033[1;32m  ✓ Puerto $porta OK\033[0m" || \
+                echo -e "\033[1;31m  ✕ Puerto $porta no responde — verifique python3 y el script $_use_script\033[0m"
+        fi
+    done
+    echo -e "\n\033[1;32m$titulo ACTIVADO!\033[0m"; sleep 2; fun_socks
 }
 
 _fun_alterar_status() {
     local script_file="$1" titulo="$2"
     local _real_script="$script_file"
 
-    if ps x | grep -w "$_real_script" | grep -v grep >/dev/null 2>&1; then
+    if ps x | grep -w "$_real_script" | grep -v grep >/dev/null 2>&1 || \
+       ps x | grep -w "$script_file"  | grep -v grep >/dev/null 2>&1; then
+
         local _use_script="$_real_script"
         [[ ! -f /etc/SSHPlus/$_use_script ]] && _use_script="$script_file"
 
@@ -1036,7 +1186,7 @@ _fun_alterar_status() {
         echo -e "\E[44;1;37m   STATUS — $titulo   \E[0m"
         echo -e "\n\033[1;33mSTATUS ACTUAL: \033[1;32m${msgsocks:-sin status}\033[0m"
         echo -ne "\n\033[1;32mNUEVO STATUS: \033[1;37m"; read msgg
-        [[ -z "$msgg" ]] && { fun_socks; return; }
+        [[ -z "$msgg" ]] && { fun_conexao; return; }
         echo -e "\033[1;31m[01] AZUL  [02] VERDE  [03] ROJO   [04] AMARILLO"
         echo -e "[05] ROSA  [06] CIAN   [07] NARANJA [08] MORADO  [10] SIN COLOR\033[0m"
         echo -ne "\033[1;32mCOLOR: \033[1;37m"; read sts_cor
@@ -1045,7 +1195,6 @@ _fun_alterar_status() {
         4|04) cor_sts='yellow' ;; 5|05) cor_sts='#F535AA' ;; 6|06) cor_sts='cyan' ;;
         7|07) cor_sts='#FF7F00' ;; 8|08) cor_sts='#9932CD' ;; *) cor_sts='null' ;;
         esac
-
         msgsocks2=$(grep "MSG\s*=" /etc/SSHPlus/$_use_script | head -1 | awk -F= '{print $2}')
         [[ -n "$msgsocks2" ]] && sed -i "s|$msgsocks2| '$msgg'|" /etc/SSHPlus/$_use_script
         cor_old=$(grep 'color=' /etc/SSHPlus/$_use_script 2>/dev/null | head -1 | cut -d'"' -f2)
@@ -1060,7 +1209,8 @@ _fun_alterar_status() {
         local _screen_pfx="proxy"
         [[ "$_use_script" = *"wsproxy"* || "$_use_script" = *"ws"* ]] && _screen_pfx="ws"
 
-        for pid in $(screen -ls 2>/dev/null | grep -E "\.${_screen_pfx}|${_screen_pfx}[0-9]" | awk '{print $1}'); do
+        for pid in $(screen -ls 2>/dev/null | grep -E "\.${_screen_pfx}|${_screen_pfx}[0-9]" | \
+                     awk '{print $1}'); do
             screen -r -S "$pid" -X quit 2>/dev/null
         done
         pkill -f "/etc/SSHPlus/$_use_script" 2>/dev/null
@@ -1075,24 +1225,30 @@ _fun_alterar_status() {
                 sleep 0.2
             done
         else
-            echo -e "\033[1;33mNo se detectaron puertos activos.\033[0m"
+            echo -e "\033[1;33mNo se detectaron puertos activos. Inicie el proxy manualmente.\033[0m"
         fi
+
         echo -e "\n\033[1;32mSTATUS CAMBIADO Y PROXY REINICIADO!\033[0m"; sleep 2; fun_socks
     else
         echo -e "\033[1;31mACTIVE EL $titulo PRIMERO!\033[0m"; sleep 2; fun_socks
     fi
 }
 
+# ============================================================
+# REINICIAR SERVICIOS DE PROXY SOCKS / WEBSOCKET
+# Función exportable — llamada desde menu.sh reiniciarservicos
+# ============================================================
 reiniciar_proxy_socks() {
     echo -e "\033[1;33mReiniciando Proxy Socks y WebSocket...\033[0m"
     local _reiniciados=0
 
     if [[ -f /etc/autostart ]]; then
-        for pid in $(screen -ls 2>/dev/null | grep -E '\.proxy|\.ws[0-9]|\.openpy|proxy[0-9]|ws[0-9]' | awk '{print $1}'); do
+        for pid in $(screen -ls 2>/dev/null | grep -E '\.proxy|\.ws[0-9]|\.openpy|proxy[0-9]|ws[0-9]' | \
+                     awk '{print $1}'); do
             screen -r -S "$pid" -X quit 2>/dev/null
         done
         pkill -f "/etc/SSHPlus/proxy.py"   2>/dev/null
-        pkill -f "/etc/SSHPlus/wsproxy.py" 2>/dev/null
+        pkill -f "/etc/SSHPlus/wsproxy"    2>/dev/null
         pkill -f "/etc/SSHPlus/open.py"    2>/dev/null
         screen -wipe >/dev/null 2>&1
         sleep 1
@@ -1123,25 +1279,22 @@ fun_conexao() {
         echo -e "\033[0;34m┃\E[44;1;37m          MSYVPN-SCRIPT — CONEXIÓN       \E[0m\033[0;34m┃"
         echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
 
+        # ── Mostrar puertos activos ───────────────────────────
         _ssh_ports=$(grep '^Port' /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' | xargs)
         echo -e "\033[1;32mOPENSSH\033[1;31m: \033[1;37m${_ssh_ports:-22}   \033[1;33mARCH: \033[1;32m${_ARCH}\033[0m"
 
-        # Estado Dropbear 2016
-        local _db16_on=0
-        systemctl is-active dropbear-legacy >/dev/null 2>&1 && _db16_on=1
+        _db16_on=0
         screen -list 2>/dev/null | grep -q 'dropbear2016' && _db16_on=1
+        systemctl is-active dropbear-legacy >/dev/null 2>&1 && _db16_on=1
         [[ "$_db16_on" != '0' ]] && {
             _db16_port=$(systemctl show dropbear-legacy --property=ExecStart 2>/dev/null | grep -oP '(?<=-p )\d+' | head -1)
+            [[ -z "$_db16_port" ]] && _db16_port=$(screen -list 2>/dev/null | grep 'dropbear2016' | grep -oP '\d+(?=\.dropbear2016)' | head -1)
             [[ -n "$_db16_port" ]] && echo -e "\033[1;32mDROPBEAR 2016\033[1;31m: \033[1;37m$_db16_port"
         }
-
-        # Estado Dropbear 2020
         systemctl is-active dropbear-2020 >/dev/null 2>&1 && {
             _db20_port=$(systemctl show dropbear-2020 --property=ExecStart 2>/dev/null | grep -oP '(?<=-p )\d+' | head -1)
             [[ -n "$_db20_port" ]] && echo -e "\033[1;32mDROPBEAR 2020\033[1;31m: \033[1;37m$_db20_port"
         }
-
-        # Estado Dropbear 2022
         systemctl is-active dropbear-2022 >/dev/null 2>&1 && {
             _db22_port=$(systemctl show dropbear-2022 --property=ExecStart 2>/dev/null | grep -oP '(?<=-p )\d+' | head -1)
             [[ -n "$_db22_port" ]] && echo -e "\033[1;32mDROPBEAR 2022\033[1;31m: \033[1;37m$_db22_port"
@@ -1149,17 +1302,15 @@ fun_conexao() {
 
         _py_active=$(ss -tlpn 2>/dev/null | grep -E 'python|python3' | awk '{print $4}' | rev | cut -d: -f1 | rev | xargs)
         [[ -n "$_py_active" ]] && echo -e "\033[1;32mPROXY SOCKS\033[1;31m: \033[1;37m$_py_active"
+
         [[ -e "/etc/stunnel/stunnel.conf" ]] && echo -e "\033[1;32mSSL\033[1;31m: \033[1;37m$(get_ports_by_process 'stunnel')"
 
-        # Indicadores de estado
-        local sts4 sts3 db16sts turbo_sts mk_sts
-        [[ -n "$_py_active" ]]                  && sts4="\033[1;32m✓ " || sts4="\033[1;31m✕ "
-        [[ -e "/etc/stunnel/stunnel.conf" ]]    && sts3="\033[1;32m✓ " || sts3="\033[1;31m✕ "
-        [[ "$_db16_on" != '0' ]]                && db16sts="\033[1;32m✓ " || db16sts="\033[1;31m✕ "
-
+        # ── Status para el menú ───────────────────────────────
+        [[ -n "$_py_active" ]] && sts4="\033[1;32m✓ " || sts4="\033[1;31m✕ "
+        [[ -e "/etc/stunnel/stunnel.conf" ]] && sts3="\033[1;32m✓ " || sts3="\033[1;31m✕ "
+        [[ "$_db16_on" != '0' ]] && db16sts="\033[1;32m✓ " || db16sts="\033[1;31m✕ "
         sysctl net.ipv4.tcp_congestion_control 2>/dev/null | grep -q "bbr" \
             && turbo_sts="\033[1;32m✓ " || turbo_sts="\033[1;31m✕ "
-
         [[ -f "$_MASTER_PUBKEY" && -s "$_MASTER_PUBKEY" ]] \
             && mk_sts="\033[1;32m✓ " || mk_sts="\033[1;31m✕ "
 
@@ -1168,7 +1319,7 @@ fun_conexao() {
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m02\033[1;31m] \033[1;33mPROXY SOCKS $sts4                    \033[0;34m┃"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m03\033[1;31m] \033[1;33mSSL TUNNEL $sts3                     \033[0;34m┃"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m04\033[1;31m] \033[1;33mDROPBEAR $db16sts(2016/2020/2022)     \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m05\033[1;31m] \033[1;32mTURBO VPN $turbo_sts(BBR+Bufers+Comp) \033[0;34m┃"
+        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m05\033[1;31m] \033[1;32mTURBO VPN $turbo_sts(BBR+Buf+Comp)    \033[0;34m┃"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m06\033[1;31m] \033[1;33mCLAVE MAESTRA $mk_sts                 \033[0;34m┃"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m07\033[1;31m] \033[1;33mVOLVER \033[1;32m<<<                          \033[0;34m┃"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m00\033[1;31m] \033[1;33mSALIR \033[1;32m<<<                            \033[0;34m┃"
@@ -1182,7 +1333,7 @@ fun_conexao() {
         3|03)  tput reset; inst_ssl ;;
         4|04)  tput reset; fun_menu_dropbear ;;
         5|05)  tput reset; fun_turbo_vpn ;;
-        6|06)  tput reset; fun_menu_master_key ;;
+        6|06)  tput reset; _descargar_master_pubkey; fun_conexao ;;
         7|07)  tput reset; menu ;;
         0|00)  tput reset; echo -e "\033[1;31mSaliendo...\033[0m"; sleep 1; exit ;;
         *)     echo -e "\033[1;31mOpción inválida!\033[0m"; sleep 1 ;;
