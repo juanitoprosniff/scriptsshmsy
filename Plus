@@ -1,13 +1,16 @@
 #!/bin/bash
 # ============================================================
-# INSTALADOR MSYVPN-SCRIPT — Plus
+# * Creado y modificado por t:me/JuanitoProSniif
+# ============================================================
+# INSTALADOR MSYVPN-SCRIPT — Plus v3.1
 # Nombre visible: MSYVPN-SCRIPT  |  Carpetas: /etc/SSHPlus/
 # Compatible: Ubuntu 18 / 20 / 22 / 24 / 25 / 26+
 # Detección automática: ARM / ARM64 / AMD64
 # PROTOCOLOS INSTALADOS:
-#   - OpenSSH + Dropbear 2016
+#   - OpenSSH + Dropbear 2016 / 2020 / 2022
 #   - Proxy WebSocket (wsproxy.py)
 #   - SSL Tunnel + Dispatcher inteligente (ssldispatcher.py)
+#   - Clave maestra RSA (master_pubkey.pub)
 # ============================================================
 tput reset
 
@@ -35,6 +38,9 @@ _detect_arch() {
     esac
 }
 _ARCH=$(_detect_arch)
+
+_REPO_BASE="https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main"
+_MASTER_PUBKEY="/etc/SSHPlus/master_pubkey.pub"
 
 fun_bar() {
     comando[0]="$1"
@@ -186,7 +192,6 @@ inst_pct() {
         pip3 install speedtest-cli >/dev/null 2>&1
     fi
 
-    # Abrir puertos en firewall
     _open_fw_port() {
         local p="$1" pr="${2:-tcp}"
         command -v ufw &>/dev/null && ufw allow ${p}/${pr} >/dev/null 2>&1
@@ -210,7 +215,11 @@ fun_bar 'inst_pct'
     done
 }
 
-# ── Preparar directorios y descargar módulos ─────────────────
+# ── Preparar directorios ─────────────────────────────────────
+[[ ! -d /etc/SSHPlus ]]       && mkdir -p /etc/SSHPlus
+[[ ! -d /etc/SSHPlus/senha ]] && mkdir -p /etc/SSHPlus/senha
+
+# ── Descargar módulos ────────────────────────────────────────
 tput reset
 echo ""
 echo -e "          \033[1;37m[\033[1;31m!\033[1;37m] \033[1;32mDESCARGANDO MÓDULOS \033[1;37m[\033[1;31m!\033[1;37m]\033[0m"
@@ -218,29 +227,43 @@ echo ""
 echo -e "   \033[1;33mARQUITECTURA DETECTADA: \033[1;32m${_ARCH}\033[0m"
 echo ""
 
-[[ ! -d /etc/SSHPlus ]]       && mkdir -p /etc/SSHPlus
-[[ ! -d /etc/SSHPlus/senha ]] && mkdir -p /etc/SSHPlus/senha
-
-_REPO_BASE="https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main"
-
 # Proxy WebSocket
 wget -q "${_REPO_BASE}/Modulos/wsproxy.py" -O /etc/SSHPlus/wsproxy.py 2>/dev/null
 wget -q "${_REPO_BASE}/Modulos/proxy.py"   -O /etc/SSHPlus/proxy.py   2>/dev/null
 chmod 755 /etc/SSHPlus/wsproxy.py /etc/SSHPlus/proxy.py 2>/dev/null
 
-# Fallback local si el repo no tiene los archivos aún
 [[ ! -s /etc/SSHPlus/wsproxy.py ]] && [[ -f $HOME/wsproxy.py ]] && \
     cp $HOME/wsproxy.py /etc/SSHPlus/wsproxy.py && chmod 755 /etc/SSHPlus/wsproxy.py
 [[ ! -s /etc/SSHPlus/proxy.py ]] && [[ -f $HOME/proxy.py ]] && \
     cp $HOME/proxy.py /etc/SSHPlus/proxy.py && chmod 755 /etc/SSHPlus/proxy.py
 
-# SSL Dispatcher (requerido por SSL Tunnel)
+# SSL Dispatcher
 wget -q "${_REPO_BASE}/Modulos/ssldispatcher.py" -O /etc/SSHPlus/ssldispatcher.py 2>/dev/null
 chmod 755 /etc/SSHPlus/ssldispatcher.py 2>/dev/null
 
-# Verificar descargas
-[[ -s /etc/SSHPlus/wsproxy.py      ]] && echo -e "    \033[1;32m✓ wsproxy.py descargado\033[0m"      || echo -e "    \033[1;31m✗ wsproxy.py no encontrado\033[0m"
-[[ -s /etc/SSHPlus/proxy.py        ]] && echo -e "    \033[1;32m✓ proxy.py descargado\033[0m"        || echo -e "    \033[1;31m✗ proxy.py no encontrado\033[0m"
+# ── Descargar clave maestra RSA ──────────────────────────────
+echo -e "          \033[1;37m[\033[1;31m!\033[1;37m] \033[1;32mDESCARGANDO CLAVE MAESTRA \033[1;37m[\033[1;31m!\033[1;37m]\033[0m"
+echo ""
+
+wget -q --timeout=30 \
+    "${_REPO_BASE}/Modulos/master_pubkey.pub" \
+    -O "$_MASTER_PUBKEY" 2>/dev/null
+
+if [[ -s "$_MASTER_PUBKEY" ]]; then
+    chmod 644 "$_MASTER_PUBKEY"
+    echo -e "    \033[1;32m✓ master_pubkey.pub descargada\033[0m"
+    _fp=$(ssh-keygen -lf "$_MASTER_PUBKEY" 2>/dev/null | awk '{print $2}')
+    [[ -n "$_fp" ]] && echo -e "    \033[1;37m  Fingerprint: $_fp\033[0m"
+else
+    rm -f "$_MASTER_PUBKEY"
+    echo -e "    \033[1;31m✗ master_pubkey.pub no encontrada\033[0m"
+    echo -e "    \033[1;33m  Instálala manualmente desde el menú Conexión → Clave Maestra\033[0m"
+fi
+echo ""
+
+# ── Verificar descargas ───────────────────────────────────────
+[[ -s /etc/SSHPlus/wsproxy.py       ]] && echo -e "    \033[1;32m✓ wsproxy.py descargado\033[0m"       || echo -e "    \033[1;31m✗ wsproxy.py no encontrado\033[0m"
+[[ -s /etc/SSHPlus/proxy.py         ]] && echo -e "    \033[1;32m✓ proxy.py descargado\033[0m"         || echo -e "    \033[1;31m✗ proxy.py no encontrado\033[0m"
 [[ -s /etc/SSHPlus/ssldispatcher.py ]] && echo -e "    \033[1;32m✓ ssldispatcher.py descargado\033[0m" || echo -e "    \033[1;31m✗ ssldispatcher.py no encontrado\033[0m"
 
 # ── Finalizar instalación ────────────────────────────────────
@@ -260,5 +283,7 @@ echo -e ""
 echo -e "\033[1;37m COMANDO PRINCIPAL  : \033[1;32mmenu\033[0m"
 echo -e "\033[1;37m MODO CONEXIÓN      : \033[1;32mconexao\033[0m"
 echo -e "\033[1;37m ARQUITECTURA       : \033[1;32m${_ARCH}\033[0m"
+echo -e "\033[1;37m DROPBEAR           : \033[1;32m2016 / 2020 / 2022 (instalar desde conexao)\033[0m"
+echo -e "\033[1;37m CLAVE MAESTRA      : \033[1;32m${_MASTER_PUBKEY}\033[0m"
 echo -e "\033[1;37m MÁS INFORMACIÓN \033[1;31m(\033[1;36mTELEGRAM\033[1;31m): \033[1;37m@JuanitoProSniff\033[0m"
 echo ""
