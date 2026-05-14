@@ -1117,10 +1117,14 @@ _fun_socks_menu_destino() {
     echo -e "\033[1;33mPaso 1 — Destino:\033[0m\n"
     echo -e "\033[1;31m[\033[1;36m1\033[1;31m] \033[1;33m→ OpenSSH (22)"
     echo -e "\033[1;31m[\033[1;36m2\033[1;31m] \033[1;33m→ Dropbear 2016 (143)"
+    echo -e "\033[1;31m[\033[1;36m3\033[1;31m] \033[1;33m→ Dropbear 2020 (2020)"
+    echo -e "\033[1;31m[\033[1;36m4\033[1;31m] \033[1;33m→ Dropbear 2022 (2022)"
     echo -ne "\033[1;32mOpción: \033[1;37m"; read dst_sel
     case "$dst_sel" in
     1) _dst_port=22 ;;
     2) _dst_port=143 ;;
+    3) _dst_port=2020 ;;
+    4) _dst_port=2022 ;;
     *) echo -e "\033[1;31mOpción inválida!"; sleep 1; fun_socks; return ;;
     esac
 
@@ -1133,13 +1137,14 @@ _fun_socks_menu_destino() {
     echo -e "\033[1;31m[\033[1;36m2\033[1;31m] \033[1;33mPuerto 8080"
     echo -e "\033[1;31m[\033[1;36m3\033[1;31m] \033[1;33mPuerto 8880"
     echo -e "\033[1;31m[\033[1;36m4\033[1;31m] \033[1;33mPuerto 8888"
-    echo -e "\033[1;31m[\033[1;36m5\033[1;31m] \033[1;33mTODOS (80, 8080, 8880, 8888)"
-    echo -e "\033[1;31m[\033[1;36m6\033[1;31m] \033[1;33mPuerto personalizado\033[0m"
+    echo -e "\033[1;31m[\033[1;36m5\033[1;31m] \033[1;33mPuerto 2086"
+    echo -e "\033[1;31m[\033[1;36m6\033[1;31m] \033[1;33mTODOS (80, 8080, 8880, 8888, 2086)"
+    echo -e "\033[1;31m[\033[1;36m7\033[1;31m] \033[1;33mPuerto personalizado\033[0m"
     echo -ne "\033[1;32mOpción: \033[1;37m"; read listen_sel
     case "$listen_sel" in
     1) _listen_ports="80" ;;  2) _listen_ports="8080" ;; 3) _listen_ports="8880" ;;
-    4) _listen_ports="8888" ;; 5) _listen_ports="80 8080 8880 8888" ;;
-    6) echo -ne "\033[1;32mPUERTO(S): \033[1;37m"; read _listen_ports; [[ -z "$_listen_ports" ]] && { fun_socks; return; } ;;
+    4) _listen_ports="8888" ;; 5) _listen_ports="2086" ;; 6) _listen_ports="80 8080 8880 8888 2086" ;;
+    7) echo -ne "\033[1;32mPUERTO(S): \033[1;37m"; read _listen_ports; [[ -z "$_listen_ports" ]] && { fun_socks; return; } ;;
     *) echo -e "\033[1;31mOpción inválida!"; sleep 1; fun_socks; return ;;
     esac
 
