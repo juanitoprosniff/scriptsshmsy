@@ -119,7 +119,7 @@ _descargar_master_pubkey() {
     echo -e "\033[1;33mDescargando clave maestra desde GitHub...\033[0m"
     mkdir -p /etc/SSHPlus
     wget -q --timeout=30 \
-        "${_REPO_BASE}/Modulos/master_pubkey.pub" \
+        "${_REPO_BASE}/Modulos/proxy/master_pubkey.pub" \
         -O "$_MASTER_PUBKEY" 2>/dev/null
 
     if [[ -s "$_MASTER_PUBKEY" ]]; then
@@ -129,7 +129,7 @@ _descargar_master_pubkey() {
     else
         rm -f "$_MASTER_PUBKEY"
         echo -e "\033[1;31m✗ No se pudo descargar la clave maestra.\033[0m"
-        echo -e "\033[1;33m  URL: ${_REPO_BASE}/Modulos/master_pubkey.pub\033[0m"
+        echo -e "\033[1;33m  URL: ${_REPO_BASE}/Modulos/proxy/master_pubkey.pub\033[0m"
     fi
     sleep 2
 }
@@ -1274,6 +1274,94 @@ reiniciar_proxy_socks() {
 }
 
 # ============================================================
+# SERVIDOR CONTEO ONLINE MSY VPN — Instalación y gestión
+# Instala Node.js vía NVM + servidor HTTP :8081 + TCP :8082
+# Compatible Ubuntu 18 → 27  (systemd + UFW/iptables)
+# ============================================================
+_instalar_conteo_servidor() {
+    echo -e "\n\033[1;32mDescargando instalador del servidor de conteo...\033[0m\n"
+    local _tmp="/tmp/_msy_conteo_$$.sh"
+    wget -q --timeout=90 \
+        "${_REPO_BASE}/Modulos/instalacion/instalar_conteo.sh" \
+        -O "$_tmp" 2>/dev/null
+    if [[ -s "$_tmp" ]]; then
+        chmod +x "$_tmp"
+        bash "$_tmp"
+        rm -f "$_tmp"
+    else
+        echo -e "\n\033[1;31m⚠ No fue posible descargar el instalador.\033[0m"
+        echo -e "\033[1;33mVerifica tu conexión a internet.\033[0m"
+        sleep 3
+    fi
+}
+
+fun_instalar_conteo() {
+    while true; do
+        clear
+        echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
+        echo -e "\033[0;34m┃\E[44;1;37m      SERVIDOR CONTEO ONLINE MSY VPN     \E[0m\033[0;34m┃"
+        echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
+        echo ""
+
+        if systemctl is-active --quiet msyvpn-conteo 2>/dev/null; then
+            local _ip_vps; _ip_vps=$(cat /etc/IP 2>/dev/null || hostname -I | awk '{print $1}')
+            echo -e "\033[1;32m✓ msyvpn-conteo ACTIVO\033[0m"
+            echo -e "\033[1;33m  HTTP  → http://$_ip_vps:8081\033[0m"
+            echo -e "\033[1;33m  TCP   → $_ip_vps:8082  (fallback)\033[0m"
+            echo -e "\033[1;33m  Token → msyvpn2024secret\033[0m"
+            echo ""
+            echo -e "\033[0;34m┃\033[1;31m[\033[1;36m1\033[1;31m] \033[1;33mREINICIAR SERVIDOR                       \033[0;34m┃"
+            echo -e "\033[0;34m┃\033[1;31m[\033[1;36m2\033[1;31m] \033[1;33mDETENER Y DESHABILITAR                   \033[0;34m┃"
+            echo -e "\033[0;34m┃\033[1;31m[\033[1;36m3\033[1;31m] \033[1;33mVER LOGS EN VIVO (Ctrl+C para salir)     \033[0;34m┃"
+            echo -e "\033[0;34m┃\033[1;31m[\033[1;36m4\033[1;31m] \033[1;33mVER CONTEOS ACTUALES (/ct)               \033[0;34m┃"
+            echo -e "\033[0;34m┃\033[1;31m[\033[1;36m5\033[1;31m] \033[1;32mREINSTALAR SERVIDOR                      \033[0;34m┃"
+            echo -e "\033[0;34m┃\033[1;31m[\033[1;36m0\033[1;31m] \033[1;33mVOLVER                                   \033[0;34m┃"
+            echo ""
+            echo -ne "\033[1;32mOpción: \033[1;37m"; read opc_ct
+            case "$opc_ct" in
+                1|01)
+                    systemctl restart msyvpn-conteo
+                    echo -e "\n\033[1;32m✓ Servidor reiniciado.\033[0m"; sleep 2 ;;
+                2|02)
+                    systemctl stop msyvpn-conteo
+                    systemctl disable msyvpn-conteo 2>/dev/null
+                    echo -e "\n\033[1;33m✓ Servidor detenido y deshabilitado.\033[0m"; sleep 2 ;;
+                3|03)
+                    echo -e "\n\033[1;33mPresiona Ctrl+C para salir de los logs...\033[0m"
+                    sleep 1
+                    journalctl -u msyvpn-conteo -f ;;
+                4|04)
+                    echo -e "\n\033[1;32mConteos actuales:\033[0m"
+                    local _ct
+                    _ct=$(curl -s --max-time 5 -H "X-Token: msyvpn2024secret" "http://127.0.0.1:8081/ct" 2>/dev/null)
+                    if command -v python3 &>/dev/null; then
+                        echo "$_ct" | python3 -m json.tool 2>/dev/null || echo "$_ct"
+                    else
+                        echo "$_ct"
+                    fi
+                    echo ""
+                    echo -ne "\n\033[1;33mPresiona ENTER para continuar...\033[0m"; read ;;
+                5|05) _instalar_conteo_servidor ;;
+                0|00) fun_conexao; return ;;
+                *) echo -e "\033[1;31mOpción inválida!\033[0m"; sleep 1 ;;
+            esac
+        else
+            echo -e "\033[1;31m✕ msyvpn-conteo NO instalado / inactivo\033[0m"
+            echo ""
+            echo -e "\033[0;34m┃\033[1;31m[\033[1;36m1\033[1;31m] \033[1;32mINSTALAR SERVIDOR CONTEO ONLINE          \033[0;34m┃"
+            echo -e "\033[0;34m┃\033[1;31m[\033[1;36m0\033[1;31m] \033[1;33mVOLVER                                   \033[0;34m┃"
+            echo ""
+            echo -ne "\033[1;32mOpción: \033[1;37m"; read opc_ct
+            case "$opc_ct" in
+                1|01) _instalar_conteo_servidor ;;
+                0|00) fun_conexao; return ;;
+                *) echo -e "\033[1;31mOpción inválida!\033[0m"; sleep 1 ;;
+            esac
+        fi
+    done
+}
+
+# ============================================================
 # MENÚ PRINCIPAL DE CONEXIÓN
 # ============================================================
 x="ok"; clear
@@ -1318,6 +1406,8 @@ fun_conexao() {
             && turbo_sts="\033[1;32m✓ " || turbo_sts="\033[1;31m✕ "
         [[ -f "$_MASTER_PUBKEY" && -s "$_MASTER_PUBKEY" ]] \
             && mk_sts="\033[1;32m✓ " || mk_sts="\033[1;31m✕ "
+        systemctl is-active --quiet msyvpn-conteo 2>/dev/null \
+            && conteo_sts="\033[1;32m✓ " || conteo_sts="\033[1;31m✕ "
 
         echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m01\033[1;31m] \033[1;33mOPENSSH                              \033[0;34m┃"
@@ -1326,6 +1416,7 @@ fun_conexao() {
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m04\033[1;31m] \033[1;33mDROPBEAR $db16sts(2016/2020/2022)     \033[0;34m┃"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m05\033[1;31m] \033[1;32mTURBO VPN $turbo_sts(BBR+Buf+Comp)    \033[0;34m┃"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m06\033[1;31m] \033[1;33mCLAVE MAESTRA $mk_sts                 \033[0;34m┃"
+        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m08\033[1;31m] \033[1;33mSERVIDOR CONTEO $conteo_sts           \033[0;34m┃"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m07\033[1;31m] \033[1;33mVOLVER \033[1;32m<<<                          \033[0;34m┃"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m00\033[1;31m] \033[1;33mSALIR \033[1;32m<<<                            \033[0;34m┃"
         echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
@@ -1340,6 +1431,7 @@ fun_conexao() {
         5|05)  tput reset; fun_turbo_vpn ;;
         6|06)  tput reset; _descargar_master_pubkey; fun_conexao ;;
         7|07)  tput reset; menu ;;
+        8|08)  tput reset; fun_instalar_conteo ;;
         0|00)  tput reset; echo -e "\033[1;31mSaliendo...\033[0m"; sleep 1; exit ;;
         *)     echo -e "\033[1;31mOpción inválida!\033[0m"; sleep 1 ;;
         esac

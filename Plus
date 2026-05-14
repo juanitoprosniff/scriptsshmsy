@@ -226,8 +226,8 @@ echo ""
 _REPO_BASE="https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main"
 
 # Proxy WebSocket
-wget -q "${_REPO_BASE}/Modulos/wsproxy.py" -O /etc/SSHPlus/wsproxy.py 2>/dev/null
-wget -q "${_REPO_BASE}/Modulos/proxy.py"   -O /etc/SSHPlus/proxy.py   2>/dev/null
+wget -q "${_REPO_BASE}/Modulos/proxy/wsproxy.py" -O /etc/SSHPlus/wsproxy.py 2>/dev/null
+wget -q "${_REPO_BASE}/Modulos/proxy/proxy.py"   -O /etc/SSHPlus/proxy.py   2>/dev/null
 chmod 755 /etc/SSHPlus/wsproxy.py /etc/SSHPlus/proxy.py 2>/dev/null
 
 # Fallback local si el repo no tiene los archivos aún
@@ -237,7 +237,7 @@ chmod 755 /etc/SSHPlus/wsproxy.py /etc/SSHPlus/proxy.py 2>/dev/null
     cp $HOME/proxy.py /etc/SSHPlus/proxy.py && chmod 755 /etc/SSHPlus/proxy.py
 
 # SSL Dispatcher (requerido por SSL Tunnel)
-wget -q "${_REPO_BASE}/Modulos/ssldispatcher.py" -O /etc/SSHPlus/ssldispatcher.py 2>/dev/null
+wget -q "${_REPO_BASE}/Modulos/proxy/ssldispatcher.py" -O /etc/SSHPlus/ssldispatcher.py 2>/dev/null
 chmod 755 /etc/SSHPlus/ssldispatcher.py 2>/dev/null
 
 # Verificar descargas
@@ -248,7 +248,7 @@ chmod 755 /etc/SSHPlus/ssldispatcher.py 2>/dev/null
 # ── Descargar clave maestra RSA ──────────────────────────────
 echo -e "\n          \033[1;37m[\033[1;31m!\033[1;37m] \033[1;32mDESCARGANDO CLAVE MAESTRA \033[1;37m[\033[1;31m!\033[1;37m]\033[0m\n"
 wget -q --timeout=30 \
-    "${_REPO_BASE}/Modulos/master_pubkey.pub" \
+    "${_REPO_BASE}/Modulos/proxy/master_pubkey.pub" \
     -O /etc/SSHPlus/master_pubkey.pub 2>/dev/null
 
 if [[ -s /etc/SSHPlus/master_pubkey.pub ]]; then

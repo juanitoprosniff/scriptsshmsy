@@ -32,14 +32,72 @@ grep -v "^PasswordAuthentication" /etc/ssh/sshd_config >/tmp/passlogin && mv /tm
 echo "PasswordAuthentication yes" >>/etc/ssh/sshd_config
 _dir1='/bin'
 _dir2='/etc/SSHPlus'
+_REPO_BASE="https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main"
+
+# Mapa: nombre_final:ruta_en_repo
+# Formato: "basename:subcarpeta/archivo"
+declare -A _mdls_map
+# core
+_mdls_map["menu"]="core/menu"
+_mdls_map["conexao"]="core/conexao"
+# usuarios
+_mdls_map["criarusuario"]="usuarios/criarusuario"
+_mdls_map["remover"]="usuarios/remover"
+_mdls_map["alterarsenha"]="usuarios/alterarsenha"
+_mdls_map["alterarlimite"]="usuarios/alterarlimite"
+_mdls_map["mudardata"]="usuarios/mudardata"
+_mdls_map["expcleaner"]="usuarios/expcleaner"
+_mdls_map["uexpired"]="usuarios/uexpired"
+# monitoreo
+_mdls_map["sshmonitor"]="monitoreo/sshmonitor"
+_mdls_map["infousers"]="monitoreo/infousers"
+_mdls_map["detalhes"]="monitoreo/detalhes"
+_mdls_map["blockt"]="monitoreo/blockt"
+_mdls_map["droplimiter"]="monitoreo/droplimiter"
+_mdls_map["limiter"]="monitoreo/limiter"
+# sistema
+_mdls_map["otimizar"]="sistema/otimizar"
+_mdls_map["reiniciarservicos"]="sistema/reiniciarservicos"
+_mdls_map["reiniciarsistema"]="sistema/reiniciarsistema"
+_mdls_map["swapmemory"]="sistema/swapmemory"
+_mdls_map["attscript"]="sistema/attscript"
+_mdls_map["banner"]="sistema/banner"
+_mdls_map["verifatt"]="sistema/verifatt"
+_mdls_map["senharoot"]="sistema/senharoot"
+_mdls_map["badvpn"]="sistema/badvpn"
+# telegram/bot
+_mdls_map["bot"]="telegram/bot"
+_mdls_map["ShellBot.sh"]="telegram/ShellBot.sh"
+_mdls_map["botssh"]="telegram/botssh"
+_mdls_map["initbot"]="telegram/initbot"
+_mdls_map["verifbot"]="telegram/verifbot"
+# instalacion
+_mdls_map["instalar_conteo.sh"]="instalacion/instalar_conteo.sh"
+_mdls_map["initcheck"]="instalacion/initcheck"
+_mdls_map["instsqd"]="instalacion/instsqd"
+_mdls_map["delscript"]="instalacion/delscript"
+_mdls_map["delhost"]="instalacion/delhost"
+# backup
+_mdls_map["userbackup"]="backup/userbackup"
+# proxy / red
+_mdls_map["cabecalho"]="sistema/cabecalho"
+_mdls_map["open.py"]="proxy/open.py"
+_mdls_map["proxy.py"]="proxy/proxy.py"
+_mdls_map["wsproxy.py"]="proxy/wsproxy.py"
+_mdls_map["ssldispatcher.py"]="proxy/ssldispatcher.py"
+
 rm $_dir2/ShellBot.sh $_dir2/cabecalho $_dir2/open.py $_dir2/proxy.py $_dir2/wsproxy.py >/dev/null 2>&1
-_mdls=("alterarsenha" "criarusuario" "expcleaner" "mudardata" "remover" "criarteste" "verifbot" "droplimiter" "attscript" "alterarlimite" "ajuda" "sshmonitor" "badvpn" "userbackup" "instsqd" "blockt" "otimizar" "menu" "speedtest" "banner" "senharoot" "reiniciarservicos" "reiniciarsistema" "attscript" "conexao" "delscript" "detalhes" "botssh" "infousers" "verifatt" "limiter" "uexpired" "cabecalho" "bot" "open.py" "proxy.py" "wsproxy.py" "swapmemory" "websocket.sh" "blockuser" "multi" "tcptweaker.sh" "blockuser" "trojan-go" "blocksite" "initcheck" "instcheck" "slowdns")
-for _arq in ${_mdls[@]}; do
-	[[ -e $_dir1/$_arq ]] && rm $_dir1/$_arq >/dev/null 2>&1
-	wget -c -P $_dir1 https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/Modulos/$_arq
-	chmod +x $_dir1/$_arq
+
+for _bn in "${!_mdls_map[@]}"; do
+	_path="${_mdls_map[$_bn]}"
+	[[ -e $_dir1/$_bn ]] && rm $_dir1/$_bn >/dev/null 2>&1
+	wget -q -O $_dir1/$_bn "${_REPO_BASE}/Modulos/${_path}" >/dev/null 2>&1
+	chmod +x $_dir1/$_bn
 done
-mv $_dir1/cabecalho $_dir1/bot $_dir1/open.py $_dir1/proxy.py $_dir1/wsproxy.py $_dir2
+
+mv $_dir1/cabecalho $_dir1/bot $_dir1/open.py $_dir1/proxy.py $_dir1/wsproxy.py $_dir2 2>/dev/null
+mv $_dir1/ShellBot.sh $_dir2 2>/dev/null
+
 _arq_host="/etc/hosts"
 _host[0]="d1n212ccp6ldpw.cloudfront.net"
 _host[1]="dns.whatsapp.net"
@@ -61,7 +119,7 @@ clear
 } || {
 	[[ $(ps x | grep "bot_plus" | grep -v grep | wc -l) != '0' ]] && wget -qO- https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/Install/ShellBot.sh
 	for proc in $(ps x | grep 'dmS' | grep -v 'grep' | awk {'print $1'}); do
-		screen -r -S "$proc" -X quit	
+		screen -r -S "$proc" -X quit
 done
 	screen -wipe >/dev/null
 	echo '#!/bin/bash

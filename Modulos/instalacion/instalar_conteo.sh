@@ -2,10 +2,9 @@
 # ╔══════════════════════════════════════════════════════════════════════════╗
 # ║  instalar_conteo.sh - Servidor conteo online MSY VPN                    ║
 # ║  Archivos en /root | HTTP :8081 | TCP :8082                             ║
-# ║  Ubuntu 18, 20, 22, 24 | Node.js via NVM                               ║
+# ║  Ubuntu 18, 20, 22, 24, 25, 26, 27+ | Node.js via NVM                  ║
 # ║  t:me/JuanitoProSniif                                                    ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
-set -e
 
 VERDE='\033[0;32m'; ROJO='\033[0;31m'; AMARILLO='\033[1;33m'; AZUL='\033[0;34m'; NC='\033[0m'
 ok()    { echo -e "${VERDE}[OK]${NC} $1"; }
@@ -13,13 +12,18 @@ info()  { echo -e "${AZUL}[INFO]${NC} $1"; }
 error() { echo -e "${ROJO}[ERROR]${NC} $1"; exit 1; }
 aviso() { echo -e "${AMARILLO}[AVISO]${NC} $1"; }
 
+# Detectar versión Ubuntu
+_UBUNTU_VER=$(lsb_release -rs 2>/dev/null | cut -d. -f1 || grep -oP '(?<=Ubuntu )\d+' /etc/issue.net 2>/dev/null || echo "0")
+
 echo -e "${VERDE}"
 echo "╔══════════════════════════════════════════════════╗"
 echo "║   Servidor Conteo Online MSY VPN                 ║"
 echo "║   HTTP :8081 + TCP :8082  |  Archivos en /root   ║"
+echo "║   Ubuntu 18 → 27+  |  Node.js via NVM            ║"
 echo -e "╚══════════════════════════════════════════════════╝${NC}"
 
 [ "$EUID" -ne 0 ] && error "Ejecutar como root: sudo bash instalar_conteo.sh"
+info "Ubuntu $_UBUNTU_VER detectado"
 
 ARCHIVO_JS="/root/conteo_server.js"
 SERVICIO="/etc/systemd/system/msyvpn-conteo.service"
@@ -27,24 +31,35 @@ NVM_DIR="/root/.nvm"
 
 # ── Dependencias ──────────────────────────────────────────────────────────────
 info "Actualizando paquetes..."
-apt-get update -qq
-apt-get install -y -qq curl build-essential
+apt-get update -qq 2>/dev/null || true
+apt-get install -y -qq curl build-essential 2>/dev/null || \
+    apt-get install -y curl build-essential 2>/dev/null || true
 
 # ── Node.js via NVM ───────────────────────────────────────────────────────────
+# NVM funciona en Ubuntu 18-27 (no depende de la versión del sistema)
 if [ ! -d "$NVM_DIR" ]; then
     info "Instalando NVM..."
-    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+    # Intentar con la versión más reciente de NVM
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh 2>/dev/null | bash || \
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh 2>/dev/null | bash || \
+    wget -qO- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh 2>/dev/null | bash
 fi
 
 export NVM_DIR="$NVM_DIR"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 
-info "Instalando Node.js 18 LTS..."
-nvm install 18 2>/dev/null || nvm install --lts
-nvm use 18    2>/dev/null || nvm use --lts
-nvm alias default 18 2>/dev/null || true
+# Verificar que NVM está disponible
+if ! command -v nvm &>/dev/null && ! type nvm &>/dev/null 2>&1; then
+    error "No se pudo instalar NVM. Verifica tu conexión a internet."
+fi
 
-NODE_BIN=$(which node)
+info "Instalando Node.js 18 LTS..."
+nvm install 18 2>/dev/null || nvm install 20 2>/dev/null || nvm install --lts 2>/dev/null
+nvm use 18    2>/dev/null || nvm use 20 2>/dev/null || nvm use --lts 2>/dev/null
+nvm alias default 18 2>/dev/null || nvm alias default 20 2>/dev/null || true
+
+NODE_BIN=$(command -v node 2>/dev/null || echo "")
+[ -z "$NODE_BIN" ] && error "No se encontró el binario node tras la instalación."
 ok "Node.js $(node --version) instalado en $NODE_BIN"
 
 # ── Crear servidor Node.js ────────────────────────────────────────────────────
@@ -279,11 +294,13 @@ else
 fi
 
 # ── Servicio systemd ──────────────────────────────────────────────────────────
+# Ubuntu 18+ incluye systemd por defecto
 info "Configurando servicio systemd..."
 cat > "$SERVICIO" << SYSEOF
 [Unit]
 Description=MSY VPN Servidor Conteo Online
 After=network.target
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -296,32 +313,40 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=msyvpn-conteo
 Environment=NODE_ENV=production
+Environment=HOME=/root
 
 [Install]
 WantedBy=multi-user.target
 SYSEOF
 
-systemctl daemon-reload
-systemctl enable msyvpn-conteo
-systemctl restart msyvpn-conteo
-sleep 2
+systemctl daemon-reload 2>/dev/null || true
+systemctl enable msyvpn-conteo 2>/dev/null || true
+systemctl restart msyvpn-conteo 2>/dev/null || service msyvpn-conteo restart 2>/dev/null || true
+sleep 3
 
-if systemctl is-active --quiet msyvpn-conteo; then
+if systemctl is-active --quiet msyvpn-conteo 2>/dev/null; then
     ok "Servicio msyvpn-conteo activo"
 else
     aviso "Error con systemd. Revisando logs..."
-    journalctl -u msyvpn-conteo -n 10 --no-pager
+    journalctl -u msyvpn-conteo -n 15 --no-pager 2>/dev/null || true
+    echo -e "${AMARILLO}Si el servicio no inicia, ejecuta manualmente:${NC}"
+    echo -e "  $NODE_BIN $ARCHIVO_JS &"
 fi
 
 # ── Firewall ──────────────────────────────────────────────────────────────────
 info "Abriendo puertos 8081 y 8082..."
-if command -v ufw &>/dev/null; then
-    ufw allow 8081/tcp comment "MSY VPN HTTP" 2>/dev/null
-    ufw allow 8082/tcp comment "MSY VPN TCP"  2>/dev/null
+if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q "active"; then
+    # Ubuntu 18 no soporta "comment" en ufw allow — usar sin comentario
+    ufw allow 8081/tcp 2>/dev/null || true
+    ufw allow 8082/tcp 2>/dev/null || true
     ok "Puertos abiertos en UFW"
-else
-    iptables -I INPUT -p tcp --dport 8081 -j ACCEPT 2>/dev/null || true
-    iptables -I INPUT -p tcp --dport 8082 -j ACCEPT 2>/dev/null || true
+fi
+# Siempre aplicar iptables como respaldo
+if command -v iptables &>/dev/null; then
+    iptables -C INPUT -p tcp --dport 8081 -j ACCEPT 2>/dev/null || \
+        iptables -I INPUT -p tcp --dport 8081 -j ACCEPT 2>/dev/null || true
+    iptables -C INPUT -p tcp --dport 8082 -j ACCEPT 2>/dev/null || \
+        iptables -I INPUT -p tcp --dport 8082 -j ACCEPT 2>/dev/null || true
     ok "Puertos abiertos en iptables"
 fi
 
