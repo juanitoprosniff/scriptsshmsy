@@ -1,0 +1,1152 @@
+#!/bin/bash
+# ============================================================
+# V2RAY/XRAY MULTI-PROTOCOL MULTI-PORT MANAGER
+# Protocolos: VLESS · VMess · Trojan (WebSocket)
+# Puertos HTTP: 80, 8080, 8880, 8888 (via NGINX)
+# Puertos SSL:  443, 444, 8443        (via NGINX + TLS)
+# Integración: SSH WS + SSL tunnel sin interferencia
+# ============================================================
+
+# ── Colores ──────────────────────────────────────────────────
+RED='\033[0;31m';    GREEN='\033[0;32m';  YELLOW='\033[1;33m'
+BLUE='\033[0;34m';   CYAN='\033[0;36m';  PURPLE='\033[0;35m'
+WHITE='\033[1;37m';  NC='\033[0m'
+C1='\E[38;5;18m';    C2='\E[38;5;196m';  C3='\E[38;5;33m'
+C4='\E[38;5;195m';   C5='\E[38;5;40m'
+
+# ── Rutas ────────────────────────────────────────────────────
+XRAY_BIN="/usr/local/bin/xray"
+XRAY_DIR="/etc/xray"
+XRAY_CFG="$XRAY_DIR/config.json"
+XRAY_DB="$XRAY_DIR/users.db"
+XRAY_DOMAIN_FILE="$XRAY_DIR/domain.conf"
+NGINX_HTTP_CONF="/etc/nginx/conf.d/xray-http.conf"
+NGINX_SSL_CONF="/etc/nginx/conf.d/xray-ssl.conf"
+XRAY_PORT_VLESS=10085
+XRAY_PORT_VMESS=10086
+XRAY_PORT_TROJAN=10087
+WSPROXY_INT=2082
+NGINX_INT=8000
+
+# ── Utilidades internas ───────────────────────────────────────
+
+_xray_installed() {
+    [[ -x "$XRAY_BIN" && -f "$XRAY_CFG" ]]
+}
+
+_xray_running() {
+    systemctl is-active --quiet xray 2>/dev/null
+}
+
+_gen_uuid() {
+    if command -v uuidgen &>/dev/null; then
+        uuidgen | tr '[:upper:]' '[:lower:]'
+    else
+        cat /proc/sys/kernel/random/uuid 2>/dev/null || \
+        python3 -c "import uuid; print(str(uuid.uuid4()))"
+    fi
+}
+
+_get_server_ip() {
+    cat /etc/IP 2>/dev/null || \
+    curl -s4 ifconfig.me 2>/dev/null || \
+    hostname -I 2>/dev/null | awk '{print $1}'
+}
+
+_get_domain() {
+    [[ -f "$XRAY_DOMAIN_FILE" ]] && head -1 "$XRAY_DOMAIN_FILE" || _get_server_ip
+}
+
+_get_tls_enabled() {
+    [[ -f "$XRAY_DOMAIN_FILE" ]] && grep -q "^tls=yes" "$XRAY_DOMAIN_FILE"
+}
+
+_get_cert_file() {
+    [[ -f "$XRAY_DOMAIN_FILE" ]] && grep "^cert=" "$XRAY_DOMAIN_FILE" | cut -d= -f2
+}
+
+_get_key_file() {
+    [[ -f "$XRAY_DOMAIN_FILE" ]] && grep "^key=" "$XRAY_DOMAIN_FILE" | cut -d= -f2
+}
+
+_pause() {
+    echo -ne "\n${C2}» ${WHITE}ENTER ${NC}para continuar: "; read -r
+}
+
+_header() {
+    clear
+    echo -e "${C1}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${NC}"
+    echo -e "${C1}┃${NC}\E[44;1;37m            V2RAY / XRAY MULTI-PORT MANAGER            ${NC}${C1}┃${NC}"
+    echo -e "${C1}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${NC}"
+}
+
+# ── Manipulación de config.json con Python3 ───────────────────
+
+_xray_add_user_cfg() {
+    local uuid="$1" name="$2"
+    python3 - "$uuid" "$name" "$XRAY_CFG" <<'PYEOF'
+import json, sys
+uuid, name, cfg_path = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(cfg_path) as f: cfg = json.load(f)
+for ib in cfg['inbounds']:
+    proto = ib.get('protocol','')
+    client = {'email': name, 'level': 0}
+    if proto in ('vless',):
+        client['id'] = uuid
+        client['encryption'] = 'none'
+    elif proto == 'vmess':
+        client['id'] = uuid
+        client['alterId'] = 0
+    elif proto == 'trojan':
+        client['password'] = uuid  # UUID como contraseña Trojan
+    ib['settings']['clients'].append(client)
+with open(cfg_path, 'w') as f: json.dump(cfg, f, indent=2)
+print("OK")
+PYEOF
+}
+
+_xray_del_user_cfg() {
+    local uuid="$1"
+    python3 - "$uuid" "$XRAY_CFG" <<'PYEOF'
+import json, sys
+uuid, cfg_path = sys.argv[1], sys.argv[2]
+with open(cfg_path) as f: cfg = json.load(f)
+for ib in cfg['inbounds']:
+    clients = ib['settings'].get('clients', [])
+    ib['settings']['clients'] = [
+        c for c in clients
+        if c.get('id', c.get('password','')) != uuid
+    ]
+with open(cfg_path, 'w') as f: json.dump(cfg, f, indent=2)
+print("OK")
+PYEOF
+}
+
+_xray_list_users_cfg() {
+    python3 - "$XRAY_CFG" <<'PYEOF'
+import json, sys
+with open(sys.argv[1]) as f: cfg = json.load(f)
+ids = {}
+for ib in cfg['inbounds']:
+    for c in ib['settings'].get('clients', []):
+        uid = c.get('id', c.get('password',''))
+        email = c.get('email', uid[:8])
+        if uid not in ids:
+            ids[uid] = email
+for uid, email in ids.items():
+    print(f"{uid}|{email}")
+PYEOF
+}
+
+# ── Config URI generators ─────────────────────────────────────
+
+_uri_vless_nontls() {
+    local uuid="$1" name="$2" server="$3" port="$4" path="$5" sni_host="$6"
+    local host_hdr="${sni_host:-$server}"
+    printf 'vless://%s@%s:%s?encryption=none&security=none&type=ws&path=%s&host=%s#%s\n' \
+        "$uuid" "$server" "$port" "$path" "$host_hdr" "$(python3 -c "import urllib.parse; print(urllib.parse.quote('$name'))")"
+}
+
+_uri_vless_tls() {
+    local uuid="$1" name="$2" server="$3" port="$4" path="$5" domain="$6" sni="$7"
+    local sni_val="${sni:-$domain}"
+    printf 'vless://%s@%s:%s?encryption=none&security=tls&sni=%s&type=ws&path=%s&host=%s&allowInsecure=1#%s\n' \
+        "$uuid" "$server" "$port" "$sni_val" "$path" "$domain" "$(python3 -c "import urllib.parse; print(urllib.parse.quote('$name'))")"
+}
+
+_uri_vmess() {
+    local uuid="$1" name="$2" server="$3" port="$4" path="$5" tls="$6" sni_host="$7"
+    local host_hdr="${sni_host:-$server}"
+    local security="${tls:-none}"
+    local sni_val="${sni_host:-$server}"
+    local json
+    json=$(python3 -c "
+import json, base64
+d = {
+    'v':'2', 'ps':'$name', 'add':'$server', 'port':'$port',
+    'id':'$uuid', 'aid':'0', 'scy':'auto', 'net':'ws',
+    'type':'none', 'host':'$host_hdr', 'path':'$path',
+    'tls':'$security', 'sni':'$sni_val', 'alpn':''
+}
+print(base64.b64encode(json.dumps(d).encode()).decode())
+")
+    echo "vmess://$json"
+}
+
+_uri_trojan_nontls() {
+    local uuid="$1" name="$2" server="$3" port="$4" path="$5" sni_host="$6"
+    local host_hdr="${sni_host:-$server}"
+    printf 'trojan://%s@%s:%s?security=none&type=ws&path=%s&host=%s#%s\n' \
+        "$uuid" "$server" "$port" "$path" "$host_hdr" "$(python3 -c "import urllib.parse; print(urllib.parse.quote('$name'))")"
+}
+
+_uri_trojan_tls() {
+    local uuid="$1" name="$2" server="$3" port="$4" path="$5" domain="$6" sni="$7"
+    local sni_val="${sni:-$domain}"
+    printf 'trojan://%s@%s:%s?security=tls&sni=%s&type=ws&path=%s&host=%s&allowInsecure=1#%s\n' \
+        "$uuid" "$server" "$port" "$sni_val" "$path" "$domain" "$(python3 -c "import urllib.parse; print(urllib.parse.quote('$name'))")"
+}
+
+# ── Mostrar URIs para un usuario ──────────────────────────────
+
+_show_user_uris() {
+    local uuid="$1" name="$2"
+    local server domain tls_on sni_host bug_host rev_sni
+
+    server=$(_get_server_ip)
+    domain=$(_get_domain)
+    tls_on=$(_get_tls_enabled && echo "yes" || echo "no")
+
+    _header
+    echo -e ""
+    echo -e "${WHITE}  Usuario : ${CYAN}$name${NC}"
+    echo -e "${WHITE}  UUID    : ${YELLOW}$uuid${NC}"
+    echo ""
+
+    # Preguntar modo SNI/Bug
+    echo -e "${WHITE}  ¿Configuración de SNI / Bug host?${NC}"
+    echo -e "  ${CYAN}[1]${NC} Normal (sin bug host)"
+    echo -e "  ${CYAN}[2]${NC} SNI / Bug host (CDN bypass)"
+    echo -e "  ${CYAN}[3]${NC} Reverse SNI (dominio como dirección, bug como SNI)"
+    echo -ne "\n  Elige [1-3]: "; read -r sni_mode
+
+    case "$sni_mode" in
+        2)
+            echo -ne "  Bug host / SNI (ej: bug.cloudflare.com): "; read -r bug_host
+            sni_host="${bug_host:-$server}"
+            ;;
+        3)
+            echo -ne "  Bug host para SNI (ej: bug.cloudflare.com): "; read -r bug_host
+            server="$domain"
+            sni_host="${bug_host:-$domain}"
+            rev_sni="yes"
+            ;;
+    esac
+
+    echo ""
+    echo -e "${C1}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${WHITE}  CONFIGS SIN TLS  (puertos: 80, 8080, 8880, 8888)${NC}"
+    echo -e "${C1}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+
+    for port in 80 8080 8880 8888; do
+        echo ""
+        echo -e "${YELLOW}  ── Puerto $port ──${NC}"
+
+        echo -e "${CYAN}  [VLESS]${NC}"
+        echo "  $(_uri_vless_nontls "$uuid" "$name" "$server" "$port" "/vless" "$sni_host")"
+
+        echo -e "${CYAN}  [VMess]${NC}"
+        echo "  $(_uri_vmess "$uuid" "$name" "$server" "$port" "/vmess" "none" "$sni_host")"
+
+        echo -e "${CYAN}  [Trojan]${NC}"
+        echo "  $(_uri_trojan_nontls "$uuid" "$name" "$server" "$port" "/trojan" "$sni_host")"
+    done
+
+    if [[ "$tls_on" == "yes" ]]; then
+        echo ""
+        echo -e "${C1}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "${WHITE}  CONFIGS CON TLS  (puertos: 443, 444, 8443)${NC}"
+        echo -e "${C1}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+
+        for port in 443 444 8443; do
+            echo ""
+            echo -e "${YELLOW}  ── Puerto $port (TLS) ──${NC}"
+            local tls_server="${rev_sni:+$domain}"
+            tls_server="${tls_server:-$server}"
+
+            echo -e "${CYAN}  [VLESS+TLS]${NC}"
+            echo "  $(_uri_vless_tls "$uuid" "$name" "$tls_server" "$port" "/vless" "$domain" "$sni_host")"
+
+            echo -e "${CYAN}  [VMess+TLS]${NC}"
+            echo "  $(_uri_vmess "$uuid" "$name" "$tls_server" "$port" "/vmess" "tls" "$sni_host")"
+
+            echo -e "${CYAN}  [Trojan+TLS]${NC}"
+            echo "  $(_uri_trojan_tls "$uuid" "$name" "$tls_server" "$port" "/trojan" "$domain" "$sni_host")"
+        done
+    fi
+
+    echo ""
+    _pause
+}
+
+# ── INSTALAR V2RAY/XRAY ───────────────────────────────────────
+
+_detect_arch() {
+    case "$(uname -m)" in
+        x86_64|amd64)  echo "64" ;;
+        aarch64|arm64) echo "arm64-v8a" ;;
+        armv7*|armhf)  echo "arm32-v7a" ;;
+        *)             echo "64" ;;
+    esac
+}
+
+_install_deps_v2ray() {
+    echo -ne "  ${YELLOW}Instalando dependencias...${NC} "
+    apt-get update -qq >/dev/null 2>&1
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+        nginx curl wget unzip jq openssl qrencode >/dev/null 2>&1
+    echo -e "${GREEN}OK${NC}"
+}
+
+_download_xray() {
+    echo -ne "  ${YELLOW}Descargando XRay...${NC} "
+    local arch
+    arch=$(_detect_arch)
+    local api_url="https://api.github.com/repos/XTLS/Xray-core/releases/latest"
+    local dl_url
+    dl_url=$(curl -s --connect-timeout 10 "$api_url" 2>/dev/null | \
+        grep "browser_download_url" | grep "Xray-linux-${arch}\.zip" | \
+        head -1 | cut -d'"' -f4)
+
+    if [[ -z "$dl_url" ]]; then
+        dl_url="https://github.com/XTLS/Xray-core/releases/download/v25.4.30/Xray-linux-${arch}.zip"
+    fi
+
+    cd /tmp || return 1
+    rm -rf xray_extract xray.zip
+    if wget -q -O xray.zip "$dl_url" 2>/dev/null && [[ -s xray.zip ]]; then
+        unzip -q xray.zip -d xray_extract 2>/dev/null
+        install -m755 xray_extract/xray "$XRAY_BIN"
+        rm -rf xray_extract xray.zip
+        echo -e "${GREEN}OK  ($(${XRAY_BIN} version 2>/dev/null | head -1 | awk '{print $2}'))${NC}"
+    else
+        echo -e "${RED}FALLO - Verifica conexión a internet${NC}"
+        return 1
+    fi
+
+    mkdir -p /usr/local/share/xray
+    {
+        wget -q -O /usr/local/share/xray/geoip.dat \
+            "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat" 2>/dev/null
+        wget -q -O /usr/local/share/xray/geosite.dat \
+            "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat" 2>/dev/null
+    } &
+}
+
+_create_initial_cfg() {
+    mkdir -p "$XRAY_DIR"
+    mkdir -p /var/log/xray
+    [[ -f "$XRAY_DB" ]] || touch "$XRAY_DB"
+
+    cat > "$XRAY_CFG" <<'JSONCFG'
+{
+  "log": {
+    "loglevel": "warning",
+    "access": "/var/log/xray/access.log",
+    "error": "/var/log/xray/error.log"
+  },
+  "inbounds": [
+    {
+      "port": 10085,
+      "listen": "127.0.0.1",
+      "protocol": "vless",
+      "tag": "vless-ws",
+      "settings": {
+        "clients": [],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "ws",
+        "wsSettings": { "path": "/vless", "headers": {} }
+      }
+    },
+    {
+      "port": 10086,
+      "listen": "127.0.0.1",
+      "protocol": "vmess",
+      "tag": "vmess-ws",
+      "settings": {
+        "clients": []
+      },
+      "streamSettings": {
+        "network": "ws",
+        "wsSettings": { "path": "/vmess", "headers": {} }
+      }
+    },
+    {
+      "port": 10087,
+      "listen": "127.0.0.1",
+      "protocol": "trojan",
+      "tag": "trojan-ws",
+      "settings": {
+        "clients": []
+      },
+      "streamSettings": {
+        "network": "ws",
+        "wsSettings": { "path": "/trojan", "headers": {} }
+      }
+    }
+  ],
+  "outbounds": [
+    { "protocol": "freedom", "tag": "direct"  },
+    { "protocol": "blackhole","tag": "blocked" }
+  ],
+  "routing": {
+    "domainStrategy": "AsIs",
+    "rules": [
+      { "type": "field", "ip": ["geoip:private"], "outboundTag": "blocked" }
+    ]
+  }
+}
+JSONCFG
+}
+
+_write_nginx_http() {
+    rm -f /etc/nginx/sites-enabled/default 2>/dev/null
+
+    cat > "$NGINX_HTTP_CONF" <<NGINXHTTP
+map \$http_upgrade \$connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+upstream xray_vless  { server 127.0.0.1:${XRAY_PORT_VLESS};  keepalive 32; }
+upstream xray_vmess  { server 127.0.0.1:${XRAY_PORT_VMESS};  keepalive 32; }
+upstream xray_trojan { server 127.0.0.1:${XRAY_PORT_TROJAN}; keepalive 32; }
+upstream wsproxy_ssh { server 127.0.0.1:${WSPROXY_INT};       keepalive 64; }
+
+# ── Puertos HTTP externos: 80, 8080, 8880, 8888 ──────────────
+server {
+    listen 80;
+    listen 8080;
+    listen 8880;
+    listen 8888;
+    server_name _;
+    access_log off;
+
+    location /vless {
+        proxy_pass         http://xray_vless;
+        proxy_http_version 1.1;
+        proxy_set_header   Upgrade    \$http_upgrade;
+        proxy_set_header   Connection \$connection_upgrade;
+        proxy_set_header   Host       \$host;
+        proxy_set_header   X-Real-IP  \$remote_addr;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        proxy_buffering    off;
+    }
+    location /vmess {
+        proxy_pass         http://xray_vmess;
+        proxy_http_version 1.1;
+        proxy_set_header   Upgrade    \$http_upgrade;
+        proxy_set_header   Connection \$connection_upgrade;
+        proxy_set_header   Host       \$host;
+        proxy_set_header   X-Real-IP  \$remote_addr;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        proxy_buffering    off;
+    }
+    location /trojan {
+        proxy_pass         http://xray_trojan;
+        proxy_http_version 1.1;
+        proxy_set_header   Upgrade    \$http_upgrade;
+        proxy_set_header   Connection \$connection_upgrade;
+        proxy_set_header   Host       \$host;
+        proxy_set_header   X-Real-IP  \$remote_addr;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        proxy_buffering    off;
+    }
+    # Fallback → SSH WebSocket Proxy (existente)
+    location / {
+        proxy_pass         http://wsproxy_ssh;
+        proxy_http_version 1.1;
+        proxy_set_header   Upgrade    \$http_upgrade;
+        proxy_set_header   Connection \$connection_upgrade;
+        proxy_set_header   Host       \$host;
+        proxy_set_header   X-Real-IP  \$remote_addr;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        proxy_buffering    off;
+    }
+}
+
+# ── Listener interno (para ssldispatcher backend HTTP) ────────
+server {
+    listen 127.0.0.1:${NGINX_INT};
+    server_name _;
+    access_log off;
+
+    location /vless  { proxy_pass http://xray_vless;  proxy_http_version 1.1; proxy_set_header Upgrade \$http_upgrade; proxy_set_header Connection \$connection_upgrade; proxy_set_header Host \$host; proxy_read_timeout 86400s; proxy_send_timeout 86400s; proxy_buffering off; }
+    location /vmess  { proxy_pass http://xray_vmess;  proxy_http_version 1.1; proxy_set_header Upgrade \$http_upgrade; proxy_set_header Connection \$connection_upgrade; proxy_set_header Host \$host; proxy_read_timeout 86400s; proxy_send_timeout 86400s; proxy_buffering off; }
+    location /trojan { proxy_pass http://xray_trojan; proxy_http_version 1.1; proxy_set_header Upgrade \$http_upgrade; proxy_set_header Connection \$connection_upgrade; proxy_set_header Host \$host; proxy_read_timeout 86400s; proxy_send_timeout 86400s; proxy_buffering off; }
+    location / {
+        proxy_pass         http://wsproxy_ssh;
+        proxy_http_version 1.1;
+        proxy_set_header   Upgrade    \$http_upgrade;
+        proxy_set_header   Connection \$connection_upgrade;
+        proxy_set_header   Host       \$host;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        proxy_buffering    off;
+    }
+}
+NGINXHTTP
+}
+
+_write_nginx_ssl() {
+    local domain="$1" cert="$2" key="$3"
+
+    cat > "$NGINX_SSL_CONF" <<NGINXSSL
+# ── Puertos SSL: 443, 444, 8443 ──────────────────────────────
+server {
+    listen 443 ssl;
+    listen 444 ssl;
+    listen 8443 ssl;
+    server_name ${domain} _;
+
+    ssl_certificate     ${cert};
+    ssl_certificate_key ${key};
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
+    ssl_prefer_server_ciphers off;
+    ssl_session_timeout 1d;
+    ssl_session_cache   shared:XSSL:10m;
+    access_log off;
+
+    location /vless {
+        proxy_pass         http://xray_vless;
+        proxy_http_version 1.1;
+        proxy_set_header   Upgrade    \$http_upgrade;
+        proxy_set_header   Connection \$connection_upgrade;
+        proxy_set_header   Host       \$host;
+        proxy_set_header   X-Real-IP  \$remote_addr;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        proxy_buffering    off;
+    }
+    location /vmess {
+        proxy_pass         http://xray_vmess;
+        proxy_http_version 1.1;
+        proxy_set_header   Upgrade    \$http_upgrade;
+        proxy_set_header   Connection \$connection_upgrade;
+        proxy_set_header   Host       \$host;
+        proxy_set_header   X-Real-IP  \$remote_addr;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        proxy_buffering    off;
+    }
+    location /trojan {
+        proxy_pass         http://xray_trojan;
+        proxy_http_version 1.1;
+        proxy_set_header   Upgrade    \$http_upgrade;
+        proxy_set_header   Connection \$connection_upgrade;
+        proxy_set_header   Host       \$host;
+        proxy_set_header   X-Real-IP  \$remote_addr;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        proxy_buffering    off;
+    }
+    location / {
+        proxy_pass         http://wsproxy_ssh;
+        proxy_http_version 1.1;
+        proxy_set_header   Upgrade    \$http_upgrade;
+        proxy_set_header   Connection \$connection_upgrade;
+        proxy_set_header   Host       \$host;
+        proxy_set_header   X-Real-IP  \$remote_addr;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        proxy_buffering    off;
+    }
+}
+NGINXSSL
+}
+
+_gen_selfsigned() {
+    local domain="${1:-vps.local}"
+    local cert="$XRAY_DIR/fullchain.pem"
+    local key="$XRAY_DIR/privkey.pem"
+    openssl req -x509 -newkey rsa:4096 -keyout "$key" -out "$cert" -days 3650 -nodes \
+        -subj "/C=US/ST=State/L=City/O=VPN/CN=${domain}" 2>/dev/null
+    echo "${cert}|${key}"
+}
+
+_migrate_wsproxy() {
+    local wsproxy_path
+    wsproxy_path=$(find /etc/SSHPlus /etc -name "wsproxy.py" 2>/dev/null | head -1)
+    [[ -z "$wsproxy_path" ]] && wsproxy_path="/etc/SSHPlus/wsproxy.py"
+
+    # Detectar backend SSH del wsproxy actual (antes de migrar)
+    local ssh_backend="127.0.0.1:22"
+    if [[ -f /etc/autostart ]]; then
+        local detected
+        detected=$(grep -E "wsproxy.*\.py\s+80\b" /etc/autostart 2>/dev/null | \
+            awk '{for(i=1;i<=NF;i++) if($i~/^127\.0\.0\.1:[0-9]+$/) {print $i; exit}}')
+        [[ -n "$detected" ]] && ssh_backend="$detected"
+    fi
+
+    # Matar instancias wsproxy en puertos HTTP externos
+    for pt in 80 8080 8880 8888; do
+        pkill -f "wsproxy.*\.py.*\b${pt}\b" 2>/dev/null
+    done
+    for sess in $(screen -ls 2>/dev/null | \
+            grep -E '\.(ws80|ws8080|ws8880|ws8888)\b' | awk '{print $1}'); do
+        screen -r -S "$sess" -X quit 2>/dev/null
+    done
+
+    # Actualizar /etc/autostart
+    if [[ -f /etc/autostart ]]; then
+        sed -i '/wsproxy.*\.py\s\+80\b/d' /etc/autostart
+        sed -i '/wsproxy.*\.py\s\+8080\b/d' /etc/autostart
+        sed -i '/wsproxy.*\.py\s\+8880\b/d' /etc/autostart
+        sed -i '/wsproxy.*\.py\s\+8888\b/d' /etc/autostart
+        sed -i "/wsproxy.*\.py\s\+${WSPROXY_INT}\b/d" /etc/autostart
+        # Actualizar ssldispatcher para apuntar al nginx interno
+        sed -i "s|ssldispatcher\.py \([0-9]*\) \([^ ]*\) [^ ]*|ssldispatcher.py \1 \2 127.0.0.1:${NGINX_INT}|g" /etc/autostart
+        # Agregar nginx y wsproxy interno al autostart
+        echo "screen -dmS ws${WSPROXY_INT} python3 ${wsproxy_path} ${WSPROXY_INT} ${ssh_backend}" >> /etc/autostart
+        grep -q "nginx" /etc/autostart || echo "nginx -t 2>/dev/null && nginx 2>/dev/null || nginx -s reload 2>/dev/null" >> /etc/autostart
+    fi
+
+    # Arrancar wsproxy en puerto interno
+    screen -wipe >/dev/null 2>&1
+    screen -dmS "ws${WSPROXY_INT}" python3 "${wsproxy_path}" "${WSPROXY_INT}" "${ssh_backend}"
+
+    # Reiniciar ssldispatcher con nuevo backend HTTP
+    for sess in $(screen -ls 2>/dev/null | grep -E 'ssl_disp|ssldispatch' | awk '{print $1}'); do
+        screen -r -S "$sess" -X quit 2>/dev/null
+    done
+    pkill -f "ssldispatcher" 2>/dev/null
+    local disp_path
+    disp_path=$(find /etc/SSHPlus /etc -name "ssldispatcher.py" 2>/dev/null | head -1)
+    if [[ -n "$disp_path" ]]; then
+        sleep 1
+        screen -dmS ssl_dispatcher python3 "$disp_path" 10443 127.0.0.1:143 "127.0.0.1:${NGINX_INT}"
+    fi
+}
+
+_create_systemd_xray() {
+    cat > /etc/systemd/system/xray.service <<'SYSTEMD'
+[Unit]
+Description=XRay Proxy Service
+Documentation=https://xtls.github.io
+After=network.target nss-lookup.target
+
+[Service]
+User=root
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ExecStart=/usr/local/bin/xray run -c /etc/xray/config.json
+Restart=on-failure
+RestartPreventExitStatus=23
+LimitNPROC=10000
+LimitNOFILE=1000000
+
+[Install]
+WantedBy=multi-user.target
+SYSTEMD
+    systemctl daemon-reload
+    systemctl enable xray   >/dev/null 2>&1
+    systemctl enable nginx  >/dev/null 2>&1
+}
+
+_fw_open_v2ray() {
+    for pt in 80 443 444 2082 8080 8443 8880 8888; do
+        command -v ufw &>/dev/null && ufw allow "${pt}/tcp" >/dev/null 2>&1
+        command -v iptables &>/dev/null && {
+            iptables -C INPUT -p tcp --dport "${pt}" -j ACCEPT 2>/dev/null || \
+            iptables -I INPUT -p tcp --dport "${pt}" -j ACCEPT >/dev/null 2>&1
+        }
+    done
+}
+
+instalar_v2ray() {
+    _header
+    echo ""
+
+    if _xray_installed; then
+        echo -e "  ${YELLOW}XRay ya está instalado.${NC}"
+        echo -ne "  ¿Reinstalar? (s/N): "; read -r ans
+        [[ ! "$ans" =~ ^[sS]$ ]] && return
+    fi
+
+    echo ""
+    _install_deps_v2ray
+    _download_xray || return 1
+
+    echo -ne "  ${YELLOW}Creando configuración XRay...${NC} "
+    _create_initial_cfg
+    echo -e "${GREEN}OK${NC}"
+
+    # ── TLS/SSL ───────────────────────────────────────────────
+    echo ""
+    echo -e "  ${WHITE}━━━ Configuración TLS (puertos 443, 444, 8443) ━━━${NC}"
+    echo -e "  ${C4}Si tienes dominio de Cloudflare puedes activar TLS.${NC}"
+    echo -ne "\n  ${C5}¿Activar TLS ahora? (s/N): ${NC}"; read -r tls_ans
+
+    local domain="" cert_file="" key_file=""
+
+    if [[ "$tls_ans" =~ ^[sS]$ ]]; then
+        echo -ne "  Ingresa tu dominio (ej: vpn.midominio.com): "; read -r domain
+        [[ -z "$domain" ]] && domain="vps.local"
+
+        echo ""
+        echo -e "  Tipo de certificado:"
+        echo -e "  ${CYAN}[1]${NC} Self-signed automático  ${YELLOW}(recomendado para pruebas)${NC}"
+        echo -e "  ${CYAN}[2]${NC} Pegar Certificado de Cloudflare Origin"
+        echo -ne "  Elige [1/2]: "; read -r cert_type
+
+        case "$cert_type" in
+            2)
+                echo ""
+                echo -e "  ${YELLOW}Pega el CERTIFICADO (fullchain.pem).${NC}"
+                echo -e "  ${WHITE}Termina con una línea que solo contenga: END${NC}"
+                local cert_lines=()
+                while IFS= read -r line; do
+                    [[ "$line" == "END" ]] && break
+                    cert_lines+=("$line")
+                done
+                printf '%s\n' "${cert_lines[@]}" > "$XRAY_DIR/fullchain.pem"
+
+                echo ""
+                echo -e "  ${YELLOW}Pega la LLAVE PRIVADA (privkey.pem).${NC}"
+                echo -e "  ${WHITE}Termina con una línea que solo contenga: END${NC}"
+                local key_lines=()
+                while IFS= read -r line; do
+                    [[ "$line" == "END" ]] && break
+                    key_lines+=("$line")
+                done
+                printf '%s\n' "${key_lines[@]}" > "$XRAY_DIR/privkey.pem"
+                cert_file="$XRAY_DIR/fullchain.pem"
+                key_file="$XRAY_DIR/privkey.pem"
+                ;;
+            *)
+                echo -ne "  ${YELLOW}Generando certificado self-signed...${NC} "
+                local pair
+                pair=$(_gen_selfsigned "$domain")
+                cert_file=$(echo "$pair" | cut -d'|' -f1)
+                key_file=$(echo "$pair" | cut -d'|' -f2)
+                echo -e "${GREEN}OK${NC}"
+                ;;
+        esac
+
+        if [[ -f "$cert_file" && -f "$key_file" ]]; then
+            # Desactivar stunnel en puertos SSL (NGINX toma control)
+            echo -ne "  ${YELLOW}Reconfigurando stunnel (moviendo puertos SSL)...${NC} "
+            if [[ -f /etc/stunnel/stunnel.conf ]]; then
+                cp /etc/stunnel/stunnel.conf /etc/stunnel/stunnel.conf.xray_bak
+                sed -i 's/^\(accept\s*=\s*443\b\)/;\1/' /etc/stunnel/stunnel.conf
+                sed -i 's/^\(accept\s*=\s*444\b\)/;\1/' /etc/stunnel/stunnel.conf
+                sed -i 's/^\(accept\s*=\s*8443\b\)/;\1/' /etc/stunnel/stunnel.conf
+                systemctl restart stunnel4 >/dev/null 2>&1
+            fi
+            echo -e "${GREEN}OK${NC}"
+
+            echo -ne "  ${YELLOW}Configurando NGINX SSL...${NC} "
+            _write_nginx_ssl "$domain" "$cert_file" "$key_file"
+            echo -e "${GREEN}OK${NC}"
+
+            {
+                echo "$domain"
+                echo "tls=yes"
+                echo "cert=$cert_file"
+                echo "key=$key_file"
+            } > "$XRAY_DOMAIN_FILE"
+        fi
+    fi
+
+    echo -ne "  ${YELLOW}Configurando NGINX HTTP...${NC} "
+    _write_nginx_http
+    echo -e "${GREEN}OK${NC}"
+
+    echo -ne "  ${YELLOW}Migrando wsproxy al puerto interno ${WSPROXY_INT}...${NC} "
+    _migrate_wsproxy
+    echo -e "${GREEN}OK${NC}"
+
+    echo -ne "  ${YELLOW}Creando servicio systemd...${NC} "
+    _create_systemd_xray
+    echo -e "${GREEN}OK${NC}"
+
+    echo -ne "  ${YELLOW}Iniciando NGINX + XRay...${NC} "
+    nginx -t >/dev/null 2>&1 && systemctl restart nginx >/dev/null 2>&1
+    systemctl start xray >/dev/null 2>&1
+    echo -e "${GREEN}OK${NC}"
+
+    echo -ne "  ${YELLOW}Abriendo puertos firewall...${NC} "
+    _fw_open_v2ray
+    echo -e "${GREEN}OK${NC}"
+
+    echo "$(date '+%Y-%m-%d %H:%M:%S')" > "$XRAY_DIR/installed"
+
+    echo ""
+    echo -e "${GREEN}  ┌─────────────────────────────────────────────────┐${NC}"
+    echo -e "${GREEN}  │   ✓  V2Ray/XRay instalado correctamente!        │${NC}"
+    echo -e "${GREEN}  └─────────────────────────────────────────────────┘${NC}"
+    echo ""
+    echo -e "  ${WHITE}Protocolos activos:${NC}"
+    echo -e "   ${CYAN}VLESS  WS${NC}  → /vless  (puertos 80, 8080, 8880, 8888)"
+    echo -e "   ${CYAN}VMess  WS${NC}  → /vmess  (puertos 80, 8080, 8880, 8888)"
+    echo -e "   ${CYAN}Trojan WS${NC}  → /trojan (puertos 80, 8080, 8880, 8888)"
+    [[ -n "$domain" ]] && {
+        echo -e "   ${CYAN}+ TLS${NC}     → mismos paths en 443, 444, 8443"
+    }
+    echo ""
+    echo -e "  ${YELLOW}► SSH WebSocket sigue funcionando en todos los puertos${NC}"
+    echo ""
+    _pause
+}
+
+# ── GESTIÓN DE USUARIOS ───────────────────────────────────────
+
+v2ray_add_user() {
+    _header
+    echo ""
+    echo -ne "  ${C5}Nombre del usuario: ${NC}"; read -r uname
+    [[ -z "$uname" ]] && { echo -e "${RED}  Nombre vacío${NC}"; sleep 2; return; }
+
+    local uuid
+    uuid=$(_gen_uuid)
+
+    echo -ne "  ${YELLOW}¿Usar UUID generado ${CYAN}${uuid}${YELLOW}? (S/n): ${NC}"; read -r confirm_uuid
+    if [[ "$confirm_uuid" =~ ^[nN]$ ]]; then
+        echo -ne "  Ingresa UUID personalizado: "; read -r custom_uuid
+        [[ -n "$custom_uuid" ]] && uuid="$custom_uuid"
+    fi
+
+    echo -ne "  ${YELLOW}Agregando usuario...${NC} "
+    _xray_add_user_cfg "$uuid" "$uname" >/dev/null 2>&1
+
+    # Guardar en DB
+    echo "${uuid}|${uname}" >> "$XRAY_DB"
+
+    # Reiniciar XRay para aplicar cambios
+    systemctl restart xray >/dev/null 2>&1
+
+    echo -e "${GREEN}OK${NC}"
+    echo ""
+    echo -e "  ${WHITE}Usuario creado:${NC}"
+    echo -e "  ${CYAN}Nombre : ${WHITE}$uname${NC}"
+    echo -e "  ${CYAN}UUID   : ${YELLOW}$uuid${NC}"
+    echo ""
+
+    echo -ne "  ${C5}¿Ver configuración/URIs ahora? (S/n): ${NC}"; read -r show_now
+    [[ ! "$show_now" =~ ^[nN]$ ]] && _show_user_uris "$uuid" "$uname"
+}
+
+v2ray_list_users() {
+    _header
+    echo ""
+    if [[ ! -s "$XRAY_DB" ]]; then
+        echo -e "  ${YELLOW}No hay usuarios registrados.${NC}"
+        _pause; return
+    fi
+
+    echo -e "  ${WHITE}#   UUID                                   Nombre${NC}"
+    echo -e "  ${C1}────────────────────────────────────────────────────${NC}"
+    local i=1
+    while IFS='|' read -r uuid name; do
+        [[ -z "$uuid" ]] && continue
+        printf "  ${CYAN}%-3s${NC} ${YELLOW}%-38s${NC} ${WHITE}%s${NC}\n" "$i" "$uuid" "$name"
+        ((i++))
+    done < "$XRAY_DB"
+    echo ""
+    _pause
+}
+
+v2ray_del_user() {
+    _header
+    echo ""
+    if [[ ! -s "$XRAY_DB" ]]; then
+        echo -e "  ${YELLOW}No hay usuarios registrados.${NC}"
+        _pause; return
+    fi
+
+    local i=1
+    local -a uuids names
+    while IFS='|' read -r uuid name; do
+        [[ -z "$uuid" ]] && continue
+        printf "  ${C2}|${C3}%-3s${C2}|${NC} ${WHITE}%-38s${NC} ${CYAN}%s${NC}\n" "$i" "$uuid" "$name"
+        uuids+=("$uuid"); names+=("$name")
+        ((i++))
+    done < "$XRAY_DB"
+
+    echo ""
+    echo -ne "  ${C5}Número a eliminar (0=cancelar): ${NC}"; read -r sel
+    [[ "$sel" == "0" || -z "$sel" ]] && return
+
+    local idx=$((sel - 1))
+    local del_uuid="${uuids[$idx]}" del_name="${names[$idx]}"
+    [[ -z "$del_uuid" ]] && { echo -e "${RED}  Selección inválida${NC}"; sleep 2; return; }
+
+    echo -ne "  ${RED}¿Eliminar a ${WHITE}${del_name}${RED}? (s/N): ${NC}"; read -r confirm
+    [[ ! "$confirm" =~ ^[sS]$ ]] && return
+
+    echo -ne "  ${YELLOW}Eliminando...${NC} "
+    _xray_del_user_cfg "$del_uuid" >/dev/null 2>&1
+
+    # Eliminar de DB
+    local tmpdb; tmpdb=$(mktemp)
+    grep -v "^${del_uuid}|" "$XRAY_DB" > "$tmpdb" && mv "$tmpdb" "$XRAY_DB"
+
+    systemctl restart xray >/dev/null 2>&1
+    echo -e "${GREEN}OK${NC}"
+    echo -e "  ${CYAN}Usuario ${WHITE}${del_name}${CYAN} eliminado.${NC}"
+    sleep 2
+}
+
+v2ray_show_uris() {
+    _header
+    echo ""
+    if [[ ! -s "$XRAY_DB" ]]; then
+        echo -e "  ${YELLOW}No hay usuarios. Agrega uno primero.${NC}"
+        _pause; return
+    fi
+
+    local i=1
+    local -a uuids names
+    while IFS='|' read -r uuid name; do
+        [[ -z "$uuid" ]] && continue
+        printf "  ${C2}|${C3}%-3s${C2}|${NC} ${CYAN}%-38s${NC} ${WHITE}%s${NC}\n" "$i" "$uuid" "$name"
+        uuids+=("$uuid"); names+=("$name")
+        ((i++))
+    done < "$XRAY_DB"
+
+    echo ""
+    echo -ne "  ${C5}Número de usuario (0=todos): ${NC}"; read -r sel
+
+    if [[ "$sel" == "0" || -z "$sel" ]]; then
+        for j in "${!uuids[@]}"; do
+            _show_user_uris "${uuids[$j]}" "${names[$j]}"
+        done
+    else
+        local idx=$((sel - 1))
+        [[ -n "${uuids[$idx]}" ]] && _show_user_uris "${uuids[$idx]}" "${names[$idx]}"
+    fi
+}
+
+v2ray_gen_uuid() {
+    _header
+    echo ""
+    echo -e "  ${WHITE}UUID generado:${NC}"
+    echo ""
+    local uuid
+    uuid=$(_gen_uuid)
+    echo -e "  ${YELLOW}$uuid${NC}"
+    echo ""
+    echo -e "  ${C4}(Puedes usarlo al crear un nuevo usuario)${NC}"
+    _pause
+}
+
+# ── CONFIGURACIÓN TLS ─────────────────────────────────────────
+
+v2ray_config_tls() {
+    _header
+    echo ""
+    local tls_status
+    _get_tls_enabled && tls_status="${GREEN}ACTIVO${NC}" || tls_status="${RED}INACTIVO${NC}"
+    local cur_domain; cur_domain=$(_get_domain)
+
+    echo -e "  ${WHITE}Estado TLS actual : ${NC}${tls_status}"
+    echo -e "  ${WHITE}Dominio actual    : ${CYAN}${cur_domain}${NC}"
+    echo ""
+    echo -e "  ${C2}|${C3}01${C2}|${NC} Configurar/Actualizar TLS con nuevo certificado"
+    echo -e "  ${C2}|${C3}02${C2}|${NC} Desactivar TLS (volver a solo HTTP)"
+    echo -e "  ${C2}|${C3}00${C2}|${NC} Volver"
+    echo ""
+    echo -ne "  ${C5}¿Qué deseas hacer?: ${NC}"; read -r opt
+
+    case "$opt" in
+        1|01)
+            echo -ne "  Dominio: "; read -r new_domain
+            [[ -z "$new_domain" ]] && new_domain="${cur_domain}"
+
+            echo ""
+            echo -e "  ${CYAN}[1]${NC} Self-signed   ${CYAN}[2]${NC} Cloudflare Origin Certificate"
+            echo -ne "  Tipo [1/2]: "; read -r ctype
+
+            local ncert nkey
+            case "$ctype" in
+                2)
+                    echo -e "\n  ${YELLOW}Pega el CERTIFICADO, termina con: END${NC}"
+                    local cl=()
+                    while IFS= read -r l; do [[ "$l" == "END" ]] && break; cl+=("$l"); done
+                    printf '%s\n' "${cl[@]}" > "$XRAY_DIR/fullchain.pem"
+
+                    echo -e "  ${YELLOW}Pega la LLAVE PRIVADA, termina con: END${NC}"
+                    local kl=()
+                    while IFS= read -r l; do [[ "$l" == "END" ]] && break; kl+=("$l"); done
+                    printf '%s\n' "${kl[@]}" > "$XRAY_DIR/privkey.pem"
+                    ncert="$XRAY_DIR/fullchain.pem"; nkey="$XRAY_DIR/privkey.pem"
+                    ;;
+                *)
+                    local p; p=$(_gen_selfsigned "$new_domain")
+                    ncert=$(echo "$p"|cut -d'|' -f1); nkey=$(echo "$p"|cut -d'|' -f2)
+                    ;;
+            esac
+
+            _write_nginx_ssl "$new_domain" "$ncert" "$nkey"
+            { echo "$new_domain"; echo "tls=yes"; echo "cert=$ncert"; echo "key=$nkey"; } > "$XRAY_DOMAIN_FILE"
+            nginx -t >/dev/null 2>&1 && systemctl reload nginx >/dev/null 2>&1
+            echo -e "\n  ${GREEN}✓ TLS configurado en 443/444/8443${NC}"
+            sleep 2
+            ;;
+        2|02)
+            rm -f "$NGINX_SSL_CONF"
+            sed -i 's/^tls=yes/tls=no/' "$XRAY_DOMAIN_FILE" 2>/dev/null
+            # Restaurar stunnel si existe backup
+            [[ -f /etc/stunnel/stunnel.conf.xray_bak ]] && \
+                cp /etc/stunnel/stunnel.conf.xray_bak /etc/stunnel/stunnel.conf && \
+                systemctl restart stunnel4 >/dev/null 2>&1
+            nginx -t >/dev/null 2>&1 && systemctl reload nginx >/dev/null 2>&1
+            echo -e "\n  ${YELLOW}TLS desactivado. Stunnel restaurado.${NC}"
+            sleep 2
+            ;;
+    esac
+}
+
+# ── ESTADO Y LOGS ─────────────────────────────────────────────
+
+v2ray_status() {
+    _header
+    echo ""
+    local xray_st nginx_st
+
+    systemctl is-active --quiet xray   2>/dev/null && xray_st="${GREEN}● ACTIVO${NC}"  || xray_st="${RED}● INACTIVO${NC}"
+    systemctl is-active --quiet nginx  2>/dev/null && nginx_st="${GREEN}● ACTIVO${NC}" || nginx_st="${RED}● INACTIVO${NC}"
+
+    echo -e "  ${WHITE}XRay   :${NC} ${xray_st}"
+    echo -e "  ${WHITE}NGINX  :${NC} ${nginx_st}"
+    echo ""
+
+    local ver
+    ver=$("$XRAY_BIN" version 2>/dev/null | head -1 | awk '{print $2}')
+    echo -e "  ${WHITE}Versión XRay : ${CYAN}${ver:-desconocida}${NC}"
+
+    local domain; domain=$(_get_domain)
+    echo -e "  ${WHITE}Servidor     : ${CYAN}${domain}${NC}"
+    _get_tls_enabled && echo -e "  ${WHITE}TLS          : ${GREEN}Activado${NC}" || \
+                        echo -e "  ${WHITE}TLS          : ${YELLOW}Desactivado${NC}"
+
+    echo ""
+    echo -e "  ${WHITE}Usuarios registrados: ${CYAN}$(wc -l < "$XRAY_DB" 2>/dev/null || echo 0)${NC}"
+    echo ""
+
+    echo -e "  ${WHITE}Puertos activos NGINX:${NC}"
+    ss -tlpn 2>/dev/null | grep nginx | awk '{print $4}' | \
+        rev | cut -d: -f1 | rev | sort -u | \
+        while read -r p; do echo -e "    ${CYAN}→ $p${NC}"; done
+
+    echo ""
+    echo -e "  ${WHITE}Puertos activos XRay:${NC}"
+    ss -tlpn 2>/dev/null | grep xray | awk '{print $4}' | \
+        rev | cut -d: -f1 | rev | sort -u | \
+        while read -r p; do echo -e "    ${CYAN}→ $p${NC}"; done
+
+    echo ""
+    _pause
+}
+
+v2ray_logs() {
+    _header
+    echo ""
+    echo -e "  ${WHITE}Últimas 30 líneas del log de errores XRay:${NC}"
+    echo -e "  ${C1}──────────────────────────────────────────${NC}"
+    tail -30 /var/log/xray/error.log 2>/dev/null || \
+        echo -e "  ${YELLOW}Log vacío o no disponible${NC}"
+    echo ""
+    _pause
+}
+
+# ── REINICIAR ─────────────────────────────────────────────────
+
+v2ray_restart() {
+    _header
+    echo ""
+    echo -ne "  ${YELLOW}Reiniciando XRay...${NC} "
+    systemctl restart xray >/dev/null 2>&1 && \
+        echo -e "${GREEN}OK${NC}" || echo -e "${RED}FALLO${NC}"
+
+    echo -ne "  ${YELLOW}Reiniciando NGINX...${NC} "
+    nginx -t >/dev/null 2>&1 && systemctl reload nginx >/dev/null 2>&1 && \
+        echo -e "${GREEN}OK${NC}" || echo -e "${RED}FALLO - Revisa configuración${NC}"
+
+    echo ""
+    echo -e "  ${GREEN}✓ Servicios reiniciados.${NC}"
+    sleep 2
+}
+
+# ── DESINSTALAR ───────────────────────────────────────────────
+
+v2ray_uninstall() {
+    _header
+    echo ""
+    echo -e "  ${RED}┌─────────────────────────────────────────┐${NC}"
+    echo -e "  ${RED}│     ¡ATENCIÓN! Desinstalando V2Ray     │${NC}"
+    echo -e "  ${RED}└─────────────────────────────────────────┘${NC}"
+    echo ""
+    echo -ne "  ${RED}¿Confirmas la desinstalación? (escribe SI): ${NC}"; read -r confirm
+    [[ "$confirm" != "SI" ]] && { echo -e "  ${YELLOW}Cancelado.${NC}"; sleep 1; return; }
+
+    systemctl stop xray  >/dev/null 2>&1
+    systemctl disable xray >/dev/null 2>&1
+    rm -f /etc/systemd/system/xray.service
+    systemctl daemon-reload >/dev/null 2>&1
+    rm -f "$XRAY_BIN"
+    rm -f "$NGINX_HTTP_CONF" "$NGINX_SSL_CONF"
+
+    # Restaurar stunnel si hay backup
+    [[ -f /etc/stunnel/stunnel.conf.xray_bak ]] && \
+        cp /etc/stunnel/stunnel.conf.xray_bak /etc/stunnel/stunnel.conf && \
+        systemctl restart stunnel4 >/dev/null 2>&1
+
+    # Restaurar wsproxy en puertos externos
+    local wsproxy_path
+    wsproxy_path=$(find /etc/SSHPlus /etc -name "wsproxy.py" 2>/dev/null | head -1)
+    if [[ -n "$wsproxy_path" && -f /etc/autostart ]]; then
+        sed -i "/wsproxy.*\.py\s\+${WSPROXY_INT}/d" /etc/autostart
+        echo "screen -dmS ws80 python3 ${wsproxy_path} 80" >> /etc/autostart
+        screen -dmS ws80 python3 "$wsproxy_path" 80
+    fi
+
+    nginx -t >/dev/null 2>&1 && systemctl reload nginx >/dev/null 2>&1
+
+    echo -e "\n  ${GREEN}✓ V2Ray/XRay desinstalado.${NC}"
+    echo -e "  ${YELLOW}  Los datos en $XRAY_DIR no fueron eliminados.${NC}"
+    sleep 3
+}
+
+# ── MENÚ PRINCIPAL V2RAY ──────────────────────────────────────
+
+v2ray_menu() {
+while true; do
+    _header
+
+    local xray_st nginx_st tls_info users_count install_st
+    _xray_installed && install_st="${GREEN}Instalado${NC}" || install_st="${RED}No instalado${NC}"
+    _xray_running   && xray_st="${GREEN}● ON${NC}"  || xray_st="${RED}● OFF${NC}"
+    systemctl is-active --quiet nginx 2>/dev/null && nginx_st="${GREEN}● ON${NC}" || nginx_st="${RED}● OFF${NC}"
+    _get_tls_enabled && tls_info="${GREEN}TLS ON${NC}" || tls_info="${YELLOW}TLS OFF${NC}"
+    users_count=$(wc -l < "$XRAY_DB" 2>/dev/null || echo 0)
+
+    echo -e "${C1}┃${NC}  XRay: ${xray_st}  NGINX: ${nginx_st}  ${tls_info}  Usuarios: ${WHITE}${users_count}${NC}  Estado: ${install_st}"
+    echo -e "${C1}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
+    echo -e "${C1}┃${C2}|${C3}01${C2}|${NC}➜ ${C4}INSTALAR / REINSTALAR V2RAY         ${C2}|${C3}07${C2}|${NC}➜ ${C4}CONFIGURAR TLS${NC}      ${C1}┃${NC}"
+    echo -e "${C1}┃${C2}|${C3}02${C2}|${NC}➜ ${C4}AGREGAR USUARIO                     ${C2}|${C3}08${C2}|${NC}➜ ${C4}REINICIAR${NC}           ${C1}┃${NC}"
+    echo -e "${C1}┃${C2}|${C3}03${C2}|${NC}➜ ${C4}LISTAR USUARIOS                     ${C2}|${C3}09${C2}|${NC}➜ ${C4}ESTADO / PUERTOS${NC}    ${C1}┃${NC}"
+    echo -e "${C1}┃${C2}|${C3}04${C2}|${NC}➜ ${C4}ELIMINAR USUARIO                    ${C2}|${C3}10${C2}|${NC}➜ ${C4}VER LOGS${NC}            ${C1}┃${NC}"
+    echo -e "${C1}┃${C2}|${C3}05${C2}|${NC}➜ ${C4}VER CONFIGS / URIs                  ${C2}|${C3}11${C2}|${NC}➜ ${C4}DESINSTALAR${NC}         ${C1}┃${NC}"
+    echo -e "${C1}┃${C2}|${C3}06${C2}|${NC}➜ ${C4}GENERAR UUID LIBRE                  ${C2}|${C3}00${C2}|${NC}➜ ${C4}VOLVER AL MENÚ${NC}      ${C1}┃${NC}"
+    echo -e "${C1}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${NC}"
+    echo -ne "${C5}¿QUÉ DESEAS HACER ??: ${NC}"; read -r opt
+
+    case "$opt" in
+        1|01) instalar_v2ray ;;
+        2|02) _xray_installed && v2ray_add_user    || { echo -e "  ${RED}Instala V2Ray primero (opción 01)${NC}"; sleep 2; } ;;
+        3|03) _xray_installed && v2ray_list_users  || { echo -e "  ${RED}Instala V2Ray primero (opción 01)${NC}"; sleep 2; } ;;
+        4|04) _xray_installed && v2ray_del_user    || { echo -e "  ${RED}Instala V2Ray primero (opción 01)${NC}"; sleep 2; } ;;
+        5|05) _xray_installed && v2ray_show_uris   || { echo -e "  ${RED}Instala V2Ray primero (opción 01)${NC}"; sleep 2; } ;;
+        6|06) v2ray_gen_uuid ;;
+        7|07) _xray_installed && v2ray_config_tls  || { echo -e "  ${RED}Instala V2Ray primero (opción 01)${NC}"; sleep 2; } ;;
+        8|08) _xray_installed && v2ray_restart     || { echo -e "  ${RED}Instala V2Ray primero (opción 01)${NC}"; sleep 2; } ;;
+        9|09) v2ray_status ;;
+        10)   v2ray_logs ;;
+        11)   _xray_installed && v2ray_uninstall   || { echo -e "  ${YELLOW}V2Ray no está instalado.${NC}"; sleep 2; } ;;
+        0|00) return ;;
+        *) echo -e "\n  ${RED}Opción inválida${NC}"; sleep 1 ;;
+    esac
+done
+}
+
+# ── Auto-ejecución cuando se llama como script directo ────────
+[[ "${BASH_SOURCE[0]}" == "$0" ]] && v2ray_menu
