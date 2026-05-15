@@ -240,18 +240,10 @@ chmod 755 /etc/SSHPlus/wsproxy.py /etc/SSHPlus/proxy.py 2>/dev/null
 wget -q "${_REPO_BASE}/Modulos/proxy/ssldispatcher.py" -O /etc/SSHPlus/ssldispatcher.py 2>/dev/null
 chmod 755 /etc/SSHPlus/ssldispatcher.py 2>/dev/null
 
-# Módulo V2Ray/XRay
-wget -q "${_REPO_BASE}/Modulos/v2ray/menu_v2ray" -O /etc/SSHPlus/menu_v2ray 2>/dev/null
-chmod 755 /etc/SSHPlus/menu_v2ray 2>/dev/null
-# Symlink para acceso directo como comando
-[[ -s /etc/SSHPlus/menu_v2ray ]] && \
-    ln -sf /etc/SSHPlus/menu_v2ray /usr/local/bin/v2ray-menu 2>/dev/null
-
 # Verificar descargas
 [[ -s /etc/SSHPlus/wsproxy.py      ]] && echo -e "    \033[1;32m✓ wsproxy.py descargado\033[0m"      || echo -e "    \033[1;31m✗ wsproxy.py no encontrado\033[0m"
 [[ -s /etc/SSHPlus/proxy.py        ]] && echo -e "    \033[1;32m✓ proxy.py descargado\033[0m"        || echo -e "    \033[1;31m✗ proxy.py no encontrado\033[0m"
 [[ -s /etc/SSHPlus/ssldispatcher.py ]] && echo -e "    \033[1;32m✓ ssldispatcher.py descargado\033[0m" || echo -e "    \033[1;31m✗ ssldispatcher.py no encontrado\033[0m"
-[[ -s /etc/SSHPlus/menu_v2ray      ]] && echo -e "    \033[1;32m✓ menu_v2ray descargado\033[0m"      || echo -e "    \033[1;33m✓ menu_v2ray (disponible en menú opción 22)\033[0m"
 
 # ── Descargar clave maestra RSA ──────────────────────────────
 echo -e "\n          \033[1;37m[\033[1;31m!\033[1;37m] \033[1;32mDESCARGANDO CLAVE MAESTRA \033[1;37m[\033[1;31m!\033[1;37m]\033[0m\n"

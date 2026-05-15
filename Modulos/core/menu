@@ -217,20 +217,6 @@ if ps x | grep 'slowdns' | grep -v grep >/dev/null 2>&1; then
 	echo -e "\033[1;32mOK\033[0m"
 fi
 
-# XRay (V2Ray)
-if [[ -x /usr/local/bin/xray ]] && systemctl list-units --type=service 2>/dev/null | grep -q 'xray'; then
-	echo -ne "\033[1;33m  XRay (V2Ray)...    \033[0m"
-	systemctl restart xray >/dev/null 2>&1
-	echo -e "\033[1;32mOK\033[0m"
-fi
-
-# NGINX (si está gestionando puertos V2Ray)
-if systemctl is-active --quiet nginx 2>/dev/null; then
-	echo -ne "\033[1;33m  NGINX...           \033[0m"
-	nginx -t >/dev/null 2>&1 && systemctl reload nginx >/dev/null 2>&1
-	echo -e "\033[1;32mOK\033[0m"
-fi
-
 echo ""
 echo -e "\033[1;32m✓ Todos los servicios han sido reiniciados.\033[0m"
 sleep 3
@@ -418,37 +404,6 @@ sleep 3; menu
 }
 
 # ============================================================
-# V2RAY/XRAY MANAGER — carga el módulo dinámicamente
-# ============================================================
-fun_v2ray_menu() {
-_V2RAY_MODULE=""
-for _v2path in \
-    "/etc/SSHPlus/menu_v2ray" \
-    "/etc/xray/menu_v2ray" \
-    "/usr/local/lib/msy/menu_v2ray" \
-    "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/../v2ray/menu_v2ray" \
-    "$(dirname "$(realpath /bin/menu 2>/dev/null)")/../../Modulos/v2ray/menu_v2ray"; do
-    [[ -f "$_v2path" ]] && { _V2RAY_MODULE="$_v2path"; break; }
-done
-if [[ -z "$_V2RAY_MODULE" ]]; then
-    clear
-    echo -e "\E[38;5;18m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-    echo -e "\E[38;5;18m┃\E[44;1;37m          V2RAY/XRAY MANAGER             \E[0m\E[38;5;18m┃\033[0m"
-    echo -e "\E[38;5;18m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
-    echo ""
-    echo -e "\033[1;31m  Módulo V2Ray no encontrado.\033[0m"
-    echo -e "\033[1;33m  Instala el script completo o copia el módulo a:\033[0m"
-    echo -e "\033[1;37m  /etc/SSHPlus/menu_v2ray\033[0m"
-    echo ""
-    echo -ne "\033[1;31mENTER \033[1;37mpara volver al \033[1;32mMENÚ!\033[0m"; read
-    return
-fi
-# shellcheck source=/dev/null
-source "$_V2RAY_MODULE"
-v2ray_menu
-}
-
-# ============================================================
 # MENÚ PRINCIPAL
 # ============================================================
 menu() {
@@ -459,7 +414,6 @@ stsu=$(ps x | grep "udpvpn" | grep -v grep >/dev/null && echo -e "\033[1;32m✓ 
 stshy=$(command -v hysteria-manager &>/dev/null && echo -e "\033[1;32m✓ " || echo -e "\033[1;31m✕ ")
 stszivpn=$({ command -v zivpn &>/dev/null || [[ -f /usr/local/bin/zivpn ]]; } && echo -e "\033[1;32m✓ " || echo -e "\033[1;31m✕ ")
 stsslowdns=$(ps x | grep 'slowdns' | grep -v grep >/dev/null 2>&1 && echo -e "\033[1;32m✓ " || echo -e "\033[1;31m✕ ")
-stsv2ray=$({ [[ -x /usr/local/bin/xray ]] && systemctl is-active --quiet xray 2>/dev/null; } && echo -e "\033[1;32m✓ " || echo -e "\033[1;31m✕ ")
 [[ ! -e /usr/lib/licence ]] && rm -rf /bin >/dev/null 2>&1
 
 # Detectar sistema operativo
@@ -510,7 +464,6 @@ echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m08\E[38;5;196m|\033[1;37m➜ \E[3
 echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m09\E[38;5;196m|\033[1;37m➜ \E[38;5;15mProtocolos ⚡\E[38;5;196m               |\E[38;5;33m20\E[38;5;196m|\033[1;37m➜ \E[38;5;15mHERRAMIENTAS         \E[38;5;18m┃"
 echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m10\E[38;5;196m|\033[1;37m➜ \E[38;5;15mTRÁFICO DE RED\E[38;5;196m              |\E[38;5;33m00\E[38;5;196m|\033[1;37m➜ \E[38;5;15mSALIR \033[1;32m<<<          \E[38;5;18m  ┃"
 echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m11\E[38;5;196m|\033[1;37m➜ \E[38;5;15mOPTIMIZAR SISTEMA\E[38;5;196m           |\E[38;5;33m21\E[38;5;196m|\033[1;37m➜ \E[38;5;15mSLOWDNS $stsslowdns      \E[38;5;18m  ┃"
-echo -e "\E[38;5;18m┃\E[38;5;196m|\E[38;5;33m22\E[38;5;196m|\033[1;37m➜ \E[38;5;15mV2RAY/XRAY $stsv2ray       \E[38;5;196m          |  \E[38;5;196m \E[38;5;33m  \E[38;5;196m \033[1;37m   \E[38;5;15m                     \E[38;5;18m┃"
 echo -e "\E[38;5;18m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
 echo -ne "\E[38;5;40m¿QUÉ DESEAS HACER \033[1;37m?\033[1;31m?\033[1;37m: "; read x
 
@@ -536,7 +489,6 @@ case "$x" in
 	19)     clear; fun_zivpn_menu ;;
 	20)     clear; uteis;             sleep 0.5 ;;
 	21)     clear; fun_slowdns_menu ;;
-	22)     clear; fun_v2ray_menu ;;
 	0|00)
 		echo -e "\033[1;31mSaliendo...\033[0m"; sleep 2; clear; exit ;;
 	*)
