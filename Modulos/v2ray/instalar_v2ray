@@ -1,7 +1,5 @@
 #!/bin/bash
-# instalar_v2ray — Lanzador rápido del instalador V2Ray/XRay
-# Fuente: Modulos/v2ray/menu_v2ray
-
+# instalar_v2ray — Lanzador del instalador V2Ray simple
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/menu_v2ray"
 instalar_v2ray
