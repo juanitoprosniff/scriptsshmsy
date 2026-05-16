@@ -2,7 +2,7 @@
 # ============================================================
 # * Creado y modificado por t:me/JuanitoProSniff
 # ============================================================
-# V2RAY_MODULE_VERSION: msyvpn-v2ray-3
+# V2RAY_MODULE_VERSION: msyvpn-v2ray-4
 #
 # MÓDULO V2RAY VLESS — MSYVPN-SCRIPT
 # - Protocolo: VLESS sobre WebSocket (path /vless)
@@ -710,32 +710,51 @@ _v2ray_issue_cert() {
     echo -ne "\n\033[1;32m¿Continuar? [s/N]: \033[1;37m"; read _c
     [[ ! "$_c" =~ ^[sSyY]$ ]] && return 1
 
-    apt-get install -y socat curl cron >/dev/null 2>&1
+    apt-get install -y socat curl cron tar >/dev/null 2>&1
 
     # Instalar acme.sh si no existe
     if [[ ! -x /root/.acme.sh/acme.sh ]]; then
         echo -e "\033[1;33mInstalando acme.sh...\033[0m"
-        # Cualquiera de los 3 mirrors funciona
         local _ok=0
-        for _u in \
-            "https://get.acme.sh" \
-            "https://raw.githubusercontent.com/acmesh-official/acme.sh/master/acme.sh" \
-            "https://github.com/acmesh-official/get.acme.sh/raw/master/get.acme.sh"; do
-            curl -fsSL --max-time 30 "$_u" -o /tmp/acme.sh.install 2>/dev/null
-            [[ -s /tmp/acme.sh.install ]] && { _ok=1; break; }
-        done
-        if [[ $_ok -eq 1 ]]; then
-            bash /tmp/acme.sh.install --install-online -m "admin@${_dom}" >/tmp/acme_install.log 2>&1 || \
-            bash /tmp/acme.sh.install -m "admin@${_dom}" >>/tmp/acme_install.log 2>&1
+
+        # Método 1: tarball oficial directo (más confiable, sin wrappers)
+        rm -rf /tmp/acme.sh-master /tmp/acme.tgz 2>/dev/null
+        curl -fsSL --max-time 60 \
+            "https://github.com/acmesh-official/acme.sh/archive/refs/heads/master.tar.gz" \
+            -o /tmp/acme.tgz 2>/tmp/acme_install.log
+        if [[ -s /tmp/acme.tgz ]]; then
+            tar xzf /tmp/acme.tgz -C /tmp 2>>/tmp/acme_install.log
+            if [[ -x /tmp/acme.sh-master/acme.sh ]]; then
+                ( cd /tmp/acme.sh-master && \
+                  ./acme.sh --install --no-cron \
+                      --home /root/.acme.sh \
+                      -m "admin@${_dom}" \
+                      >>/tmp/acme_install.log 2>&1 )
+                [[ -x /root/.acme.sh/acme.sh ]] && _ok=1
+            fi
         fi
-        rm -f /tmp/acme.sh.install
+
+        # Método 2: wrapper get.acme.sh (sin flags ofensivos)
+        if [[ $_ok -eq 0 ]]; then
+            echo -e "\033[1;33m  Reintentando con get.acme.sh...\033[0m"
+            curl -fsSL --max-time 30 https://get.acme.sh -o /tmp/acme.sh.install 2>>/tmp/acme_install.log
+            if [[ -s /tmp/acme.sh.install ]]; then
+                bash /tmp/acme.sh.install >>/tmp/acme_install.log 2>&1
+                [[ -x /root/.acme.sh/acme.sh ]] && _ok=1
+            fi
+        fi
+
+        rm -f /tmp/acme.sh.install /tmp/acme.tgz 2>/dev/null
+        rm -rf /tmp/acme.sh-master 2>/dev/null
     fi
     if [[ ! -x /root/.acme.sh/acme.sh ]]; then
         echo -e "\033[1;31m✗ No se pudo instalar acme.sh.\033[0m"
-        tail -n 10 /tmp/acme_install.log 2>/dev/null
-        sleep 3; return 1
+        echo -e "\033[1;33m  Últimas líneas del log:\033[0m"
+        tail -n 12 /tmp/acme_install.log 2>/dev/null
+        sleep 4; return 1
     fi
     /root/.acme.sh/acme.sh --set-default-ca --server letsencrypt >/dev/null 2>&1
+    /root/.acme.sh/acme.sh --register-account -m "admin@${_dom}" >/dev/null 2>&1
 
     # Verificar que el dominio resuelve
     local _vps_ip; _vps_ip=$(_v2ray_ip)
