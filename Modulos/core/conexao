@@ -1363,14 +1363,28 @@ fun_instalar_conteo() {
 
 # ============================================================
 # CARGAR MÓDULO V2RAY (VLESS + WebSocket)
+# Auto-actualiza si la versión local es vieja.
 # ============================================================
 _V2RAY_MODULE="/etc/SSHPlus/v2ray.sh"
-if [[ ! -f "$_V2RAY_MODULE" ]]; then
-    mkdir -p /etc/SSHPlus
+_V2RAY_REQ_VER="msyvpn-v2ray-2"
+mkdir -p /etc/SSHPlus
+
+_v2ray_module_ok() {
+    [[ -s "$_V2RAY_MODULE" ]] && \
+        grep -q "V2RAY_MODULE_VERSION: ${_V2RAY_REQ_VER}" "$_V2RAY_MODULE"
+}
+
+if ! _v2ray_module_ok; then
     wget -q --timeout=30 \
         "${_REPO_BASE}/Modulos/v2ray/v2ray.sh" \
-        -O "$_V2RAY_MODULE" 2>/dev/null
-    chmod 755 "$_V2RAY_MODULE" 2>/dev/null
+        -O "${_V2RAY_MODULE}.new" 2>/dev/null
+    if [[ -s "${_V2RAY_MODULE}.new" ]] && \
+       grep -q "V2RAY_MODULE_VERSION: ${_V2RAY_REQ_VER}" "${_V2RAY_MODULE}.new"; then
+        mv -f "${_V2RAY_MODULE}.new" "$_V2RAY_MODULE"
+        chmod 755 "$_V2RAY_MODULE"
+    else
+        rm -f "${_V2RAY_MODULE}.new" 2>/dev/null
+    fi
 fi
 if [[ -s "$_V2RAY_MODULE" ]]; then
     # shellcheck disable=SC1090
