@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 # wsproxy.py — WebSocket + SSH Directo Proxy + Ruteo V2Ray
+# WSPROXY_VERSION: msyvpn-v2ray-2
+#
 # Uso desde conexao:
 #   python3 wsproxy.py <puerto> [host:puerto_destino]
 # Ejemplos:
