@@ -1366,7 +1366,7 @@ fun_instalar_conteo() {
 # Auto-actualiza si la versión local es vieja.
 # ============================================================
 _V2RAY_MODULE="/etc/SSHPlus/v2ray.sh"
-_V2RAY_REQ_VER="msyvpn-v2ray-2"
+_V2RAY_REQ_VER="msyvpn-v2ray-3"
 mkdir -p /etc/SSHPlus
 
 _v2ray_module_ok() {

@@ -2,7 +2,7 @@
 # ============================================================
 # * Creado y modificado por t:me/JuanitoProSniff
 # ============================================================
-# V2RAY_MODULE_VERSION: msyvpn-v2ray-2
+# V2RAY_MODULE_VERSION: msyvpn-v2ray-3
 #
 # MÓDULO V2RAY VLESS — MSYVPN-SCRIPT
 # - Protocolo: VLESS sobre WebSocket (path /vless)
@@ -18,7 +18,12 @@
 # ============================================================
 
 _V2RAY_DIR="/etc/v2ray"
-_V2RAY_CONFIG="$_V2RAY_DIR/config.json"
+# IMPORTANTE: el instalador oficial v2fly espera la config en
+# /usr/local/etc/v2ray/config.json (lo define el unit systemd).
+# Si escribimos en otro lado, V2Ray arranca pero carga el sample vacío
+# y no escucha en 10086. Por eso usamos la ruta oficial.
+_V2RAY_OFFICIAL_DIR="/usr/local/etc/v2ray"
+_V2RAY_CONFIG="$_V2RAY_OFFICIAL_DIR/config.json"
 _V2RAY_USERS_DB="$_V2RAY_DIR/users.db"
 _V2RAY_DOMAIN_FILE="$_V2RAY_DIR/domain"
 _V2RAY_DEFAULT_UUID_FILE="$_V2RAY_DIR/default.uuid"
@@ -101,6 +106,50 @@ _v2ray_get_domain() {
     [[ -s "$_V2RAY_DOMAIN_FILE" ]] && head -1 "$_V2RAY_DOMAIN_FILE" | tr -d '[:space:]'
 }
 
+# ── Liberar puerto 80 (mata wsproxy, nginx, apache) ───────────
+# Devuelve, vía echo, una "etiqueta" con lo que detuvo para
+# restaurarlo después.
+_v2ray_free_port80() {
+    local _had=""
+    if ss -tlpn 2>/dev/null | grep -q ':80 '; then
+        # nginx
+        if systemctl is-active --quiet nginx 2>/dev/null; then
+            systemctl stop nginx 2>/dev/null
+            _had+="nginx,"
+        fi
+        # apache
+        if systemctl is-active --quiet apache2 2>/dev/null; then
+            systemctl stop apache2 2>/dev/null
+            _had+="apache2,"
+        fi
+        # wsproxy en 80
+        for pid in $(screen -ls 2>/dev/null | grep -E "\.ws80\b" | awk '{print $1}'); do
+            screen -r -S "$pid" -X quit 2>/dev/null
+        done
+        pkill -f "wsproxy.py 80" 2>/dev/null
+        [[ -n "$(pgrep -af 'wsproxy.py 80')" ]] || _had+="ws80,"
+        sleep 1
+    fi
+    # Verificar que quedó libre
+    local _i
+    for _i in 1 2 3 4 5; do
+        ss -tlpn 2>/dev/null | grep -q ':80 ' || { echo "$_had"; return 0; }
+        sleep 1
+    done
+    echo "$_had"
+    return 1
+}
+
+_v2ray_restore_port80() {
+    local _had="$1"
+    [[ -z "$_had" ]] && return
+    [[ "$_had" = *"nginx,"* ]]    && systemctl start nginx    2>/dev/null
+    [[ "$_had" = *"apache2,"* ]]  && systemctl start apache2  2>/dev/null
+    if [[ "$_had" = *"ws80,"* ]]; then
+        screen -dmS ws80 python3 "$_V2RAY_WSPROXY_PATH" 80 127.0.0.1:22
+    fi
+}
+
 # ── Generar UUID v4 sin depender de uuidgen ───────────────────
 _v2ray_gen_uuid() {
     if command -v uuidgen &>/dev/null; then
@@ -131,7 +180,8 @@ _v2ray_ip() {
 # users.db formato:  uuid|alias
 # ============================================================
 _v2ray_rebuild_config() {
-    mkdir -p "$_V2RAY_DIR"
+    # Aseguramos ambos dirs: mio (aux) y oficial (config V2Ray)
+    mkdir -p "$_V2RAY_DIR" "$_V2RAY_OFFICIAL_DIR"
     touch "$_V2RAY_USERS_DB"
 
     local _clients="" _first=1 _uuid _alias
@@ -653,8 +703,10 @@ _v2ray_issue_cert() {
     fi
 
     echo -e "\n\033[1;33mPreparando emisión de certificado para: \033[1;37m$_dom\033[0m"
-    echo -e "\033[1;33mNota: requiere DNS apuntando al VPS y puerto 80 libre.\033[0m"
-    echo -e "\033[1;33m      (Cloudflare debe estar en modo \"DNS only\" — nube gris).\033[0m"
+    echo -e "\033[1;33mRequisitos:\033[0m"
+    echo -e "  \033[1;37m• DNS A record apuntando al IP del VPS\033[0m"
+    echo -e "  \033[1;37m• Cloudflare en modo 'DNS only' (nube gris) — no proxy\033[0m"
+    echo -e "  \033[1;37m• Puerto 80 accesible desde Internet\033[0m"
     echo -ne "\n\033[1;32m¿Continuar? [s/N]: \033[1;37m"; read _c
     [[ ! "$_c" =~ ^[sSyY]$ ]] && return 1
 
@@ -663,48 +715,72 @@ _v2ray_issue_cert() {
     # Instalar acme.sh si no existe
     if [[ ! -x /root/.acme.sh/acme.sh ]]; then
         echo -e "\033[1;33mInstalando acme.sh...\033[0m"
-        curl -fsSL https://get.acme.sh -o /tmp/acme.sh.install
-        if [[ ! -s /tmp/acme.sh.install ]]; then
-            curl -fsSL https://raw.githubusercontent.com/acmesh-official/acme.sh/master/acme.sh -o /tmp/acme.sh.install
-        fi
-        if [[ -s /tmp/acme.sh.install ]]; then
-            bash /tmp/acme.sh.install --install-online -m "admin@${_dom}" >/dev/null 2>&1 || \
-            bash /tmp/acme.sh.install -m "admin@${_dom}" >/dev/null 2>&1
+        # Cualquiera de los 3 mirrors funciona
+        local _ok=0
+        for _u in \
+            "https://get.acme.sh" \
+            "https://raw.githubusercontent.com/acmesh-official/acme.sh/master/acme.sh" \
+            "https://github.com/acmesh-official/get.acme.sh/raw/master/get.acme.sh"; do
+            curl -fsSL --max-time 30 "$_u" -o /tmp/acme.sh.install 2>/dev/null
+            [[ -s /tmp/acme.sh.install ]] && { _ok=1; break; }
+        done
+        if [[ $_ok -eq 1 ]]; then
+            bash /tmp/acme.sh.install --install-online -m "admin@${_dom}" >/tmp/acme_install.log 2>&1 || \
+            bash /tmp/acme.sh.install -m "admin@${_dom}" >>/tmp/acme_install.log 2>&1
         fi
         rm -f /tmp/acme.sh.install
     fi
     if [[ ! -x /root/.acme.sh/acme.sh ]]; then
-        echo -e "\033[1;31m✗ No se pudo instalar acme.sh.\033[0m"; sleep 3; return 1
+        echo -e "\033[1;31m✗ No se pudo instalar acme.sh.\033[0m"
+        tail -n 10 /tmp/acme_install.log 2>/dev/null
+        sleep 3; return 1
     fi
-
     /root/.acme.sh/acme.sh --set-default-ca --server letsencrypt >/dev/null 2>&1
 
-    # Liberar puerto 80 temporalmente
-    echo -e "\033[1;33mDeteniendo servicios en puerto 80 temporalmente...\033[0m"
-    local _had_ws80=0 _had_nginx=0
-    if ss -tlpn 2>/dev/null | grep -q ':80 '; then
-        # wsproxy en 80
-        for pid in $(screen -ls 2>/dev/null | grep '\.ws80' | awk '{print $1}'); do
-            screen -r -S "$pid" -X quit 2>/dev/null; _had_ws80=1
-        done
-        # nginx
-        if systemctl is-active --quiet nginx 2>/dev/null; then
-            systemctl stop nginx; _had_nginx=1
-        fi
-        sleep 1
+    # Verificar que el dominio resuelve
+    local _vps_ip; _vps_ip=$(_v2ray_ip)
+    local _dns_ip; _dns_ip=$(getent hosts "$_dom" 2>/dev/null | awk '{print $1}' | head -1)
+    if [[ -z "$_dns_ip" ]]; then
+        echo -e "\033[1;31m✗ El dominio $_dom no resuelve a ninguna IP.\033[0m"
+        echo -e "\033[1;33m  Verifique el A record en Cloudflare y espere propagación.\033[0m"
+        return 1
+    fi
+    if [[ "$_dns_ip" != "$_vps_ip" ]]; then
+        echo -e "\033[1;33m⚠ DNS apunta a $_dns_ip pero VPS es $_vps_ip.\033[0m"
+        echo -e "\033[1;33m  Si Cloudflare está en modo 'proxy' (nube naranja),\033[0m"
+        echo -e "\033[1;33m  el challenge HTTP-01 va a fallar. Cámbielo a DNS only.\033[0m"
+        echo -ne "\n\033[1;32m¿Intentar de todas formas? [s/N]: \033[1;37m"; read _yes
+        [[ ! "$_yes" =~ ^[sSyY]$ ]] && return 1
     fi
 
+    # Liberar puerto 80 robustamente
+    echo -e "\033[1;33mLiberando puerto 80 para el challenge HTTP-01...\033[0m"
+    local _had; _had=$(_v2ray_free_port80)
+    if ss -tlpn 2>/dev/null | grep -q ':80 '; then
+        echo -e "\033[1;31m✗ No se pudo liberar el puerto 80.\033[0m"
+        echo -e "\033[1;33m  Quien lo tiene: \033[1;37m$(ss -tlpn | grep ':80 ' | awk '{print $6}')\033[0m"
+        _v2ray_restore_port80 "$_had"
+        return 1
+    fi
+    echo -e "\033[1;32m  Puerto 80 libre.\033[0m"
+
     mkdir -p "$_V2RAY_CERT_DIR"
-    echo -e "\033[1;33mEmitiendo certificado Let's Encrypt (puede tardar 30-90s)...\033[0m"
+    echo -e "\033[1;33mEmitiendo certificado Let's Encrypt (30-90s)...\033[0m"
     /root/.acme.sh/acme.sh --issue -d "$_dom" --standalone -k ec-256 \
-        --force >/tmp/v2ray_cert.log 2>&1
+        --force --log /tmp/v2ray_cert.log >>/tmp/v2ray_cert.log 2>&1
     local _rc=$?
 
+    # Restaurar puerto 80 antes de seguir
+    _v2ray_restore_port80 "$_had"
+
     if [[ $_rc -ne 0 ]]; then
-        echo -e "\033[1;31m✗ Falló la emisión del certificado.\033[0m"
-        tail -n 10 /tmp/v2ray_cert.log 2>/dev/null
-        # Restaurar servicios
-        [[ $_had_nginx -eq 1 ]] && systemctl start nginx 2>/dev/null
+        echo -e "\033[1;31m✗ Falló la emisión del certificado (rc=$_rc).\033[0m"
+        echo -e "\033[1;33m  Últimas líneas del log:\033[0m"
+        tail -n 15 /tmp/v2ray_cert.log 2>/dev/null
+        echo -e "\n\033[1;33m  Causas comunes:\033[0m"
+        echo -e "\033[1;37m   • Cloudflare en modo proxy (debe ser DNS only)"
+        echo -e "   • Firewall del proveedor bloquea puerto 80"
+        echo -e "   • Rate limit de Let's Encrypt (5 fails/hr por dominio)\033[0m"
         return 1
     fi
 
@@ -716,12 +792,6 @@ _v2ray_issue_cert() {
         >>/tmp/v2ray_cert.log 2>&1
     chmod 644 "$_V2RAY_CERT" 2>/dev/null
     chmod 600 "$_V2RAY_CERT_KEY" 2>/dev/null
-
-    # Restaurar servicios
-    [[ $_had_nginx -eq 1 ]] && systemctl start nginx 2>/dev/null
-    if [[ $_had_ws80 -eq 1 ]]; then
-        screen -dmS ws80 python3 "$_V2RAY_WSPROXY_PATH" 80 127.0.0.1:22
-    fi
 
     if [[ -s "$_V2RAY_CERT" && -s "$_V2RAY_CERT_KEY" ]]; then
         echo -e "\033[1;32m✓ Certificado emitido y guardado:\033[0m"
@@ -742,17 +812,22 @@ _v2ray_issue_cert() {
 _v2ray_install_nginx() {
     local _dom; _dom=$(_v2ray_get_domain)
     if [[ -z "$_dom" ]]; then
-        echo -e "\033[1;31m✗ Primero configure un dominio.\033[0m"; sleep 2; return 1
+        echo -e "\033[1;31m✗ Primero configure un dominio (opción 10).\033[0m"; sleep 2; return 1
     fi
     if [[ ! -s "$_V2RAY_CERT" || ! -s "$_V2RAY_CERT_KEY" ]]; then
-        echo -e "\033[1;31m✗ Primero emita el certificado (opción Certificado).\033[0m"; sleep 2; return 1
+        echo -e "\033[1;31m✗ Primero emita el certificado (opción 11).\033[0m"; sleep 2; return 1
     fi
 
     echo -e "\n\033[1;33mInstalando nginx...\033[0m"
-    apt-get install -y nginx >/dev/null 2>&1
+    apt-get update -y >/dev/null 2>&1
+    apt-get install -y nginx >/tmp/nginx_apt.log 2>&1
     if ! command -v nginx &>/dev/null; then
-        echo -e "\033[1;31m✗ No se pudo instalar nginx.\033[0m"; sleep 3; return 1
+        echo -e "\033[1;31m✗ No se pudo instalar nginx. Log apt:\033[0m"
+        tail -n 12 /tmp/nginx_apt.log 2>/dev/null
+        sleep 4; return 1
     fi
+    # Asegurar que el site default no compita por 80/443
+    rm -f /etc/nginx/sites-enabled/default 2>/dev/null
 
     # Elegir puertos que NO estén en uso por stunnel
     local _tls_p="$_V2RAY_NGINX_PORT" _http_p="$_V2RAY_NGINX_HTTP_PORT"
@@ -878,54 +953,77 @@ _v2ray_activar_todo() {
     echo -e "\033[0;34m┃\E[42;1;37m    V2RAY — ACTIVAR TODO AUTOMÁTICO       \E[0m\033[0;34m┃"
     echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
     echo ""
-    echo -e "\033[1;37m Esta opción hará lo siguiente:\033[0m"
+    echo -e "\033[1;37m Orden recomendado (VPS limpia):\033[0m"
     echo -e "   \033[1;32m1)\033[1;37m Actualizar wsproxy.py (detección V2Ray /vless)"
     echo -e "   \033[1;32m2)\033[1;37m Instalar V2Ray oficial v2fly"
-    echo -e "   \033[1;32m3)\033[1;37m Crear UUID por defecto persistente"
-    echo -e "   \033[1;32m4)\033[1;37m Activar wsproxy en 80, 8080, 8880, 8888, 2086"
-    echo -e "   \033[1;32m5)\033[1;37m Activar stunnel/dispatcher en 443, 444, 8443"
-    echo -e "   \033[1;32m6)\033[1;37m Validar config + arranque V2Ray (health check)"
+    echo -e "   \033[1;32m3)\033[1;37m Generar config V2Ray + UUID por defecto"
+    echo -e "   \033[1;32m4)\033[1;37m \033[1;36m[opcional]\033[1;37m Dominio + cert Let's Encrypt + nginx"
+    echo -e "   \033[1;32m5)\033[1;37m Activar wsproxy en 80, 8080, 8880, 8888, 2086"
+    echo -e "   \033[1;32m6)\033[1;37m Activar stunnel en 443, 444, 8443 (self-signed)"
+    echo -e "   \033[1;32m7)\033[1;37m Health check de V2Ray"
     echo ""
     echo -ne "\033[1;33m¿Continuar? [s/N]: \033[1;37m"; read _ok
     [[ ! "$_ok" =~ ^[sSyY]$ ]] && return
 
-    # 0. Actualizar wsproxy.py ANTES de tocar nada
-    echo -e "\n\033[1;33m[1/6] Verificando wsproxy.py...\033[0m"
+    # 1. wsproxy.py actualizado
+    echo -e "\n\033[1;33m[1/7] Verificando wsproxy.py...\033[0m"
     if ! _v2ray_ensure_wsproxy_updated; then
         echo -e "\033[1;31mAbortado: wsproxy.py no se pudo actualizar.\033[0m"; sleep 4; return
     fi
 
-    # 1. Instalar V2Ray
-    echo -e "\n\033[1;33m[2/6] Instalando V2Ray...\033[0m"
+    # 2. Instalar V2Ray
+    echo -e "\n\033[1;33m[2/7] Instalando V2Ray...\033[0m"
     _v2ray_install || { echo -e "\033[1;31mAbortado.\033[0m"; sleep 3; return; }
 
-    # 2. UUID por defecto persistente + DB de usuarios
-    echo -e "\n\033[1;33m[3/6] Asegurando UUID por defecto y usuarios...\033[0m"
-    mkdir -p "$_V2RAY_DIR"
+    # 3. UUID por defecto + config en RUTA OFICIAL
+    echo -e "\n\033[1;33m[3/7] Generando config V2Ray + UUID por defecto...\033[0m"
+    mkdir -p "$_V2RAY_DIR" "$_V2RAY_OFFICIAL_DIR"
     local _def_uuid; _def_uuid=$(_v2ray_get_default_uuid)
     touch "$_V2RAY_USERS_DB"
     if ! grep -q "^${_def_uuid}|" "$_V2RAY_USERS_DB" 2>/dev/null; then
         echo "${_def_uuid}|default" >> "$_V2RAY_USERS_DB"
     fi
-    echo -e "\033[1;32m  ✓ UUID por defecto: $_def_uuid\033[0m"
-    echo -e "\033[1;37m  Usuarios totales : $(grep -c '^[0-9a-f]' "$_V2RAY_USERS_DB")\033[0m"
-
-    # 3. Generar y validar config, arrancar V2Ray
     _v2ray_rebuild_config
     _v2ray_write_route_conf
     if ! _v2ray_validate_config; then
-        echo -e "\033[1;31m✗ La config V2Ray es inválida:\033[0m"
+        echo -e "\033[1;31m✗ Config V2Ray inválida:\033[0m"
         tail -n 12 /tmp/v2ray_test.log 2>/dev/null
-        echo -e "\033[1;33m  Abortando para no romper nada más.\033[0m"; sleep 5; return
+        echo -e "\033[1;33m  Abortando.\033[0m"; sleep 5; return
     fi
+    echo -e "\033[1;32m  ✓ Config válida en $_V2RAY_CONFIG\033[0m"
+    echo -e "\033[1;32m  ✓ UUID por defecto: $_def_uuid\033[0m"
     systemctl enable "$_V2RAY_SERVICE" >/dev/null 2>&1
     systemctl restart "$_V2RAY_SERVICE" 2>/dev/null
+    sleep 1
 
-    # 4. wsproxy en puertos estándar (si no hay activos)
-    echo -e "\n\033[1;33m[4/6] Activando wsproxy en 80, 8080, 8880, 8888, 2086...\033[0m"
+    # 4. [Opcional] Dominio + cert + nginx ANTES de wsproxy/stunnel
+    #    (necesario para liberar 80 sin conflictos)
+    echo -e "\n\033[1;33m[4/7] Configuración con dominio (opcional)\033[0m"
+    echo -ne "\033[1;33m¿Configurar dominio + cert TLS Let's Encrypt + nginx ahora? [s/N]: \033[1;37m"
+    read _wantdom
+    local _nginx_done=0
+    if [[ "$_wantdom" =~ ^[sSyY]$ ]]; then
+        if _v2ray_set_domain; then
+            if _v2ray_issue_cert; then
+                _v2ray_install_nginx && _nginx_done=1
+            else
+                echo -e "\033[1;33m  Saltando nginx — cert no emitido.\033[0m"
+            fi
+        fi
+    else
+        echo -e "\033[1;37m  Saltando (puede hacerlo luego con opciones 10/11/12).\033[0m"
+    fi
+
+    # 5. wsproxy en puertos estándar
+    echo -e "\n\033[1;33m[5/7] Activando wsproxy en 80, 8080, 8880, 8888, 2086...\033[0m"
     for _p in 80 8080 8880 8888 2086; do
         if ss -tlpn 2>/dev/null | grep -q ":${_p} "; then
-            # Si el listener es wsproxy.py, lo matamos para reabrir con la versión nueva
+            # Saltar si nginx lo está usando (80 si activamos nginx en ese puerto)
+            if [[ "$_nginx_done" = 1 && "$_p" = "80" ]] && ss -tlpn 2>/dev/null | grep ":80 " | grep -q nginx; then
+                echo -e "\033[1;33m  Puerto 80 usado por nginx, saltando wsproxy.\033[0m"
+                continue
+            fi
+            # Si es wsproxy viejo, lo reemplazamos
             local _is_ws
             _is_ws=$(ss -tlpn 2>/dev/null | grep ":${_p} " | grep -c 'python')
             if [[ "$_is_ws" -gt 0 ]]; then
@@ -942,10 +1040,8 @@ _v2ray_activar_todo() {
         screen -dmS "ws${_p}" python3 "$_V2RAY_WSPROXY_PATH" "$_p" "127.0.0.1:22"
         sed -i "\|wsproxy.py ${_p}|d" /etc/autostart 2>/dev/null
         echo "ss -tlpn | grep -qw ${_p} || screen -dmS ws${_p} python3 ${_V2RAY_WSPROXY_PATH} ${_p} 127.0.0.1:22" >> /etc/autostart
-        if declare -F _fw_open >/dev/null 2>&1; then
-            _fw_open "$_p" tcp
-        else
-            iptables -I INPUT -p tcp --dport "$_p" -j ACCEPT 2>/dev/null
+        if declare -F _fw_open >/dev/null 2>&1; then _fw_open "$_p" tcp
+        else iptables -I INPUT -p tcp --dport "$_p" -j ACCEPT 2>/dev/null
         fi
         sleep 0.4
         ss -tlpn 2>/dev/null | grep -q ":${_p} " && \
@@ -953,8 +1049,8 @@ _v2ray_activar_todo() {
             echo -e "\033[1;31m  ✗ Puerto $_p no respondió\033[0m"
     done
 
-    # 5. SSL Tunnel + dispatcher
-    echo -e "\n\033[1;33m[5/6] Activando SSL Tunnel + Dispatcher...\033[0m"
+    # 6. SSL Tunnel + dispatcher
+    echo -e "\n\033[1;33m[6/7] Activando SSL Tunnel + Dispatcher...\033[0m"
     if [[ ! -f /etc/stunnel/stunnel.conf ]]; then
         apt-get install -y stunnel4 openssl >/dev/null 2>&1
         [[ -f /etc/default/stunnel4 ]] && sed -i 's/ENABLED=0/ENABLED=1/' /etc/default/stunnel4
@@ -985,6 +1081,11 @@ connect = 127.0.0.1:10443
 EOF
     fi
     for _p in 443 444 8443; do
+        # Si nginx ya está en 8443, no insistimos
+        if ss -tlpn 2>/dev/null | grep ":${_p} " | grep -q nginx; then
+            echo -e "\033[1;33m  Puerto $_p usado por nginx, saltando stunnel.\033[0m"
+            continue
+        fi
         if declare -F _fw_open >/dev/null 2>&1; then _fw_open "$_p" tcp
         else iptables -I INPUT -p tcp --dport "$_p" -j ACCEPT 2>/dev/null
         fi
@@ -1003,14 +1104,18 @@ EOF
         echo "ss -tlpn | grep -qw 10443 || screen -dmS ssldispatch python3 /etc/SSHPlus/ssldispatcher.py 10443 127.0.0.1:22 127.0.0.1:80" >> /etc/autostart
     fi
 
-    # 6. Health check final
-    echo -e "\n\033[1;33m[6/6] Verificando salud de V2Ray...\033[0m"
+    # 7. Health check final
+    echo -e "\n\033[1;33m[7/7] Verificando salud de V2Ray...\033[0m"
     if _v2ray_health_check; then
         echo -e "\033[1;32m  ✓ V2Ray escuchando en 127.0.0.1:${_V2RAY_INTERNAL_PORT}\033[0m"
     else
-        echo -e "\033[1;31m  ✗ V2Ray NO está escuchando. Logs:\033[0m"
-        journalctl -u "$_V2RAY_SERVICE" -n 15 --no-pager 2>/dev/null
-        echo -e "\033[1;33m  Reintente: systemctl restart v2ray\033[0m"
+        echo -e "\033[1;31m  ✗ V2Ray NO está escuchando. Diagnóstico:\033[0m"
+        echo -e "\033[1;33m  • Config en uso: $_V2RAY_CONFIG\033[0m"
+        ls -la "$_V2RAY_CONFIG" 2>/dev/null
+        echo -e "\033[1;33m  • Test config:\033[0m"
+        _v2ray_validate_config && echo "    válida" || tail -n 6 /tmp/v2ray_test.log 2>/dev/null
+        echo -e "\033[1;33m  • journalctl:\033[0m"
+        journalctl -u "$_V2RAY_SERVICE" -n 12 --no-pager 2>/dev/null
     fi
 
     sleep 1
@@ -1020,8 +1125,9 @@ EOF
     echo -e "\033[1;33m  V2Ray   : \033[1;37m127.0.0.1:${_V2RAY_INTERNAL_PORT}  path ${_V2RAY_WS_PATH}"
     echo -e "\033[1;33m  No-TLS  : \033[1;37m80, 8080, 8880, 8888, 2086"
     echo -e "\033[1;33m  TLS     : \033[1;37m443, 444, 8443 (stunnel self-signed)"
+    [[ "$_nginx_done" = 1 ]] && \
+        echo -e "\033[1;33m  Nginx   : \033[1;32m✓ cert real Let's Encrypt"
     echo -e "\033[1;33m  UUID    : \033[1;37m$_def_uuid\033[0m"
-    echo -e "\033[1;33m  Tip     : \033[1;36mOpción 'Dominio' + 'Cert TLS' + 'Nginx' para cert real."
     echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
     echo ""
     echo -ne "\033[1;33mENTER para ver las URIs de tus usuarios...\033[0m"; read
