@@ -1362,6 +1362,33 @@ fun_instalar_conteo() {
 }
 
 # ============================================================
+# CARGAR MÓDULO V2RAY (VLESS + WebSocket)
+# ============================================================
+_V2RAY_MODULE="/etc/SSHPlus/v2ray.sh"
+if [[ ! -f "$_V2RAY_MODULE" ]]; then
+    mkdir -p /etc/SSHPlus
+    wget -q --timeout=30 \
+        "${_REPO_BASE}/Modulos/v2ray/v2ray.sh" \
+        -O "$_V2RAY_MODULE" 2>/dev/null
+    chmod 755 "$_V2RAY_MODULE" 2>/dev/null
+fi
+if [[ -s "$_V2RAY_MODULE" ]]; then
+    # shellcheck disable=SC1090
+    . "$_V2RAY_MODULE"
+fi
+
+fun_v2ray_safe() {
+    if declare -F fun_v2ray >/dev/null 2>&1; then
+        fun_v2ray
+    else
+        echo -e "\n\033[1;31m✗ Módulo V2Ray no disponible.\033[0m"
+        echo -e "\033[1;33m  Esperado en: $_V2RAY_MODULE\033[0m"
+        echo -e "\033[1;33m  URL fuente : ${_REPO_BASE}/Modulos/v2ray/v2ray.sh\033[0m"
+        sleep 4
+    fi
+}
+
+# ============================================================
 # MENÚ PRINCIPAL DE CONEXIÓN
 # ============================================================
 x="ok"; clear
@@ -1408,6 +1435,12 @@ fun_conexao() {
             && mk_sts="\033[1;32m✓ " || mk_sts="\033[1;31m✕ "
         systemctl is-active --quiet msyvpn-conteo 2>/dev/null \
             && conteo_sts="\033[1;32m✓ " || conteo_sts="\033[1;31m✕ "
+        systemctl is-active --quiet v2ray 2>/dev/null \
+            && v2ray_sts="\033[1;32m✓ " || v2ray_sts="\033[1;31m✕ "
+
+        # ── Puerto interno V2Ray (informativo) ────────────────
+        ss -tlpn 2>/dev/null | grep -q ":10086 " && \
+            echo -e "\033[1;32mV2RAY VLESS\033[1;31m: \033[1;37m127.0.0.1:10086  path /vless"
 
         echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m01\033[1;31m] \033[1;33mOPENSSH                              \033[0;34m┃"
@@ -1417,6 +1450,7 @@ fun_conexao() {
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m05\033[1;31m] \033[1;32mTURBO VPN $turbo_sts(BBR+Buf+Comp)    \033[0;34m┃"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m06\033[1;31m] \033[1;33mCLAVE MAESTRA $mk_sts                 \033[0;34m┃"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m08\033[1;31m] \033[1;33mSERVIDOR CONTEO $conteo_sts           \033[0;34m┃"
+        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m09\033[1;31m] \033[1;32mV2RAY VLESS $v2ray_sts(WS + /vless)    \033[0;34m┃"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m07\033[1;31m] \033[1;33mVOLVER \033[1;32m<<<                          \033[0;34m┃"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m00\033[1;31m] \033[1;33mSALIR \033[1;32m<<<                            \033[0;34m┃"
         echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
@@ -1432,6 +1466,7 @@ fun_conexao() {
         6|06)  tput reset; _descargar_master_pubkey; fun_conexao ;;
         7|07)  tput reset; menu ;;
         8|08)  tput reset; fun_instalar_conteo ;;
+        9|09)  tput reset; fun_v2ray_safe ;;
         0|00)  tput reset; echo -e "\033[1;31mSaliendo...\033[0m"; sleep 1; exit ;;
         *)     echo -e "\033[1;31mOpción inválida!\033[0m"; sleep 1 ;;
         esac

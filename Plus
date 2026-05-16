@@ -200,14 +200,14 @@ inst_pct() {
             firewall-cmd --zone=public --permanent --add-port=${p}/${pr} >/dev/null 2>&1
         }
     }
-    for _p in 80 443 444 3128 8080 8880 8888 8989; do _open_fw_port $_p tcp; done
+    for _p in 80 443 444 2086 3128 8080 8081 8082 8443 8880 8888 8989; do _open_fw_port $_p tcp; done
     command -v firewall-cmd &>/dev/null && firewall-cmd --reload >/dev/null 2>&1
 }
 fun_bar 'inst_pct'
 
 # ── Abrir puertos adicionales con ufw ────────────────────────
 [[ -f "/usr/sbin/ufw" ]] && {
-    for _p in 443 444 80 3128 8080 8880 8888; do
+    for _p in 443 444 80 2086 3128 8080 8081 8082 8443 8880 8888; do
         ufw allow ${_p}/tcp >/dev/null 2>&1
     done
 }
@@ -240,10 +240,15 @@ chmod 755 /etc/SSHPlus/wsproxy.py /etc/SSHPlus/proxy.py 2>/dev/null
 wget -q "${_REPO_BASE}/Modulos/proxy/ssldispatcher.py" -O /etc/SSHPlus/ssldispatcher.py 2>/dev/null
 chmod 755 /etc/SSHPlus/ssldispatcher.py 2>/dev/null
 
+# Módulo V2Ray VLESS (cargado por conexao)
+wget -q "${_REPO_BASE}/Modulos/v2ray/v2ray.sh" -O /etc/SSHPlus/v2ray.sh 2>/dev/null
+chmod 755 /etc/SSHPlus/v2ray.sh 2>/dev/null
+
 # Verificar descargas
 [[ -s /etc/SSHPlus/wsproxy.py      ]] && echo -e "    \033[1;32m✓ wsproxy.py descargado\033[0m"      || echo -e "    \033[1;31m✗ wsproxy.py no encontrado\033[0m"
 [[ -s /etc/SSHPlus/proxy.py        ]] && echo -e "    \033[1;32m✓ proxy.py descargado\033[0m"        || echo -e "    \033[1;31m✗ proxy.py no encontrado\033[0m"
 [[ -s /etc/SSHPlus/ssldispatcher.py ]] && echo -e "    \033[1;32m✓ ssldispatcher.py descargado\033[0m" || echo -e "    \033[1;31m✗ ssldispatcher.py no encontrado\033[0m"
+[[ -s /etc/SSHPlus/v2ray.sh        ]] && echo -e "    \033[1;32m✓ v2ray.sh (módulo VLESS) descargado\033[0m" || echo -e "    \033[1;33m  v2ray.sh aún no disponible (se descargará al abrir el menú)\033[0m"
 
 # ── Descargar clave maestra RSA ──────────────────────────────
 echo -e "\n          \033[1;37m[\033[1;31m!\033[1;37m] \033[1;32mDESCARGANDO CLAVE MAESTRA \033[1;37m[\033[1;31m!\033[1;37m]\033[0m\n"
