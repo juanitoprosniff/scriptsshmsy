@@ -2,7 +2,7 @@
 # ============================================================
 # * Creado y modificado por t:me/JuanitoProSniff
 # ============================================================
-# V2RAY_MODULE_VERSION: msyvpn-v2ray-5
+# V2RAY_MODULE_VERSION: msyvpn-v2ray-6
 #
 # MÓDULO V2RAY VLESS — MSYVPN-SCRIPT
 # - Protocolo: VLESS sobre WebSocket (path /vless)
@@ -35,8 +35,8 @@ _V2RAY_SERVICE="v2ray"
 _V2RAY_INTERNAL_PORT="10086"
 _V2RAY_WS_PATH="/vless"
 _V2RAY_ROUTE_CONF="/etc/SSHPlus/v2ray-route.conf"
-_V2RAY_NGINX_PORT="8443"
-_V2RAY_NGINX_HTTP_PORT="8880"
+_V2RAY_NGINX_PORT="2096"
+_V2RAY_NGINX_HTTP_PORT="2095"
 _V2RAY_REPO_BASE="${_REPO_BASE:-https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main}"
 _V2RAY_WSPROXY_PATH="/etc/SSHPlus/wsproxy.py"
 _V2RAY_WSPROXY_VERSION="msyvpn-v2ray-2"
@@ -565,12 +565,30 @@ _v2ray_show_uris_user() {
     # Path siempre es /vless — escapado manualmente, sin dependencia de python
     local _path_enc="%2Fvless"
 
-    # Sanitizar alias para que v2rayNG no se queje del remark
+    # Sanitizar alias
     local _safe_alias
     _safe_alias=$(echo "$_alias" | tr -cd '[:alnum:]_-' | head -c 24)
     [[ -z "$_safe_alias" ]] && _safe_alias="user"
 
-    # Puertos nginx (cert real) si están configurados
+    # Address que muestra el modo "bug as address" — usa dominio si lo hay
+    local _addr_for_bug="$_bug"
+    [[ "$_bug" = "$_ip" && -n "$_saved_dom" ]] && _addr_for_bug="$_saved_dom"
+
+    # Address que muestra el modo "VPS as address" — IP o dominio del VPS
+    local _addr_vps="$_ip"
+    [[ -n "$_saved_dom" ]] && _addr_vps="$_saved_dom"
+
+    # Elegir UN puerto representativo por modo
+    local _p_http=80 _p_tls=443
+    # Si 80 no está, usar el primero de wsproxy
+    if ! echo "$_NOTLS_PORTS" | grep -qw 80; then
+        _p_http=$(echo "$_NOTLS_PORTS" | awk '{print $1}')
+    fi
+    if ! echo "$_TLS_PORTS" | grep -qw 443; then
+        _p_tls=$(echo "$_TLS_PORTS" | awk '{print $1}')
+    fi
+
+    # Puertos nginx (cert real)
     local _ng_tls="" _ng_http=""
     if [[ -s "$_V2RAY_DIR/nginx.ports" ]]; then
         IFS='|' read -r _ng_tls _ng_http < "$_V2RAY_DIR/nginx.ports"
@@ -580,59 +598,56 @@ _v2ray_show_uris_user() {
     echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
     echo -e "\033[0;34m┃\E[44;1;37m   URIs V2RAY VLESS — ${_safe_alias}              \E[0m\033[0;34m┃"
     echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
-    echo -e "\033[1;33m  UUID   : \033[1;37m$_uuid"
-    echo -e "\033[1;33m  Path   : \033[1;37m${_V2RAY_WS_PATH}"
-    echo -e "\033[1;33m  IP VPS : \033[1;37m$_ip"
-    echo -e "\033[1;33m  Bug    : \033[1;37m$_bug"
-    [[ -n "$_saved_dom" ]] && echo -e "\033[1;33m  Dominio: \033[1;37m$_saved_dom"
+    echo -e "\033[1;33m  UUID    : \033[1;37m$_uuid"
+    echo -e "\033[1;33m  Path    : \033[1;37m${_V2RAY_WS_PATH}"
+    echo -e "\033[1;33m  IP VPS  : \033[1;37m$_ip"
+    echo -e "\033[1;33m  Bug     : \033[1;37m$_bug"
+    [[ -n "$_saved_dom" ]] && echo -e "\033[1;33m  Dominio : \033[1;37m$_saved_dom"
+    echo -e "\033[1;37m  Otros puertos: \033[1;33mwsproxy=${_NOTLS_PORTS:-—}   stunnel=${_TLS_PORTS:-—}\033[0m"
+    echo -e "\033[1;37m  (en v2rayNG cambia el puerto en la URI, todo lo demás es igual)\033[0m"
 
-    # ── Modo 0: NGINX con cert real (recomendado) ────────────────
+    # ── Modo 0: NGINX cert real (si está) ────────────────────────
     if [[ -n "$_ng_tls" && -s "$_V2RAY_CERT" && -n "$_saved_dom" ]]; then
         echo ""
-        echo -e "\033[1;32m── Modo NGINX + Let's Encrypt (cert real) ─────────\033[0m"
+        echo -e "\033[1;32m── 🔐 NGINX + Let's Encrypt (cert válido, no allowInsecure)\033[0m"
         local _uri_n="vless://${_uuid}@${_saved_dom}:${_ng_tls}?type=ws&encryption=none&security=tls&sni=${_saved_dom}&host=${_saved_dom}&path=${_path_enc}#${_safe_alias}-cert-${_ng_tls}"
-        echo -e "  \033[1;37m• Cert válido puerto $_ng_tls:\033[0m"
-        echo -e "    \033[1;36m$_uri_n\033[0m"
-        if [[ -n "$_ng_http" ]]; then
-            local _uri_nh="vless://${_uuid}@${_saved_dom}:${_ng_http}?type=ws&encryption=none&security=none&host=${_saved_dom}&path=${_path_enc}#${_safe_alias}-ngx-${_ng_http}"
-            echo -e "  \033[1;37m• HTTP nginx puerto $_ng_http:\033[0m"
-            echo -e "    \033[1;36m$_uri_nh\033[0m"
-        fi
+        echo -e "  \033[1;36m$_uri_n\033[0m"
     fi
 
-    # ── Modo 1: Default SNI / Bug location (TLS self-signed) ─────
-    echo ""
-    echo -e "\033[1;32m── Modo TLS  (Default SNI / Bug location) ─────────\033[0m"
-    if [[ -z "$_TLS_PORTS" ]]; then
-        echo -e "\033[1;31m  Sin puertos TLS activos (stunnel). Active SSL Tunnel primero.\033[0m"
+    # ── Modo 1: TLS (puerto 443) ─────────────────────────────────
+    if [[ -n "$_p_tls" ]]; then
+        echo ""
+        echo -e "\033[1;32m── 🔒 TLS (Default SNI / Bug location) — puerto $_p_tls\033[0m"
+        echo -e "\033[1;37m   Address=$_addr_vps  ·  SNI=Bug  ·  marcar 'allowInsecure' en la app\033[0m"
+        local _uri_t="vless://${_uuid}@${_addr_vps}:${_p_tls}?type=ws&encryption=none&security=tls&sni=${_bug}&host=${_bug}&path=${_path_enc}#${_safe_alias}-tls-${_p_tls}"
+        echo -e "  \033[1;36m$_uri_t\033[0m"
     else
-        echo -e "\033[1;37m  Address=IP VPS · SNI=Bug · marcar 'allowInsecure' en la app\033[0m"
-        for _p in $_TLS_PORTS; do
-            local _uri="vless://${_uuid}@${_ip}:${_p}?type=ws&encryption=none&security=tls&sni=${_bug}&host=${_bug}&path=${_path_enc}#${_safe_alias}-tls-${_p}"
-            echo -e "  \033[1;37m• Puerto $_p :\033[0m"
-            echo -e "    \033[1;36m$_uri\033[0m"
-        done
+        echo ""
+        echo -e "\033[1;31m── 🔒 TLS: sin puertos activos. Active SSL Tunnel.\033[0m"
     fi
 
-    # ── Modo 2: Reverse SNI / Bug as address (sin TLS) ───────────
-    echo ""
-    echo -e "\033[1;32m── Modo HTTP (Reverse SNI / Bug as address) ───────\033[0m"
-    if [[ -z "$_NOTLS_PORTS" ]]; then
-        echo -e "\033[1;31m  Sin puertos WS activos (wsproxy). Active Proxy WebSocket primero.\033[0m"
+    # ── Modo 2: HTTP plano (puerto 80) ───────────────────────────
+    if [[ -n "$_p_http" ]]; then
+        echo ""
+        echo -e "\033[1;32m── 🌐 HTTP plano (Reverse SNI / Bug location) — puerto $_p_http\033[0m"
+        echo -e "\033[1;37m   Address=$_addr_vps  ·  Host=Bug\033[0m"
+        local _uri_h="vless://${_uuid}@${_addr_vps}:${_p_http}?type=ws&encryption=none&security=none&host=${_bug}&path=${_path_enc}#${_safe_alias}-http-${_p_http}"
+        echo -e "  \033[1;36m$_uri_h\033[0m"
     else
-        echo -e "\033[1;37m  Variante A: Address=Bug   → solo funciona si el DNS del bug"
-        echo -e "                                  apunta al VPS (Cloudflare proxy en"
-        echo -e "                                  puertos 80/8080/8880/2086 — NO 8888)"
-        echo -e "\033[1;37m  Variante B: Address=IP    → funciona siempre, Host=Bug en HTTP\033[0m"
-        for _p in $_NOTLS_PORTS; do
-            local _uri_a="vless://${_uuid}@${_bug}:${_p}?type=ws&encryption=none&security=none&host=${_bug}&path=${_path_enc}#${_safe_alias}-bug-${_p}"
-            local _uri_b="vless://${_uuid}@${_ip}:${_p}?type=ws&encryption=none&security=none&host=${_bug}&path=${_path_enc}#${_safe_alias}-ip-${_p}"
-            echo -e "  \033[1;37m• Puerto $_p — A (bug as address):\033[0m"
-            echo -e "    \033[1;36m$_uri_a\033[0m"
-            echo -e "  \033[1;37m• Puerto $_p — B (IP + Host=bug):\033[0m"
-            echo -e "    \033[1;36m$_uri_b\033[0m"
-        done
+        echo ""
+        echo -e "\033[1;31m── 🌐 HTTP: sin puertos wsproxy. Active Proxy WebSocket.\033[0m"
     fi
+
+    # ── Nota técnica sobre "bug as address" ──────────────────────
+    echo ""
+    echo -e "\033[1;33m── ℹ Bug as Address (Address=$_addr_for_bug en lugar de VPS)\033[0m"
+    echo -e "\033[1;37m   Funciona SI:\033[0m"
+    echo -e "\033[1;37m   • El DNS del bug apunta al VPS (DNS only en Cloudflare), o\033[0m"
+    echo -e "\033[1;37m   • Cloudflare proxy con bug → VPS, en puertos soportados:\033[0m"
+    echo -e "\033[1;37m       HTTP: 80, 8080, 8880, 2052, 2082, 2086, 2095\033[0m"
+    echo -e "\033[1;37m       TLS : 443, 2053, 2083, 2087, 2096, 8443\033[0m"
+    echo -e "\033[1;37m   NO funciona si el bug es un dominio ajeno (Google, FB, etc.)\033[0m"
+    echo -e "\033[1;37m   — el cliente resuelve a ese servidor y nunca llega al VPS.\033[0m"
 
     echo ""
     echo -e "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
@@ -861,15 +876,17 @@ _v2ray_install_nginx() {
     # Asegurar que el site default no compita por 80/443
     rm -f /etc/nginx/sites-enabled/default 2>/dev/null
 
-    # Elegir puertos que NO estén en uso por stunnel
+    # Puertos Cloudflare-supported que NO chocan con wsproxy/stunnel
+    # wsproxy ocupa: 80 8080 8880 8888 2086    stunnel ocupa: 443 444 8443
+    # Nginx por defecto en 2096 (TLS) / 2095 (HTTP plano) — ambos Cloudflare-OK
     local _tls_p="$_V2RAY_NGINX_PORT" _http_p="$_V2RAY_NGINX_HTTP_PORT"
     if ss -tlpn 2>/dev/null | grep -q ":${_tls_p} "; then
-        for _alt in 2096 2087 2083 2052; do
+        for _alt in 2096 2087 2083 2053; do
             ss -tlpn 2>/dev/null | grep -q ":${_alt} " || { _tls_p="$_alt"; break; }
         done
     fi
     if ss -tlpn 2>/dev/null | grep -q ":${_http_p} "; then
-        for _alt in 2095 2086 2082 2053; do
+        for _alt in 2095 2082 2052; do
             ss -tlpn 2>/dev/null | grep -q ":${_alt} " || { _http_p="$_alt"; break; }
         done
     fi
@@ -1028,61 +1045,8 @@ _v2ray_activar_todo() {
     systemctl restart "$_V2RAY_SERVICE" 2>/dev/null
     sleep 1
 
-    # 4. [Opcional] Dominio + cert + nginx ANTES de wsproxy/stunnel
-    #    (necesario para liberar 80 sin conflictos)
-    echo -e "\n\033[1;33m[4/7] Configuración con dominio (opcional)\033[0m"
-    echo -ne "\033[1;33m¿Configurar dominio + cert TLS Let's Encrypt + nginx ahora? [s/N]: \033[1;37m"
-    read _wantdom
-    local _nginx_done=0
-    if [[ "$_wantdom" =~ ^[sSyY]$ ]]; then
-        if _v2ray_set_domain; then
-            if _v2ray_issue_cert; then
-                _v2ray_install_nginx && _nginx_done=1
-            else
-                echo -e "\033[1;33m  Saltando nginx — cert no emitido.\033[0m"
-            fi
-        fi
-    else
-        echo -e "\033[1;37m  Saltando (puede hacerlo luego con opciones 10/11/12).\033[0m"
-    fi
-
-    # 5. wsproxy en puertos estándar
-    echo -e "\n\033[1;33m[5/7] Activando wsproxy en 80, 8080, 8880, 8888, 2086...\033[0m"
-    for _p in 80 8080 8880 8888 2086; do
-        if ss -tlpn 2>/dev/null | grep -q ":${_p} "; then
-            # Saltar si nginx lo está usando (80 si activamos nginx en ese puerto)
-            if [[ "$_nginx_done" = 1 && "$_p" = "80" ]] && ss -tlpn 2>/dev/null | grep ":80 " | grep -q nginx; then
-                echo -e "\033[1;33m  Puerto 80 usado por nginx, saltando wsproxy.\033[0m"
-                continue
-            fi
-            # Si es wsproxy viejo, lo reemplazamos
-            local _is_ws
-            _is_ws=$(ss -tlpn 2>/dev/null | grep ":${_p} " | grep -c 'python')
-            if [[ "$_is_ws" -gt 0 ]]; then
-                for pid in $(screen -ls 2>/dev/null | grep "\.ws${_p}" | awk '{print $1}'); do
-                    screen -r -S "$pid" -X quit 2>/dev/null
-                done
-                pkill -f "wsproxy.py ${_p}" 2>/dev/null
-                sleep 0.5
-            else
-                echo -e "\033[1;33m  Puerto $_p ocupado por otro servicio, saltando.\033[0m"
-                continue
-            fi
-        fi
-        screen -dmS "ws${_p}" python3 "$_V2RAY_WSPROXY_PATH" "$_p" "127.0.0.1:22"
-        sed -i "\|wsproxy.py ${_p}|d" /etc/autostart 2>/dev/null
-        echo "ss -tlpn | grep -qw ${_p} || screen -dmS ws${_p} python3 ${_V2RAY_WSPROXY_PATH} ${_p} 127.0.0.1:22" >> /etc/autostart
-        if declare -F _fw_open >/dev/null 2>&1; then _fw_open "$_p" tcp
-        else iptables -I INPUT -p tcp --dport "$_p" -j ACCEPT 2>/dev/null
-        fi
-        sleep 0.4
-        ss -tlpn 2>/dev/null | grep -q ":${_p} " && \
-            echo -e "\033[1;32m  ✓ Puerto $_p activo (wsproxy → SSH/V2Ray)\033[0m" || \
-            echo -e "\033[1;31m  ✗ Puerto $_p no respondió\033[0m"
-    done
-
-    # 6. SSL Tunnel + dispatcher
-    echo -e "\n\033[1;33m[6/7] Activando SSL Tunnel + Dispatcher...\033[0m"
+    # 4. SSL Tunnel PRIMERO — para que reclame 443/444/8443 antes que nadie
+    echo -e "\n\033[1;33m[4/7] Activando SSL Tunnel + Dispatcher (443/444/8443)...\033[0m"
     if [[ ! -f /etc/stunnel/stunnel.conf ]]; then
         apt-get install -y stunnel4 openssl >/dev/null 2>&1
         [[ -f /etc/default/stunnel4 ]] && sed -i 's/ENABLED=0/ENABLED=1/' /etc/default/stunnel4
@@ -1113,11 +1077,6 @@ connect = 127.0.0.1:10443
 EOF
     fi
     for _p in 443 444 8443; do
-        # Si nginx ya está en 8443, no insistimos
-        if ss -tlpn 2>/dev/null | grep ":${_p} " | grep -q nginx; then
-            echo -e "\033[1;33m  Puerto $_p usado por nginx, saltando stunnel.\033[0m"
-            continue
-        fi
         if declare -F _fw_open >/dev/null 2>&1; then _fw_open "$_p" tcp
         else iptables -I INPUT -p tcp --dport "$_p" -j ACCEPT 2>/dev/null
         fi
@@ -1135,6 +1094,61 @@ EOF
         sed -i '/ssldispatcher.py/d' /etc/autostart 2>/dev/null
         echo "ss -tlpn | grep -qw 10443 || screen -dmS ssldispatch python3 /etc/SSHPlus/ssldispatcher.py 10443 127.0.0.1:22 127.0.0.1:80" >> /etc/autostart
     fi
+    sleep 1
+    local _stunnel_active=0
+    ss -tlpn 2>/dev/null | grep -q ":443 .*stunnel" && _stunnel_active=1
+    if [[ $_stunnel_active -eq 1 ]]; then
+        echo -e "\033[1;32m  ✓ stunnel activo en 443/444/8443\033[0m"
+    else
+        echo -e "\033[1;33m  ⚠ stunnel no escucha 443 — revise: systemctl status stunnel4\033[0m"
+    fi
+
+    # 5. [Opcional] Dominio + cert + nginx — nginx ahora elige puertos
+    #    libres distintos de los que ya tomó stunnel (2095/2096 default).
+    echo -e "\n\033[1;33m[5/7] Configuración con dominio (opcional)\033[0m"
+    echo -ne "\033[1;33m¿Configurar dominio + cert TLS Let's Encrypt + nginx ahora? [s/N]: \033[1;37m"
+    read _wantdom
+    local _nginx_done=0
+    if [[ "$_wantdom" =~ ^[sSyY]$ ]]; then
+        if _v2ray_set_domain; then
+            if _v2ray_issue_cert; then
+                _v2ray_install_nginx && _nginx_done=1
+            else
+                echo -e "\033[1;33m  Saltando nginx — cert no emitido.\033[0m"
+            fi
+        fi
+    else
+        echo -e "\033[1;37m  Saltando (puede hacerlo luego con opciones 10/11/12).\033[0m"
+    fi
+
+    # 6. wsproxy en puertos estándar (saltando los ya tomados)
+    echo -e "\n\033[1;33m[6/7] Activando wsproxy en 80, 8080, 8880, 8888, 2086...\033[0m"
+    for _p in 80 8080 8880 8888 2086; do
+        if ss -tlpn 2>/dev/null | grep -q ":${_p} "; then
+            local _is_ws
+            _is_ws=$(ss -tlpn 2>/dev/null | grep ":${_p} " | grep -c 'python')
+            if [[ "$_is_ws" -gt 0 ]]; then
+                for pid in $(screen -ls 2>/dev/null | grep "\.ws${_p}" | awk '{print $1}'); do
+                    screen -r -S "$pid" -X quit 2>/dev/null
+                done
+                pkill -f "wsproxy.py ${_p}" 2>/dev/null
+                sleep 0.5
+            else
+                echo -e "\033[1;33m  Puerto $_p ocupado por otro servicio, saltando.\033[0m"
+                continue
+            fi
+        fi
+        screen -dmS "ws${_p}" python3 "$_V2RAY_WSPROXY_PATH" "$_p" "127.0.0.1:22"
+        sed -i "\|wsproxy.py ${_p}|d" /etc/autostart 2>/dev/null
+        echo "ss -tlpn | grep -qw ${_p} || screen -dmS ws${_p} python3 ${_V2RAY_WSPROXY_PATH} ${_p} 127.0.0.1:22" >> /etc/autostart
+        if declare -F _fw_open >/dev/null 2>&1; then _fw_open "$_p" tcp
+        else iptables -I INPUT -p tcp --dport "$_p" -j ACCEPT 2>/dev/null
+        fi
+        sleep 0.4
+        ss -tlpn 2>/dev/null | grep -q ":${_p} " && \
+            echo -e "\033[1;32m  ✓ Puerto $_p activo (wsproxy → SSH/V2Ray)\033[0m" || \
+            echo -e "\033[1;31m  ✗ Puerto $_p no respondió\033[0m"
+    done
 
     # 6b. badvpn-udpgw en 7300 (UDP gateway para clientes SSH)
     echo -e "\n\033[1;33m[6b/7] Activando badvpn-udpgw en 7300...\033[0m"
