@@ -2,7 +2,7 @@
 # ============================================================
 # * Creado y modificado por t:me/JuanitoProSniff
 # ============================================================
-# V2RAY_MODULE_VERSION: msyvpn-v2ray-4
+# V2RAY_MODULE_VERSION: msyvpn-v2ray-5
 #
 # MÓDULO V2RAY VLESS — MSYVPN-SCRIPT
 # - Protocolo: VLESS sobre WebSocket (path /vless)
@@ -525,7 +525,7 @@ _v2ray_collect_ports() {
     _NOTLS_PORTS=""
     _TLS_PORTS=""
 
-    # Puertos de wsproxy (no-TLS)
+    # Puertos de wsproxy (no-TLS) — escuchando ahora
     local _np
     _np=$(ss -tlpn 2>/dev/null | grep -E 'python|python3' | \
           awk '{print $4}' | rev | cut -d: -f1 | rev | \
@@ -533,13 +533,17 @@ _v2ray_collect_ports() {
           sort -un | xargs)
     _NOTLS_PORTS="$_np"
 
-    # Puertos de stunnel (TLS)
-    if [[ -f /etc/stunnel/stunnel.conf ]]; then
-        _TLS_PORTS=$(grep -oP '(?<=^accept\s{2}=\s)\d+' /etc/stunnel/stunnel.conf 2>/dev/null | \
-                    sort -un | xargs)
-        [[ -z "$_TLS_PORTS" ]] && \
-            _TLS_PORTS=$(grep -oP '(?<=^accept\s=\s)\d+' /etc/stunnel/stunnel.conf 2>/dev/null | sort -un | xargs)
+    # Puertos de stunnel (TLS) — primero del proceso activo, luego del .conf
+    local _tp
+    _tp=$(ss -tlpn 2>/dev/null | grep -i 'stunnel' | \
+          awk '{print $4}' | rev | cut -d: -f1 | rev | \
+          sort -un | xargs)
+    if [[ -z "$_tp" && -f /etc/stunnel/stunnel.conf ]]; then
+        # Cualquier whitespace alrededor de "accept" y "="
+        _tp=$(grep -E '^[[:space:]]*accept[[:space:]]*=' /etc/stunnel/stunnel.conf 2>/dev/null | \
+              grep -oE '[0-9]+' | sort -un | xargs)
     fi
+    _TLS_PORTS="$_tp"
 }
 
 _v2ray_show_uris_user() {
@@ -558,9 +562,13 @@ _v2ray_show_uris_user() {
 
     _v2ray_collect_ports
 
-    local _path_enc
-    _path_enc=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${_V2RAY_WS_PATH}', safe=''))" 2>/dev/null)
-    [[ -z "$_path_enc" ]] && _path_enc="%2Fvless"
+    # Path siempre es /vless — escapado manualmente, sin dependencia de python
+    local _path_enc="%2Fvless"
+
+    # Sanitizar alias para que v2rayNG no se queje del remark
+    local _safe_alias
+    _safe_alias=$(echo "$_alias" | tr -cd '[:alnum:]_-' | head -c 24)
+    [[ -z "$_safe_alias" ]] && _safe_alias="user"
 
     # Puertos nginx (cert real) si están configurados
     local _ng_tls="" _ng_http=""
@@ -570,7 +578,7 @@ _v2ray_show_uris_user() {
 
     echo ""
     echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
-    echo -e "\033[0;34m┃\E[44;1;37m   URIs V2RAY VLESS — ${_alias}              \E[0m\033[0;34m┃"
+    echo -e "\033[0;34m┃\E[44;1;37m   URIs V2RAY VLESS — ${_safe_alias}              \E[0m\033[0;34m┃"
     echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
     echo -e "\033[1;33m  UUID   : \033[1;37m$_uuid"
     echo -e "\033[1;33m  Path   : \033[1;37m${_V2RAY_WS_PATH}"
@@ -578,15 +586,15 @@ _v2ray_show_uris_user() {
     echo -e "\033[1;33m  Bug    : \033[1;37m$_bug"
     [[ -n "$_saved_dom" ]] && echo -e "\033[1;33m  Dominio: \033[1;37m$_saved_dom"
 
-    # ── Modo 0: NGINX con cert real (recomendado si hay dominio) ─
+    # ── Modo 0: NGINX con cert real (recomendado) ────────────────
     if [[ -n "$_ng_tls" && -s "$_V2RAY_CERT" && -n "$_saved_dom" ]]; then
         echo ""
         echo -e "\033[1;32m── Modo NGINX + Let's Encrypt (cert real) ─────────\033[0m"
-        local _uri_n="vless://${_uuid}@${_saved_dom}:${_ng_tls}?encryption=none&security=tls&type=ws&host=${_saved_dom}&sni=${_saved_dom}&path=${_path_enc}#${_alias}-cert-${_ng_tls}"
+        local _uri_n="vless://${_uuid}@${_saved_dom}:${_ng_tls}?type=ws&encryption=none&security=tls&sni=${_saved_dom}&host=${_saved_dom}&path=${_path_enc}#${_safe_alias}-cert-${_ng_tls}"
         echo -e "  \033[1;37m• Cert válido puerto $_ng_tls:\033[0m"
         echo -e "    \033[1;36m$_uri_n\033[0m"
         if [[ -n "$_ng_http" ]]; then
-            local _uri_nh="vless://${_uuid}@${_saved_dom}:${_ng_http}?encryption=none&security=none&type=ws&host=${_saved_dom}&path=${_path_enc}#${_alias}-ngx-${_ng_http}"
+            local _uri_nh="vless://${_uuid}@${_saved_dom}:${_ng_http}?type=ws&encryption=none&security=none&host=${_saved_dom}&path=${_path_enc}#${_safe_alias}-ngx-${_ng_http}"
             echo -e "  \033[1;37m• HTTP nginx puerto $_ng_http:\033[0m"
             echo -e "    \033[1;36m$_uri_nh\033[0m"
         fi
@@ -598,8 +606,9 @@ _v2ray_show_uris_user() {
     if [[ -z "$_TLS_PORTS" ]]; then
         echo -e "\033[1;31m  Sin puertos TLS activos (stunnel). Active SSL Tunnel primero.\033[0m"
     else
+        echo -e "\033[1;37m  Address=IP VPS · SNI=Bug · marcar 'allowInsecure' en la app\033[0m"
         for _p in $_TLS_PORTS; do
-            local _uri="vless://${_uuid}@${_ip}:${_p}?encryption=none&security=tls&type=ws&host=${_bug}&sni=${_bug}&path=${_path_enc}&allowInsecure=1#${_alias}-tls-${_p}"
+            local _uri="vless://${_uuid}@${_ip}:${_p}?type=ws&encryption=none&security=tls&sni=${_bug}&host=${_bug}&path=${_path_enc}#${_safe_alias}-tls-${_p}"
             echo -e "  \033[1;37m• Puerto $_p :\033[0m"
             echo -e "    \033[1;36m$_uri\033[0m"
         done
@@ -611,12 +620,16 @@ _v2ray_show_uris_user() {
     if [[ -z "$_NOTLS_PORTS" ]]; then
         echo -e "\033[1;31m  Sin puertos WS activos (wsproxy). Active Proxy WebSocket primero.\033[0m"
     else
+        echo -e "\033[1;37m  Variante A: Address=Bug   → solo funciona si el DNS del bug"
+        echo -e "                                  apunta al VPS (Cloudflare proxy en"
+        echo -e "                                  puertos 80/8080/8880/2086 — NO 8888)"
+        echo -e "\033[1;37m  Variante B: Address=IP    → funciona siempre, Host=Bug en HTTP\033[0m"
         for _p in $_NOTLS_PORTS; do
-            local _uri_a="vless://${_uuid}@${_bug}:${_p}?encryption=none&security=none&type=ws&host=${_bug}&path=${_path_enc}#${_alias}-bug-${_p}"
-            local _uri_b="vless://${_uuid}@${_ip}:${_p}?encryption=none&security=none&type=ws&host=${_bug}&path=${_path_enc}#${_alias}-ip-${_p}"
-            echo -e "  \033[1;37m• Puerto $_p (bug as address):\033[0m"
+            local _uri_a="vless://${_uuid}@${_bug}:${_p}?type=ws&encryption=none&security=none&host=${_bug}&path=${_path_enc}#${_safe_alias}-bug-${_p}"
+            local _uri_b="vless://${_uuid}@${_ip}:${_p}?type=ws&encryption=none&security=none&host=${_bug}&path=${_path_enc}#${_safe_alias}-ip-${_p}"
+            echo -e "  \033[1;37m• Puerto $_p — A (bug as address):\033[0m"
             echo -e "    \033[1;36m$_uri_a\033[0m"
-            echo -e "  \033[1;37m• Puerto $_p (IP + Host bug):\033[0m"
+            echo -e "  \033[1;37m• Puerto $_p — B (IP + Host=bug):\033[0m"
             echo -e "    \033[1;36m$_uri_b\033[0m"
         done
     fi
@@ -1121,6 +1134,34 @@ EOF
         screen -dmS ssldispatch python3 /etc/SSHPlus/ssldispatcher.py 10443 127.0.0.1:22 127.0.0.1:80
         sed -i '/ssldispatcher.py/d' /etc/autostart 2>/dev/null
         echo "ss -tlpn | grep -qw 10443 || screen -dmS ssldispatch python3 /etc/SSHPlus/ssldispatcher.py 10443 127.0.0.1:22 127.0.0.1:80" >> /etc/autostart
+    fi
+
+    # 6b. badvpn-udpgw en 7300 (UDP gateway para clientes SSH)
+    echo -e "\n\033[1;33m[6b/7] Activando badvpn-udpgw en 7300...\033[0m"
+    if [[ ! -x /bin/badvpn-udpgw ]]; then
+        wget -q --timeout=30 \
+            "${_V2RAY_REPO_BASE}/Install/badvpn-udpgw" \
+            -O /bin/badvpn-udpgw 2>/dev/null
+        chmod +x /bin/badvpn-udpgw 2>/dev/null
+    fi
+    if [[ -x /bin/badvpn-udpgw ]]; then
+        if ! pgrep -f 'badvpn-udpgw.*7300' >/dev/null 2>&1; then
+            screen -dmS udpvpn /bin/badvpn-udpgw \
+                --listen-addr 127.0.0.1:7300 \
+                --max-clients 10000 \
+                --max-connections-for-client 8 \
+                --client-socket-sndbuf 10000
+            grep -q 'udpvpn' /etc/autostart 2>/dev/null || \
+                echo "ps x | grep 'udpvpn' | grep -v 'grep' || screen -dmS udpvpn /bin/badvpn-udpgw --listen-addr 127.0.0.1:7300 --max-clients 10000 --max-connections-for-client 8 --client-socket-sndbuf 10000" >> /etc/autostart
+            sleep 0.5
+            pgrep -f 'badvpn-udpgw.*7300' >/dev/null && \
+                echo -e "\033[1;32m  ✓ badvpn 7300 activo\033[0m" || \
+                echo -e "\033[1;31m  ✗ badvpn no arrancó\033[0m"
+        else
+            echo -e "\033[1;37m  badvpn ya estaba corriendo\033[0m"
+        fi
+    else
+        echo -e "\033[1;33m  badvpn-udpgw no disponible, saltando.\033[0m"
     fi
 
     # 7. Health check final
