@@ -1312,6 +1312,75 @@ EOF
     fi
 
     sleep 1
+
+    # 7b. SlowDNS — opcional junto con V2Ray
+    echo -e "\n\033[1;33m[7b/7] SlowDNS — túnel DNS (opcional)\033[0m"
+    echo -ne "\033[1;33m¿Instalar / activar SlowDNS ahora? [s/N]: \033[1;37m"
+    read _want_sdns
+    local _sdns_ns="" _sdns_done=0
+    if [[ "$_want_sdns" =~ ^[sSyY]$ ]]; then
+        echo -ne "\n\033[1;32mNAMESERVER para SlowDNS (ej: ns1.tudominio.com): \033[1;37m"
+        read _sdns_ns
+        _sdns_ns=$(echo "$_sdns_ns" | xargs)
+        if [[ -n "$_sdns_ns" ]]; then
+            echo -e "\033[1;33m  Instalando SlowDNS con NS: $_sdns_ns\033[0m"
+            local _SDNS_REPO="https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main"
+            local _SDNS_RAW="https://github.com/juanitoprosniff/scriptsshmsy/raw/main"
+
+            # Descargar e instalar
+            apt-get install -y screen iptables >/dev/null 2>&1
+            mkdir -p /etc/slowdns/ssh
+
+            wget -q "${_SDNS_RAW}/Modulos/slowdns/dns-server"       -O /etc/slowdns/dns-server       && chmod +x /etc/slowdns/dns-server
+            wget -q "${_SDNS_REPO}/Modulos/slowdns/slowdns-instalar" -O /etc/slowdns/slowdns-instalar && chmod +x /etc/slowdns/slowdns-instalar
+            wget -q "${_SDNS_REPO}/Modulos/slowdns/slowdns-info"     -O /etc/slowdns/slowdns-info     && chmod +x /etc/slowdns/slowdns-info
+            wget -q "${_SDNS_REPO}/Modulos/slowdns/remove-slow"      -O /etc/slowdns/remove-slow      && chmod +x /etc/slowdns/remove-slow
+            wget -q "${_SDNS_REPO}/Modulos/slowdns/stopdns"          -O /etc/slowdns/stopdns          && chmod +x /etc/slowdns/stopdns
+            wget -q "${_SDNS_REPO}/Modulos/slowdns/ssh/startdns"     -O /etc/slowdns/ssh/startdns     && chmod +x /etc/slowdns/ssh/startdns
+            wget -q "${_SDNS_REPO}/Modulos/slowdns/ssh/restartdns"   -O /etc/slowdns/ssh/restartdns   && chmod +x /etc/slowdns/ssh/restartdns
+            ln -sf /etc/slowdns/ssh/startdns   /etc/slowdns/startdns
+            ln -sf /etc/slowdns/ssh/restartdns /etc/slowdns/restartdns
+            wget -q "${_SDNS_REPO}/Modulos/slowdns/slowdns" -O /bin/slowdns && chmod +x /bin/slowdns
+
+            # Clave predeterminada del repositorio
+            wget -q "${_SDNS_REPO}/Modulos/slowdns/server.key" -O /root/server.key
+            wget -q "${_SDNS_REPO}/Modulos/slowdns/server.pub"  -O /root/server.pub
+
+            # Guardar NS y puerto
+            echo "$_sdns_ns" > /etc/slowdns/infons
+            echo "22"        > /etc/slowdns/infopuerto
+
+            # Iptables (sin romper rc.local)
+            iptables -I INPUT  -p udp --dport 5300 -j ACCEPT 2>/dev/null
+            iptables -t nat -I PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 5300 2>/dev/null
+            if [[ -f /etc/rc.local ]] && ! grep -q 'SLOWDNS_IPTABLES' /etc/rc.local 2>/dev/null; then
+                sed -i '/^exit 0/i # SLOWDNS_IPTABLES — MSYVPN-SCRIPT\niptables -I INPUT -p udp --dport 5300 -j ACCEPT\niptables -t nat -I PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 5300' /etc/rc.local
+            fi
+
+            # Autostart
+            [[ ! -f /etc/autostart ]] && touch /etc/autostart
+            sed -i '/startdns\|dns-server/d' /etc/autostart 2>/dev/null
+            echo "ps aux | grep -v grep | grep -q 'dns-server' || /etc/slowdns/startdns" >> /etc/autostart
+
+            # Iniciar
+            screen -ls 2>/dev/null | grep 'slowdns' | awk '{print $1}' | xargs -I{} screen -X -S {} quit 2>/dev/null
+            pkill -f 'dns-server' 2>/dev/null
+            sleep 1
+            /etc/slowdns/startdns >/dev/null 2>&1
+
+            if ps aux 2>/dev/null | grep -v grep | grep -q 'dns-server'; then
+                echo -e "\033[1;32m  ✓ SlowDNS activo (NS: $_sdns_ns → 127.0.0.1:22)\033[0m"
+                _sdns_done=1
+            else
+                echo -e "\033[1;33m  ⚠ SlowDNS instalado pero no detectado corriendo.\033[0m"
+            fi
+        else
+            echo -e "\033[1;33m  NS vacío, saltando SlowDNS.\033[0m"
+        fi
+    else
+        echo -e "\033[1;37m  Saltando (puede instalarlo luego con: slowdns)\033[0m"
+    fi
+
     echo ""
     echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
     echo -e "\033[1;32m✓ V2RAY + WSPROXY + STUNNEL ACTIVOS\033[0m"
@@ -1321,6 +1390,8 @@ EOF
     [[ "$_nginx_done" = 1 ]] && \
         echo -e "\033[1;33m  Nginx   : \033[1;32m✓ cert real Let's Encrypt"
     echo -e "\033[1;33m  UUID    : \033[1;37m$_def_uuid\033[0m"
+    [[ "$_sdns_done" = 1 ]] && \
+        echo -e "\033[1;33m  SlowDNS : \033[1;32m✓ activo (NS: $_sdns_ns)"
     echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
     echo ""
     echo -ne "\033[1;33mENTER para ver las URIs de tus usuarios...\033[0m"; read

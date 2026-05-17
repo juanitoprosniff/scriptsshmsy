@@ -390,7 +390,7 @@ echo -ne "\033[1;32m¿QUÉ DESEAS HACER \033[1;37m?\033[1;31m?\033[1;37m : "; re
 [[ "$opc" != '1' && "$opc" != '01' ]] && { menu; return; }
 
 echo -e "\n\033[1;32mInstalando SlowDNS...\033[0m\n"
-wget https://raw.githubusercontent.com/leitura/slowdns/main/install
+wget -q "https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/Modulos/slowdns/install" -O install
 if [[ -f install ]]; then
 	chmod +x install
 	./install

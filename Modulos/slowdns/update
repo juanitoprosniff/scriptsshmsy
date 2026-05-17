@@ -1,63 +1,42 @@
 #!/bin/bash
-fun_bar () {
-comando[0]="$1"
-comando[1]="$2"
- (
-[[ -e $HOME/fim ]] && rm $HOME/fim
-${comando[0]} -y > /dev/null 2>&1
-${comando[1]} -y > /dev/null 2>&1
-touch $HOME/fim
- ) > /dev/null 2>&1 &
- tput civis
-echo -ne "  \033[1;33mAGUARDE \033[1;37m- \033[1;33m["
-while true; do
-   for((i=0; i<18; i++)); do
-   echo -ne "\033[1;31m#"
-   sleep 0.1s
-   done
-   [[ -e $HOME/fim ]] && rm $HOME/fim && break
-   echo -e "\033[1;33m]"
-   sleep 1s
-   tput cuu1
-   tput dl1
-   echo -ne "  \033[1;33mAGUARDE \033[1;37m- \033[1;33m["
-done
-echo -e "\033[1;33m]\033[1;37m -\033[1;32m OK !\033[1;37m"
-tput cnorm
-}
-clear
-echo -e "\033[1;33mATENÇÃO AQUI POR FAVOR!\033[0m"
+# Actualiza todos los archivos de SlowDNS desde el repositorio de MSYVPN-SCRIPT
+_REPO="https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main"
+_REPO_RAW="https://github.com/juanitoprosniff/scriptsshmsy/raw/main"
+
 echo ""
-echo -e "Ao fim do processo será necessário configurar"
-echo -e "novamente o serviço de SlowDNS, escolha a opção"
-echo -e "Usar key atual para restaurar sua antiga key"
+echo -e "\033[1;33mACTUALIZANDO SLOWDNS...\033[0m"
 echo ""
-read -p "Pressione [ENTER] para continuar ou CTRL + C para cancelar"
+
+cd /etc/slowdns 2>/dev/null || { echo -e "\033[1;31m✗ SlowDNS no está instalado.\033[0m"; exit 1; }
+
+# Detener servicio
+screen -ls 2>/dev/null | grep 'slowdns' | awk '{print $1}' | xargs -I{} screen -X -S {} quit 2>/dev/null
+pkill -f 'dns-server' 2>/dev/null
+sleep 1
+
+# Actualizar binario y scripts
+wget -q "${_REPO_RAW}/Modulos/slowdns/dns-server"       -O dns-server       && chmod +x dns-server
+wget -q "${_REPO}/Modulos/slowdns/slowdns-instalar"      -O slowdns-instalar && chmod +x slowdns-instalar
+wget -q "${_REPO}/Modulos/slowdns/slowdns-info"          -O slowdns-info     && chmod +x slowdns-info
+wget -q "${_REPO}/Modulos/slowdns/remove-slow"           -O remove-slow      && chmod +x remove-slow
+wget -q "${_REPO}/Modulos/slowdns/stopdns"               -O stopdns          && chmod +x stopdns
+
+mkdir -p ssh
+wget -q "${_REPO}/Modulos/slowdns/ssh/startdns"   -O ssh/startdns   && chmod +x ssh/startdns
+wget -q "${_REPO}/Modulos/slowdns/ssh/restartdns"  -O ssh/restartdns && chmod +x ssh/restartdns
+ln -sf /etc/slowdns/ssh/startdns   /etc/slowdns/startdns
+ln -sf /etc/slowdns/ssh/restartdns /etc/slowdns/restartdns
+
+wget -q "${_REPO}/Modulos/slowdns/slowdns" -O /bin/slowdns && chmod +x /bin/slowdns
+cp -f /bin/slowdns /etc/slowdns/slowdns
+
+echo -e "\033[1;32m✓ SlowDNS actualizado correctamente.\033[0m"
 echo ""
-echo -e "   \033[0;36mREMOVENDO ARQUIVOS ANTIGOS...\033[0m"
-echo ""
-fun_remove () {
-rm -rf remove-slow; wget https://raw.githubusercontent.com/leitura/slowdns/main/remove-slow && chmod +x remove-slow && bash remove-slow
-sleep 2
-rm -rf /bin/slowdns && rm /root/remove-slow
-sleep 2
-rm remove-slow && rm -rf /etc/slowdns
-}
-fun_bar 'fun_remove'
-rm -rf /etc/slowdns
-echo ""
-echo -e "   \033[0;36mATUALIZANDO SCRIPT...\033[0m"
-echo ""
-fun_update () {
-rm -rf install && wget https://raw.githubusercontent.com/leitura/slowdns/main/install && chmod +x install && bash install
-}
-fun_bar 'fun_update'
-sleep 3
-echo ""
-echo -e "\033[0;36mSLOWDNS ATUALIZADO COM SUCESSO! [✔]\033[0m"
+
+# Reiniciar si estaba instalado
+if [[ -f /etc/slowdns/infons ]]; then
+    /etc/slowdns/startdns >/dev/null 2>&1 &
+    echo -e "\033[1;32m✓ SlowDNS reiniciado.\033[0m"
+fi
 echo ""
 sleep 3
-echo -e "  \033[1;33mPARA ABRIR O MENU USE: \033[1;37m\033sslowdns\033[1;33m"
-echo ""
-read -p "Dê [ ENTER ] para liberar o terminal"
-echo -e "\033[0m"
