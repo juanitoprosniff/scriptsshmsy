@@ -1,24 +1,25 @@
 #!/usr/bin/env python3
 # encoding: utf-8
-# wsproxy.py — WebSocket + SSH Directo Proxy + Ruteo V2Ray
-# WSPROXY_VERSION: msyvpn-v2ray-2
+# wsproxy.py — WebSocket + SSH Directo Proxy + Ruteo V2Ray multi-protocolo
+# WSPROXY_VERSION: msyvpn-v2ray-3
 #
 # Uso desde conexao:
 #   python3 wsproxy.py <puerto> [host:puerto_destino]
-# Ejemplos:
-#   python3 wsproxy.py 8080 127.0.0.1:143   → Dropbear 2016
-#   python3 wsproxy.py 80   127.0.0.1:22    → OpenSSH
-#   python3 wsproxy.py 8080                 → defecto 127.0.0.1:22
 #
 # MODO TRIPLE:
-#   - V2RAY WS    → primera línea HTTP coincide con V2RAY_PATH → forward raw
-#   - SSH DIRECTO → buffer empieza con "SSH-"                  → tunnel sin HTTP
-#   - WEBSOCKET   → cualquier otra cosa                        → responde 101 y tunnel
+#   - V2RAY routes → primera línea HTTP coincide con un path V2Ray → forward raw
+#                    (V2Ray hace su propio 101 Switching Protocols)
+#   - SSH DIRECTO  → buffer empieza con "SSH-" → tunnel sin HTTP
+#   - WEBSOCKET    → resto → responde 101 y tunnel a DEFAULT_HOST
 #
 # Config V2Ray (opcional): /etc/SSHPlus/v2ray-route.conf
 #   V2RAY_ENABLED=yes|no
-#   V2RAY_PATH=/vless
-#   V2RAY_HOST=127.0.0.1:10086
+#   # Una línea ROUTE por protocolo:
+#   ROUTE=/vless:127.0.0.1:10086
+#   ROUTE=/vmess:127.0.0.1:10087
+#   ROUTE=/trojan-ws:127.0.0.1:10088
+#
+# Compatibilidad: también acepta V2RAY_PATH/V2RAY_HOST legacy (1 ruta).
 
 import socket, threading, select, sys, time, os
 
@@ -46,26 +47,28 @@ RESPONSE = ("HTTP/1.1 101 " + str(COR) + str(MSG) + str(FTAG) + "\r\n\r\n").enco
 # ── Configuración V2Ray (leída al inicio y cacheada por mtime) ─
 V2RAY_CONF_PATH = '/etc/SSHPlus/v2ray-route.conf'
 V2RAY_ENABLED = False
-V2RAY_PATH = '/vless'
-V2RAY_HOST = '127.0.0.1:10086'
+V2RAY_ROUTES = []  # lista de tuplas (path, "host:port"), ordenada por path más largo
 _V2RAY_MTIME = 0
 
 
 def _v2ray_reload():
     """Releer el archivo de ruteo V2Ray si cambió en disco."""
-    global V2RAY_ENABLED, V2RAY_PATH, V2RAY_HOST, _V2RAY_MTIME
+    global V2RAY_ENABLED, V2RAY_ROUTES, _V2RAY_MTIME
     try:
         st = os.stat(V2RAY_CONF_PATH)
     except OSError:
         V2RAY_ENABLED = False
+        V2RAY_ROUTES = []
         _V2RAY_MTIME = 0
         return
     if st.st_mtime == _V2RAY_MTIME:
         return
     _V2RAY_MTIME = st.st_mtime
     enabled = False
-    path = '/vless'
-    host = '127.0.0.1:10086'
+    routes = []
+    # Compat legacy
+    legacy_path = None
+    legacy_host = None
     try:
         with open(V2RAY_CONF_PATH, 'r') as f:
             for line in f:
@@ -77,40 +80,55 @@ def _v2ray_reload():
                 v = v.strip()
                 if k == 'V2RAY_ENABLED':
                     enabled = v.lower() in ('yes', 'true', '1', 'on')
+                elif k == 'ROUTE':
+                    # Formato: /path:host:port
+                    if ':' not in v:
+                        continue
+                    parts = v.split(':')
+                    if len(parts) < 3:
+                        continue
+                    p = parts[0]
+                    if p and not p.startswith('/'):
+                        p = '/' + p
+                    target = ':'.join(parts[1:])
+                    routes.append((p, target))
                 elif k == 'V2RAY_PATH':
                     if v and not v.startswith('/'):
                         v = '/' + v
-                    path = v
+                    legacy_path = v
                 elif k == 'V2RAY_HOST':
                     if ':' in v:
-                        host = v
+                        legacy_host = v
     except OSError:
         pass
+    if not routes and legacy_path and legacy_host:
+        routes = [(legacy_path, legacy_host)]
+    # Ordenar por path más largo primero (para que /vless-grpc no matche /vless)
+    routes.sort(key=lambda r: -len(r[0]))
     V2RAY_ENABLED = enabled
-    V2RAY_PATH = path
-    V2RAY_HOST = host
+    V2RAY_ROUTES = routes
 
 
-def _is_v2ray_request(buf):
-    """True si la primera línea HTTP referencia el path V2Ray."""
-    if not V2RAY_ENABLED or not buf:
-        return False
-    # Solo miramos los primeros 256 bytes — la request line cabe sobrado
+def _match_v2ray_route(buf):
+    """Devuelve (host_port, path_matched) si la request matchea alguna ruta V2Ray."""
+    if not V2RAY_ENABLED or not buf or not V2RAY_ROUTES:
+        return None
     try:
-        head = buf[:256].decode('latin-1', errors='ignore')
+        head = buf[:512].decode('latin-1', errors='ignore')
     except Exception:
-        return False
+        return None
     eol = head.find('\r\n')
     first = head[:eol] if eol != -1 else head
     parts = first.split(' ')
     if len(parts) < 2:
-        return False
+        return None
     method, path = parts[0].upper(), parts[1]
     if method not in ('GET', 'POST', 'CONNECT', 'OPTIONS', 'HEAD'):
-        return False
-    # Coincidencia exacta o prefijo (V2Ray permite query string)
-    p = V2RAY_PATH
-    return path == p or path.startswith(p + '?') or path.startswith(p + '/')
+        return None
+    for p, target in V2RAY_ROUTES:
+        if path == p or path.startswith(p + '?') or path.startswith(p + '/'):
+            return (target, p)
+    return None
 
 
 class Server(threading.Thread):
@@ -208,19 +226,21 @@ class ConnectionHandler(threading.Thread):
         try:
             self.client_buffer = self.client.recv(BUFLEN)
 
-            # Releer config V2Ray si cambió (barato: solo stat + abrir si mtime cambió)
+            # Releer config V2Ray si cambió (barato: stat + abrir si mtime cambió)
             _v2ray_reload()
 
             # ── DETECCIÓN DE MODO ────────────────────────────────
-            # 1) SSH directo: banner "SSH-..."  → tunnel puro
-            # 2) V2Ray WS   : path coincide     → forward raw a V2Ray (V2Ray hace 101)
-            # 3) WebSocket  : resto             → respuesta 101 + tunnel
+            # 1) SSH directo: banner "SSH-..."   → tunnel puro
+            # 2) V2Ray WS   : path coincide ruta → forward raw a V2Ray
+            # 3) WebSocket  : resto              → respuesta 101 + tunnel
+            v2_match = _match_v2ray_route(self.client_buffer)
             if self.client_buffer.startswith(b'SSH-'):
                 self.log += ' - SSH-DIRECT'
                 self.method_DIRECT(DEFAULT_HOST)
-            elif _is_v2ray_request(self.client_buffer):
-                self.log += ' - V2RAY ' + V2RAY_PATH
-                self.method_FORWARD(V2RAY_HOST)
+            elif v2_match is not None:
+                target, path_matched = v2_match
+                self.log += ' - V2RAY ' + path_matched
+                self.method_FORWARD(target)
             else:
                 # MODO WEBSOCKET/HTTP — comportamiento original
                 hostPort = self.findHeader(self.client_buffer, 'X-Real-Host')
@@ -337,8 +357,9 @@ def main():
     print("")
     print("\033[1;33mPUERTO :\033[1;32m " + str(LISTENING_PORT))
     print("\033[1;33mDESTINO:\033[1;32m " + DEFAULT_HOST)
-    if V2RAY_ENABLED:
-        print("\033[1;33mV2RAY  :\033[1;32m " + V2RAY_HOST + "  path " + V2RAY_PATH)
+    if V2RAY_ENABLED and V2RAY_ROUTES:
+        for p, t in V2RAY_ROUTES:
+            print("\033[1;33mV2RAY  :\033[1;32m " + p + " → " + t)
         print("\033[1;33mMODO   :\033[1;32m TRIPLE (SSH directo + WebSocket + V2Ray)")
     else:
         print("\033[1;33mMODO   :\033[1;32m DUAL (SSH directo + WebSocket)")

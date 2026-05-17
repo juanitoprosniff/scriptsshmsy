@@ -2,7 +2,7 @@
 # ============================================================
 # * Creado y modificado por t:me/JuanitoProSniff
 # ============================================================
-# V2RAY_MODULE_VERSION: msyvpn-v2ray-8
+# V2RAY_MODULE_VERSION: msyvpn-v2ray-9
 #
 # MÓDULO V2RAY VLESS — MSYVPN-SCRIPT
 # - Protocolo: VLESS sobre WebSocket (path /vless)
@@ -34,12 +34,16 @@ _V2RAY_BIN_CANDIDATES=("/usr/local/bin/v2ray" "/usr/bin/v2ray")
 _V2RAY_SERVICE="v2ray"
 _V2RAY_INTERNAL_PORT="10086"
 _V2RAY_WS_PATH="/vless"
+_V2RAY_VMESS_PORT="10087"
+_V2RAY_VMESS_PATH="/vmess"
+_V2RAY_TROJAN_PORT="10088"
+_V2RAY_TROJAN_PATH="/trojan-ws"
 _V2RAY_ROUTE_CONF="/etc/SSHPlus/v2ray-route.conf"
 _V2RAY_NGINX_PORT="2096"
 _V2RAY_NGINX_HTTP_PORT="2095"
 _V2RAY_REPO_BASE="${_REPO_BASE:-https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main}"
 _V2RAY_WSPROXY_PATH="/etc/SSHPlus/wsproxy.py"
-_V2RAY_WSPROXY_VERSION="msyvpn-v2ray-2"
+_V2RAY_WSPROXY_VERSION="msyvpn-v2ray-3"
 
 _v2ray_bin() {
     for b in "${_V2RAY_BIN_CANDIDATES[@]}"; do
@@ -184,24 +188,33 @@ _v2ray_rebuild_config() {
     mkdir -p "$_V2RAY_DIR" "$_V2RAY_OFFICIAL_DIR"
     touch "$_V2RAY_USERS_DB"
 
-    local _clients="" _first=1 _uuid _alias
+    # Construir clients VLESS, VMess y Trojan a partir del mismo users.db
+    # VLESS: id; VMess: id; Trojan: password = uuid (string ASCII válido)
+    local _vless="" _vmess="" _trojan=""
+    local _first_v=1 _first_m=1 _first_t=1
+    local _uuid _alias
     while IFS='|' read -r _uuid _alias; do
         [[ -z "$_uuid" ]] && continue
         _v2ray_valid_uuid "$_uuid" || continue
         [[ -z "$_alias" ]] && _alias="$_uuid"
-        if [[ $_first -eq 1 ]]; then
-            _first=0
-        else
-            _clients+=","
-        fi
-        _clients+=$(printf '\n        {"id": "%s", "level": 0, "email": "%s"}' "$_uuid" "$_alias")
+        # VLESS
+        [[ $_first_v -eq 1 ]] && _first_v=0 || _vless+=","
+        _vless+=$(printf '\n        {"id": "%s", "level": 0, "email": "%s"}' "$_uuid" "$_alias")
+        # VMess (mismo UUID, alterId 0 → AEAD)
+        [[ $_first_m -eq 1 ]] && _first_m=0 || _vmess+=","
+        _vmess+=$(printf '\n        {"id": "%s", "alterId": 0, "level": 0, "email": "%s"}' "$_uuid" "$_alias")
+        # Trojan (password = UUID)
+        [[ $_first_t -eq 1 ]] && _first_t=0 || _trojan+=","
+        _trojan+=$(printf '\n        {"password": "%s", "level": 0, "email": "%s"}' "$_uuid" "$_alias")
     done < "$_V2RAY_USERS_DB"
 
-    # Si no hay usuarios, generar uno por defecto para que el servicio arranque sano
-    if [[ -z "$_clients" ]]; then
+    # Si no hay usuarios, generar uno por defecto
+    if [[ -z "$_vless" ]]; then
         local _def; _def=$(_v2ray_gen_uuid)
         echo "${_def}|default" >> "$_V2RAY_USERS_DB"
-        _clients=$(printf '\n        {"id": "%s", "level": 0, "email": "default"}' "$_def")
+        _vless=$(printf  '\n        {"id": "%s", "level": 0, "email": "default"}' "$_def")
+        _vmess=$(printf  '\n        {"id": "%s", "alterId": 0, "level": 0, "email": "default"}' "$_def")
+        _trojan=$(printf '\n        {"password": "%s", "level": 0, "email": "default"}' "$_def")
     fi
 
     cat > "$_V2RAY_CONFIG" <<JSON
@@ -218,7 +231,7 @@ _v2ray_rebuild_config() {
       "port": ${_V2RAY_INTERNAL_PORT},
       "protocol": "vless",
       "settings": {
-        "clients": [${_clients}
+        "clients": [${_vless}
         ],
         "decryption": "none"
       },
@@ -227,6 +240,50 @@ _v2ray_rebuild_config() {
         "security": "none",
         "wsSettings": {
           "path": "${_V2RAY_WS_PATH}",
+          "headers": {}
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls"]
+      }
+    },
+    {
+      "tag": "vmess-ws",
+      "listen": "127.0.0.1",
+      "port": ${_V2RAY_VMESS_PORT},
+      "protocol": "vmess",
+      "settings": {
+        "clients": [${_vmess}
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "none",
+        "wsSettings": {
+          "path": "${_V2RAY_VMESS_PATH}",
+          "headers": {}
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls"]
+      }
+    },
+    {
+      "tag": "trojan-ws",
+      "listen": "127.0.0.1",
+      "port": ${_V2RAY_TROJAN_PORT},
+      "protocol": "trojan",
+      "settings": {
+        "clients": [${_trojan}
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "none",
+        "wsSettings": {
+          "path": "${_V2RAY_TROJAN_PATH}",
           "headers": {}
         }
       },
@@ -258,10 +315,11 @@ JSON
 _v2ray_write_route_conf() {
     mkdir -p /etc/SSHPlus
     cat > "$_V2RAY_ROUTE_CONF" <<EOF
-# Auto-generado — MSYVPN-SCRIPT V2Ray module
+# Auto-generado — MSYVPN-SCRIPT V2Ray multi-protocolo
 V2RAY_ENABLED=yes
-V2RAY_PATH=${_V2RAY_WS_PATH}
-V2RAY_HOST=127.0.0.1:${_V2RAY_INTERNAL_PORT}
+ROUTE=${_V2RAY_WS_PATH}:127.0.0.1:${_V2RAY_INTERNAL_PORT}
+ROUTE=${_V2RAY_VMESS_PATH}:127.0.0.1:${_V2RAY_VMESS_PORT}
+ROUTE=${_V2RAY_TROJAN_PATH}:127.0.0.1:${_V2RAY_TROJAN_PORT}
 EOF
     chmod 644 "$_V2RAY_ROUTE_CONF"
 }
@@ -668,6 +726,40 @@ _v2ray_show_uris_user() {
         echo -e "\033[1;37m   Address=$_addr_vps  ·  Host=Bug\033[0m"
         local _uri_h="vless://${_uuid}@${_addr_vps}:${_p_http}?type=ws&encryption=none&security=none&host=${_bug}&path=${_path_enc}#${_safe_alias}-http-${_p_http}"
         echo -e "  \033[1;36m$_uri_h\033[0m"
+    fi
+
+    # ── Variantes VMess y Trojan (mismo UUID/puerto, distinto protocolo) ─
+    local _vmpath_enc="%2Fvmess" _trpath_enc="%2Ftrojan-ws"
+    echo ""
+    echo -e "\033[1;33m── 🔄 Variantes mismo usuario: VMess y Trojan\033[0m"
+    echo -e "\033[1;37m   Mismo UUID, distinto protocolo/path. Útil para probar cuál funciona mejor.\033[0m"
+
+    if [[ -n "$_p_tls" ]]; then
+        # VMess TLS (formato JSON base64)
+        local _vm_json
+        _vm_json=$(printf '{"v":"2","ps":"%s-vm-%s","add":"%s","port":"%s","id":"%s","aid":"0","scy":"auto","net":"ws","type":"none","host":"%s","path":"%s","tls":"tls","sni":"%s"}' \
+            "$_safe_alias" "$_p_tls" "$_addr_vps" "$_p_tls" "$_uuid" "$_bug" "$_V2RAY_VMESS_PATH" "$_bug")
+        local _vm_b64; _vm_b64=$(printf '%s' "$_vm_json" | base64 -w 0 2>/dev/null)
+        echo -e "  \033[1;37m• VMess TLS (puerto $_p_tls):\033[0m"
+        echo -e "    \033[1;36mvmess://${_vm_b64}\033[0m"
+        # Trojan TLS
+        local _uri_tr_t="trojan://${_uuid}@${_addr_vps}:${_p_tls}?type=ws&security=tls&sni=${_bug}&host=${_bug}&path=${_trpath_enc}#${_safe_alias}-tr-${_p_tls}"
+        echo -e "  \033[1;37m• Trojan TLS (puerto $_p_tls):\033[0m"
+        echo -e "    \033[1;36m$_uri_tr_t\033[0m"
+    fi
+
+    if [[ -n "$_p_http" ]]; then
+        # VMess sin TLS
+        local _vm_json_h
+        _vm_json_h=$(printf '{"v":"2","ps":"%s-vm-%s","add":"%s","port":"%s","id":"%s","aid":"0","scy":"auto","net":"ws","type":"none","host":"%s","path":"%s","tls":""}' \
+            "$_safe_alias" "$_p_http" "$_addr_vps" "$_p_http" "$_uuid" "$_bug" "$_V2RAY_VMESS_PATH")
+        local _vm_b64h; _vm_b64h=$(printf '%s' "$_vm_json_h" | base64 -w 0 2>/dev/null)
+        echo -e "  \033[1;37m• VMess HTTP (puerto $_p_http):\033[0m"
+        echo -e "    \033[1;36mvmess://${_vm_b64h}\033[0m"
+        # Trojan sin TLS — atípico pero válido para tests via wsproxy
+        local _uri_tr_h="trojan://${_uuid}@${_addr_vps}:${_p_http}?type=ws&security=none&host=${_bug}&path=${_trpath_enc}#${_safe_alias}-tr-h-${_p_http}"
+        echo -e "  \033[1;37m• Trojan HTTP (puerto $_p_http, sin TLS):\033[0m"
+        echo -e "    \033[1;36m$_uri_tr_h\033[0m"
     fi
 
     echo ""
