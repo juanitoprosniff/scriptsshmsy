@@ -1211,11 +1211,30 @@ accept  = 8443
 connect = 127.0.0.1:10443
 EOF
     fi
+    # Asegurar dependencias presentes (puede que stunnel.conf exista de instalación previa
+    # pero falten el .pem o el servicio enabled)
+    command -v stunnel4 &>/dev/null || command -v stunnel &>/dev/null || \
+        apt-get install -y stunnel4 openssl >/dev/null 2>&1
+    [[ -f /etc/default/stunnel4 ]] && sed -i 's/ENABLED=0/ENABLED=1/' /etc/default/stunnel4
+
+    # Si falta el .pem, regenerarlo (cert+key concatenados)
+    if [[ ! -s /etc/stunnel/stunnel.pem ]]; then
+        mkdir -p /etc/stunnel
+        if [[ ! -s /etc/stunnel/stunnel.crt || ! -s /etc/stunnel/stunnel.key ]]; then
+            openssl req -new -newkey rsa:2048 -days 3650 -nodes -x509 \
+                -subj "/C=CO/ST=Colombia/L=Bogota/O=MSYVPN/CN=msyvpn.local" \
+                -keyout /etc/stunnel/stunnel.key -out /etc/stunnel/stunnel.crt >/dev/null 2>&1
+        fi
+        cat /etc/stunnel/stunnel.crt /etc/stunnel/stunnel.key > /etc/stunnel/stunnel.pem
+        chmod 600 /etc/stunnel/stunnel.pem
+    fi
+
     for _p in 443 444 8443; do
         if declare -F _fw_open >/dev/null 2>&1; then _fw_open "$_p" tcp
         else iptables -I INPUT -p tcp --dport "$_p" -j ACCEPT 2>/dev/null
         fi
     done
+    systemctl enable stunnel4 >/dev/null 2>&1
     systemctl restart stunnel4 2>/dev/null || service stunnel4 restart 2>/dev/null
 
     if [[ -f /etc/SSHPlus/ssldispatcher.py ]]; then
@@ -1229,13 +1248,22 @@ EOF
         sed -i '/ssldispatcher.py/d' /etc/autostart 2>/dev/null
         echo "ss -tlpn | grep -qw 10443 || screen -dmS ssldispatch python3 /etc/SSHPlus/ssldispatcher.py 10443 127.0.0.1:22 127.0.0.1:80" >> /etc/autostart
     fi
-    sleep 1
+    sleep 2
     local _stunnel_active=0
     ss -tlpn 2>/dev/null | grep -q ":443 .*stunnel" && _stunnel_active=1
     if [[ $_stunnel_active -eq 1 ]]; then
         echo -e "\033[1;32m  ✓ stunnel activo en 443/444/8443\033[0m"
     else
-        echo -e "\033[1;33m  ⚠ stunnel no escucha 443 — revise: systemctl status stunnel4\033[0m"
+        # Segundo intento — a veces el primer restart falla si el socket no se liberó
+        echo -e "\033[1;33m  ⚠ Reintentando stunnel...\033[0m"
+        pkill -f "stunnel4\|stunnel " 2>/dev/null; sleep 1
+        systemctl restart stunnel4 2>/dev/null || service stunnel4 restart 2>/dev/null
+        sleep 2
+        if ss -tlpn 2>/dev/null | grep -q ":443 .*stunnel"; then
+            echo -e "\033[1;32m  ✓ stunnel activo en 443/444/8443 (2do intento)\033[0m"
+        else
+            echo -e "\033[1;31m  ✗ stunnel no escucha 443 — revise: systemctl status stunnel4\033[0m"
+        fi
     fi
 
     # 5. [Opcional] Dominio + cert + nginx — nginx ahora elige puertos

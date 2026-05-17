@@ -244,8 +244,8 @@ chmod 755 /etc/SSHPlus/ssldispatcher.py 2>/dev/null
 wget -q "${_REPO_BASE}/Modulos/v2ray/v2ray.sh" -O /etc/SSHPlus/v2ray.sh 2>/dev/null
 chmod 755 /etc/SSHPlus/v2ray.sh 2>/dev/null
 
-# Descargar criarusuario actualizado
-wget -q "${_REPO_BASE}/Modulos/usuarios/criarusuario.sh" -O /bin/criarusuario 2>/dev/null
+# Descargar criarusuario actualizado (SlowDNS + V2Ray + Hysteria info)
+wget -q "${_REPO_BASE}/Modulos/usuarios/criarusuario" -O /bin/criarusuario 2>/dev/null
 chmod 755 /bin/criarusuario 2>/dev/null
 [[ -s /bin/criarusuario ]] && echo -e "    \033[1;32m✓ criarusuario descargado\033[0m" || echo -e "    \033[1;31m✗ criarusuario no encontrado\033[0m"
 
