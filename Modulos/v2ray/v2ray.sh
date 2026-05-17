@@ -2,7 +2,7 @@
 # ============================================================
 # * Creado y modificado por t:me/JuanitoProSniff
 # ============================================================
-# V2RAY_MODULE_VERSION: msyvpn-v2ray-6
+# V2RAY_MODULE_VERSION: msyvpn-v2ray-7
 #
 # MÓDULO V2RAY VLESS — MSYVPN-SCRIPT
 # - Protocolo: VLESS sobre WebSocket (path /vless)
@@ -562,25 +562,18 @@ _v2ray_show_uris_user() {
 
     _v2ray_collect_ports
 
-    # Path siempre es /vless — escapado manualmente, sin dependencia de python
     local _path_enc="%2Fvless"
 
-    # Sanitizar alias
     local _safe_alias
     _safe_alias=$(echo "$_alias" | tr -cd '[:alnum:]_-' | head -c 24)
     [[ -z "$_safe_alias" ]] && _safe_alias="user"
 
-    # Address que muestra el modo "bug as address" — usa dominio si lo hay
-    local _addr_for_bug="$_bug"
-    [[ "$_bug" = "$_ip" && -n "$_saved_dom" ]] && _addr_for_bug="$_saved_dom"
-
-    # Address que muestra el modo "VPS as address" — IP o dominio del VPS
+    # Address de VPS (IP o dominio si lo hay)
     local _addr_vps="$_ip"
     [[ -n "$_saved_dom" ]] && _addr_vps="$_saved_dom"
 
-    # Elegir UN puerto representativo por modo
+    # Elegir puerto representativo por modo
     local _p_http=80 _p_tls=443
-    # Si 80 no está, usar el primero de wsproxy
     if ! echo "$_NOTLS_PORTS" | grep -qw 80; then
         _p_http=$(echo "$_NOTLS_PORTS" | awk '{print $1}')
     fi
@@ -594,6 +587,19 @@ _v2ray_show_uris_user() {
         IFS='|' read -r _ng_tls _ng_http < "$_V2RAY_DIR/nginx.ports"
     fi
 
+    # Detectar si el dominio está bajo Cloudflare proxy
+    local _cf_proxy=0
+    if [[ -n "$_saved_dom" ]]; then
+        local _resolved
+        _resolved=$(getent hosts "$_saved_dom" 2>/dev/null | awk '{print $1}' | head -1)
+        # Rangos típicos de Cloudflare proxy IPv4
+        if [[ "$_resolved" =~ ^(104\.(1[6-9]|2[0-9]|3[01])\.|172\.(6[4-9]|[78][0-9]|9[0-5])\.|173\.245\.4[89]\.|108\.162\.|141\.101\.|162\.158\.|198\.41\.) ]]; then
+            _cf_proxy=1
+        fi
+    fi
+    # IP Cloudflare de ejemplo (cualquier IP CF funciona como front)
+    local _cf_sample="104.18.37.127"
+
     echo ""
     echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
     echo -e "\033[0;34m┃\E[44;1;37m   URIs V2RAY VLESS — ${_safe_alias}              \E[0m\033[0;34m┃"
@@ -603,51 +609,71 @@ _v2ray_show_uris_user() {
     echo -e "\033[1;33m  IP VPS  : \033[1;37m$_ip"
     echo -e "\033[1;33m  Bug     : \033[1;37m$_bug"
     [[ -n "$_saved_dom" ]] && echo -e "\033[1;33m  Dominio : \033[1;37m$_saved_dom"
+    if [[ $_cf_proxy -eq 1 ]]; then
+        echo -e "\033[1;33m  CF Proxy: \033[1;32m✓ DETECTADO (dominio resuelve a IP Cloudflare)\033[0m"
+    elif [[ -n "$_saved_dom" ]]; then
+        echo -e "\033[1;33m  CF Proxy: \033[1;31m✕ NO detectado (dominio resuelve a $_resolved)\033[0m"
+    fi
     echo -e "\033[1;37m  Otros puertos: \033[1;33mwsproxy=${_NOTLS_PORTS:-—}   stunnel=${_TLS_PORTS:-—}\033[0m"
     echo -e "\033[1;37m  (en v2rayNG cambia el puerto en la URI, todo lo demás es igual)\033[0m"
 
-    # ── Modo 0: NGINX cert real (si está) ────────────────────────
+    # ── Modo NGINX cert real ─────────────────────────────────────
     if [[ -n "$_ng_tls" && -s "$_V2RAY_CERT" && -n "$_saved_dom" ]]; then
         echo ""
-        echo -e "\033[1;32m── 🔐 NGINX + Let's Encrypt (cert válido, no allowInsecure)\033[0m"
+        echo -e "\033[1;32m── 🔐 NGINX + Let's Encrypt (cert válido, sin allowInsecure)\033[0m"
         local _uri_n="vless://${_uuid}@${_saved_dom}:${_ng_tls}?type=ws&encryption=none&security=tls&sni=${_saved_dom}&host=${_saved_dom}&path=${_path_enc}#${_safe_alias}-cert-${_ng_tls}"
         echo -e "  \033[1;36m$_uri_n\033[0m"
     fi
 
-    # ── Modo 1: TLS (puerto 443) ─────────────────────────────────
+    # ── Modo Cloudflare Proxy (Bug as Address REAL) ──────────────
+    # Solo tiene sentido si hay dominio. Genera URIs donde Address=
+    # cualquier IP de Cloudflare y SNI/Host=tu dominio. Funciona si
+    # el dominio está en Cloudflare modo proxy (nube naranja).
+    if [[ -n "$_saved_dom" ]]; then
+        echo ""
+        echo -e "\033[1;32m── ☁  Cloudflare Proxy — Address=IP CF · SNI/Host=tu dominio\033[0m"
+        if [[ $_cf_proxy -eq 1 ]]; then
+            echo -e "\033[1;32m   Detectado: tu dominio ya está bajo Cloudflare proxy ✓\033[0m"
+        else
+            echo -e "\033[1;33m   ⚠ Para usar este modo, activa la nube NARANJA (proxy) en\033[0m"
+            echo -e "\033[1;33m     Cloudflare para $_saved_dom y configura SSL mode 'Full'.\033[0m"
+        fi
+        echo -e "\033[1;37m   IP de ejemplo $_cf_sample → cualquier IP/dominio que resuelva\033[0m"
+        echo -e "\033[1;37m   a un edge de Cloudflare sirve (104.x.x.x, 172.6[4-9].x.x, etc).\033[0m"
+
+        # Modo Full strict: CF ↔ origin con TLS válido (nginx 2096 con LE cert)
+        if [[ -n "$_ng_tls" && -s "$_V2RAY_CERT" ]]; then
+            local _uri_cf="vless://${_uuid}@${_cf_sample}:443?type=ws&encryption=none&security=tls&sni=${_saved_dom}&host=${_saved_dom}&path=${_path_enc}#${_safe_alias}-cf-tls-443"
+            echo -e "  \033[1;37m• Cloudflare TLS 443 (CF ↔ nginx:${_ng_tls} TLS — SSL mode Full strict):\033[0m"
+            echo -e "    \033[1;36m$_uri_cf\033[0m"
+        fi
+
+        # Modo Flexible: CF ↔ origin HTTP (wsproxy 80 plain) — no requiere cert
+        if echo "$_NOTLS_PORTS" | grep -qw 80; then
+            local _uri_cfh="vless://${_uuid}@${_cf_sample}:443?type=ws&encryption=none&security=tls&sni=${_saved_dom}&host=${_saved_dom}&path=${_path_enc}#${_safe_alias}-cf-flex-443"
+            echo -e "  \033[1;37m• Cloudflare TLS 443 (CF ↔ wsproxy:80 HTTP — SSL mode Flexible):\033[0m"
+            echo -e "    \033[1;36m$_uri_cfh\033[0m"
+            echo -e "\033[1;37m     (esta URI también funciona con puerto 80, 8080, 2095… del lado cliente)\033[0m"
+        fi
+    fi
+
+    # ── Modo TLS directo (sin Cloudflare) — puerto 443 stunnel ───
     if [[ -n "$_p_tls" ]]; then
         echo ""
-        echo -e "\033[1;32m── 🔒 TLS (Default SNI / Bug location) — puerto $_p_tls\033[0m"
+        echo -e "\033[1;32m── 🔒 TLS directo al VPS — puerto $_p_tls\033[0m"
         echo -e "\033[1;37m   Address=$_addr_vps  ·  SNI=Bug  ·  marcar 'allowInsecure' en la app\033[0m"
         local _uri_t="vless://${_uuid}@${_addr_vps}:${_p_tls}?type=ws&encryption=none&security=tls&sni=${_bug}&host=${_bug}&path=${_path_enc}#${_safe_alias}-tls-${_p_tls}"
         echo -e "  \033[1;36m$_uri_t\033[0m"
-    else
-        echo ""
-        echo -e "\033[1;31m── 🔒 TLS: sin puertos activos. Active SSL Tunnel.\033[0m"
     fi
 
-    # ── Modo 2: HTTP plano (puerto 80) ───────────────────────────
+    # ── Modo HTTP directo (sin Cloudflare) — puerto 80 wsproxy ───
     if [[ -n "$_p_http" ]]; then
         echo ""
-        echo -e "\033[1;32m── 🌐 HTTP plano (Reverse SNI / Bug location) — puerto $_p_http\033[0m"
+        echo -e "\033[1;32m── 🌐 HTTP directo al VPS — puerto $_p_http\033[0m"
         echo -e "\033[1;37m   Address=$_addr_vps  ·  Host=Bug\033[0m"
         local _uri_h="vless://${_uuid}@${_addr_vps}:${_p_http}?type=ws&encryption=none&security=none&host=${_bug}&path=${_path_enc}#${_safe_alias}-http-${_p_http}"
         echo -e "  \033[1;36m$_uri_h\033[0m"
-    else
-        echo ""
-        echo -e "\033[1;31m── 🌐 HTTP: sin puertos wsproxy. Active Proxy WebSocket.\033[0m"
     fi
-
-    # ── Nota técnica sobre "bug as address" ──────────────────────
-    echo ""
-    echo -e "\033[1;33m── ℹ Bug as Address (Address=$_addr_for_bug en lugar de VPS)\033[0m"
-    echo -e "\033[1;37m   Funciona SI:\033[0m"
-    echo -e "\033[1;37m   • El DNS del bug apunta al VPS (DNS only en Cloudflare), o\033[0m"
-    echo -e "\033[1;37m   • Cloudflare proxy con bug → VPS, en puertos soportados:\033[0m"
-    echo -e "\033[1;37m       HTTP: 80, 8080, 8880, 2052, 2082, 2086, 2095\033[0m"
-    echo -e "\033[1;37m       TLS : 443, 2053, 2083, 2087, 2096, 8443\033[0m"
-    echo -e "\033[1;37m   NO funciona si el bug es un dominio ajeno (Google, FB, etc.)\033[0m"
-    echo -e "\033[1;37m   — el cliente resuelve a ese servidor y nunca llega al VPS.\033[0m"
 
     echo ""
     echo -e "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
@@ -980,6 +1006,12 @@ NGEOF
     echo -e "\033[1;32m✓ Nginx activo:\033[0m"
     echo -e "\033[1;33m  TLS (cert real) : \033[1;37mhttps://${_dom}:${_tls_p}${_V2RAY_WS_PATH}\033[0m"
     echo -e "\033[1;33m  HTTP plano       : \033[1;37mhttp://${_dom}:${_http_p}${_V2RAY_WS_PATH}\033[0m"
+    echo ""
+    echo -e "\033[1;33m  Para usar 'Bug as Address' (cualquier IP CF en la URI):\033[0m"
+    echo -e "\033[1;37m   1. En Cloudflare, activa la NUBE NARANJA (proxy) para $_dom"
+    echo -e "   2. SSL/TLS mode = \"Full\" (recomendado) o \"Full strict\""
+    echo -e "   3. Cliente: Address=cualquier IP CF (ej 104.18.37.127):443"
+    echo -e "             SNI=$_dom  ·  Host=$_dom  ·  path=${_V2RAY_WS_PATH}\033[0m"
     return 0
 }
 
