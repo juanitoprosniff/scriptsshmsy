@@ -2,7 +2,7 @@
 # ============================================================
 # * Creado y modificado por t:me/JuanitoProSniff
 # ============================================================
-# V2RAY_MODULE_VERSION: msyvpn-v2ray-7
+# V2RAY_MODULE_VERSION: msyvpn-v2ray-8
 #
 # MÓDULO V2RAY VLESS — MSYVPN-SCRIPT
 # - Protocolo: VLESS sobre WebSocket (path /vless)
@@ -617,43 +617,38 @@ _v2ray_show_uris_user() {
     echo -e "\033[1;37m  Otros puertos: \033[1;33mwsproxy=${_NOTLS_PORTS:-—}   stunnel=${_TLS_PORTS:-—}\033[0m"
     echo -e "\033[1;37m  (en v2rayNG cambia el puerto en la URI, todo lo demás es igual)\033[0m"
 
-    # ── Modo NGINX cert real ─────────────────────────────────────
-    if [[ -n "$_ng_tls" && -s "$_V2RAY_CERT" && -n "$_saved_dom" ]]; then
-        echo ""
-        echo -e "\033[1;32m── 🔐 NGINX + Let's Encrypt (cert válido, sin allowInsecure)\033[0m"
-        local _uri_n="vless://${_uuid}@${_saved_dom}:${_ng_tls}?type=ws&encryption=none&security=tls&sni=${_saved_dom}&host=${_saved_dom}&path=${_path_enc}#${_safe_alias}-cert-${_ng_tls}"
-        echo -e "  \033[1;36m$_uri_n\033[0m"
-    fi
-
     # ── Modo Cloudflare Proxy (Bug as Address REAL) ──────────────
-    # Solo tiene sentido si hay dominio. Genera URIs donde Address=
-    # cualquier IP de Cloudflare y SNI/Host=tu dominio. Funciona si
-    # el dominio está en Cloudflare modo proxy (nube naranja).
+    # Address = cualquier IP/dominio Cloudflare, SNI/Host = tu dominio
+    # CF enruta al VPS por SNI/Host (no por IP destino).
+    # REQUIERE: dominio en CF proxy mode (nube naranja).
     if [[ -n "$_saved_dom" ]]; then
         echo ""
-        echo -e "\033[1;32m── ☁  Cloudflare Proxy — Address=IP CF · SNI/Host=tu dominio\033[0m"
         if [[ $_cf_proxy -eq 1 ]]; then
-            echo -e "\033[1;32m   Detectado: tu dominio ya está bajo Cloudflare proxy ✓\033[0m"
-        else
-            echo -e "\033[1;33m   ⚠ Para usar este modo, activa la nube NARANJA (proxy) en\033[0m"
-            echo -e "\033[1;33m     Cloudflare para $_saved_dom y configura SSL mode 'Full'.\033[0m"
-        fi
-        echo -e "\033[1;37m   IP de ejemplo $_cf_sample → cualquier IP/dominio que resuelva\033[0m"
-        echo -e "\033[1;37m   a un edge de Cloudflare sirve (104.x.x.x, 172.6[4-9].x.x, etc).\033[0m"
-
-        # Modo Full strict: CF ↔ origin con TLS válido (nginx 2096 con LE cert)
-        if [[ -n "$_ng_tls" && -s "$_V2RAY_CERT" ]]; then
-            local _uri_cf="vless://${_uuid}@${_cf_sample}:443?type=ws&encryption=none&security=tls&sni=${_saved_dom}&host=${_saved_dom}&path=${_path_enc}#${_safe_alias}-cf-tls-443"
-            echo -e "  \033[1;37m• Cloudflare TLS 443 (CF ↔ nginx:${_ng_tls} TLS — SSL mode Full strict):\033[0m"
+            echo -e "\033[1;32m═══ ☁  Cloudflare Proxy — Bug as Address REAL ═════════\033[0m"
+            echo -e "\033[1;37m  Tu dominio ya está bajo CF. Address=cualquier IP/dom CF.\033[0m"
+            echo -e "\033[1;37m  SNI/Host=$_saved_dom — CF enruta por ahí al VPS.\033[0m"
+            echo ""
+            # Variante 1: IP CF de ejemplo (como tu JSON con 104.18.37.127)
+            local _uri_cf="vless://${_uuid}@${_cf_sample}:443?type=ws&encryption=none&security=tls&sni=${_saved_dom}&host=${_saved_dom}&path=${_path_enc}#${_safe_alias}-cf-ip"
+            echo -e "  \033[1;37m• Address=$_cf_sample (IP de un edge CF):\033[0m"
             echo -e "    \033[1;36m$_uri_cf\033[0m"
-        fi
-
-        # Modo Flexible: CF ↔ origin HTTP (wsproxy 80 plain) — no requiere cert
-        if echo "$_NOTLS_PORTS" | grep -qw 80; then
-            local _uri_cfh="vless://${_uuid}@${_cf_sample}:443?type=ws&encryption=none&security=tls&sni=${_saved_dom}&host=${_saved_dom}&path=${_path_enc}#${_safe_alias}-cf-flex-443"
-            echo -e "  \033[1;37m• Cloudflare TLS 443 (CF ↔ wsproxy:80 HTTP — SSL mode Flexible):\033[0m"
-            echo -e "    \033[1;36m$_uri_cfh\033[0m"
-            echo -e "\033[1;37m     (esta URI también funciona con puerto 80, 8080, 2095… del lado cliente)\033[0m"
+            # Variante 2: tu mismo dominio como address
+            local _uri_dom="vless://${_uuid}@${_saved_dom}:443?type=ws&encryption=none&security=tls&sni=${_saved_dom}&host=${_saved_dom}&path=${_path_enc}#${_safe_alias}-cf-dom"
+            echo -e "  \033[1;37m• Address=$_saved_dom (tu dominio):\033[0m"
+            echo -e "    \033[1;36m$_uri_dom\033[0m"
+            echo ""
+            echo -e "\033[1;37m  Cambia $_cf_sample por CUALQUIER IP/dominio Cloudflare:\033[0m"
+            echo -e "\033[1;37m    rangos: 104.16-31.x, 172.64-95.x, 162.158.x, 141.101.x…\033[0m"
+            echo -e "\033[1;37m    o nombres: cloudflare.com, www.cloudflare.com, etc.\033[0m"
+        else
+            echo -e "\033[1;31m═══ ☁  Cloudflare Proxy — NO activado todavía ═════════\033[0m"
+            echo -e "\033[1;37m  Tu dominio $_saved_dom resuelve a $_resolved (tu VPS directo).\033[0m"
+            echo -e "\033[1;33m  Para que funcione 'Address=cualquier IP CF' (como el JSON\033[0m"
+            echo -e "\033[1;33m  ejemplo que mostraste):\033[0m"
+            echo -e "\033[1;37m    1) Mové tu dominio a Cloudflare (free plan, 5 min)."
+            echo -e "    2) En el DNS record activá la NUBE NARANJA (proxy ON)."
+            echo -e "    3) SSL/TLS mode: 'Flexible' (más fácil) o 'Full'."
+            echo -e "    4) Re-ejecutá esta opción — verás aparecer la URI Cloudflare.\033[0m"
         fi
     fi
 
