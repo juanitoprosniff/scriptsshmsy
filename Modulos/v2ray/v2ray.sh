@@ -26,7 +26,7 @@ _V2RAY_OFFICIAL_DIR="/usr/local/etc/v2ray"
 _V2RAY_CONFIG="$_V2RAY_OFFICIAL_DIR/config.json"
 _V2RAY_USERS_DB="$_V2RAY_DIR/users.db"
 _V2RAY_DOMAIN_FILE="$_V2RAY_DIR/domain"
-_V2RAY_DEFAULT_UUID_FILE="$_V2RAY_DIR/default.uuid"
+_V2RAY_DEFAULT_UUID_FILE="$_V2RAY_DIR/id.txt"
 _V2RAY_CERT_DIR="$_V2RAY_DIR/cert"
 _V2RAY_CERT="$_V2RAY_CERT_DIR/cert.crt"
 _V2RAY_CERT_KEY="$_V2RAY_CERT_DIR/cert.key"
@@ -95,6 +95,10 @@ _v2ray_ensure_wsproxy_updated() {
 
 # ── UUID por defecto persistente (sobrevive reinstalaciones) ──
 _v2ray_get_default_uuid() {
+    # Migración: renombrar default.uuid → id.txt si existe
+    if [[ -f "$_V2RAY_DIR/default.uuid" && ! -f "$_V2RAY_DEFAULT_UUID_FILE" ]]; then
+        mv "$_V2RAY_DIR/default.uuid" "$_V2RAY_DEFAULT_UUID_FILE"
+    fi
     if [[ -s "$_V2RAY_DEFAULT_UUID_FILE" ]]; then
         local _u; _u=$(head -1 "$_V2RAY_DEFAULT_UUID_FILE" | tr -d '[:space:]')
         if _v2ray_valid_uuid "$_u"; then echo "$_u"; return; fi
@@ -843,6 +847,18 @@ _v2ray_issue_cert() {
         sleep 2; return 1
     fi
 
+    # Si ya existe cert válido, preguntar si reusar
+    if [[ -s "$_V2RAY_CERT" && -s "$_V2RAY_CERT_KEY" ]]; then
+        echo -e "\n\033[1;32m✓ Certificado TLS existente encontrado para $_dom\033[0m"
+        echo -ne "\033[1;33m¿Usar certificado existente? \033[1;37m[S/n]: "
+        read _reuse_cert
+        if [[ ! "$_reuse_cert" =~ ^[nN]$ ]]; then
+            echo -e "\033[1;32m  ✓ Usando certificado existente.\033[0m"
+            sleep 1; return 0
+        fi
+        echo -e "\033[1;33m  Generando nuevo certificado...\033[0m"
+    fi
+
     echo -e "\n\033[1;33mPreparando emisión de certificado para: \033[1;37m$_dom\033[0m"
     echo -e "\033[1;33mRequisitos:\033[0m"
     echo -e "  \033[1;37m• DNS A record apuntando al IP del VPS\033[0m"
@@ -1381,6 +1397,34 @@ EOF
         echo -e "\033[1;37m  Saltando (puede instalarlo luego con: slowdns)\033[0m"
     fi
 
+    # 7c. UDP Hysteria — opcional
+    echo -e "\n\033[1;33m[7c/7] UDP Hysteria — túnel UDP (opcional)\033[0m"
+    echo -ne "\033[1;33m¿Instalar / activar UDP Hysteria ahora? [s/N]: \033[1;37m"
+    read _want_hyst
+    local _hyst_done=0
+    if [[ "$_want_hyst" =~ ^[sSyY]$ ]]; then
+        local _HYST_REPO="https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main"
+        echo -e "\033[1;33m  Instalando UDP Hysteria...\033[0m"
+        local _hyst_tmp
+        _hyst_tmp=$(mktemp /tmp/install_agnudp_XXXXXX.sh)
+        wget -q "${_HYST_REPO}/Modulos/udphysteria/install_agnudp.sh" -O "$_hyst_tmp" 2>/dev/null
+        if [[ -s "$_hyst_tmp" ]]; then
+            chmod +x "$_hyst_tmp"
+            bash "$_hyst_tmp"
+            rm -f "$_hyst_tmp"
+            # Instalar manager
+            wget -q "${_HYST_REPO}/Modulos/udphysteria/agnudp_manager.sh" -O /usr/local/bin/hysteria-manager 2>/dev/null
+            chmod +x /usr/local/bin/hysteria-manager 2>/dev/null
+            systemctl is-active --quiet hysteria-server 2>/dev/null && _hyst_done=1
+            [[ $_hyst_done -eq 1 ]] && echo -e "\033[1;32m  ✓ UDP Hysteria activo\033[0m" || echo -e "\033[1;33m  ⚠ UDP Hysteria instalado, verifique con: systemctl status hysteria-server\033[0m"
+        else
+            rm -f "$_hyst_tmp"
+            echo -e "\033[1;31m  ✗ No se pudo descargar el instalador de Hysteria\033[0m"
+        fi
+    else
+        echo -e "\033[1;37m  Saltando (puede instalarlo luego con opción 18 del menú)\033[0m"
+    fi
+
     echo ""
     echo -e "\033[0;34m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
     echo -e "\033[1;32m✓ V2RAY + WSPROXY + STUNNEL ACTIVOS\033[0m"
@@ -1392,6 +1436,8 @@ EOF
     echo -e "\033[1;33m  UUID    : \033[1;37m$_def_uuid\033[0m"
     [[ "$_sdns_done" = 1 ]] && \
         echo -e "\033[1;33m  SlowDNS : \033[1;32m✓ activo (NS: $_sdns_ns)"
+    [[ "$_hyst_done" = 1 ]] && \
+        echo -e "\033[1;33m  Hysteria: \033[1;32m✓ activo (UDP)"
     echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
     echo ""
     echo -ne "\033[1;33mENTER para ver las URIs de tus usuarios...\033[0m"; read

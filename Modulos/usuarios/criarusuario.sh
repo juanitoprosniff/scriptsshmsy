@@ -252,15 +252,38 @@ JSON
     return 0
 }
 
-# Mostrar info extra (Dominio CF, NS SlowDNS, V2Ray UUID + URIs)
+_cu_hysteria_add_user() {
+    local _usr="$1" _pass="$2"
+    local _hdb="/etc/hysteria/udpusers.db"
+    local _hcfg="/etc/hysteria/config.json"
+    [[ ! -x /usr/local/bin/hysteria ]] && return 1
+    [[ ! -f "$_hdb" ]] && return 1
+    sqlite3 "$_hdb" "INSERT OR REPLACE INTO users (username, password) VALUES ('$_usr', '$_pass');" 2>/dev/null || return 1
+    # Rebuild config
+    local _users; _users=$(sqlite3 "$_hdb" "SELECT username || ':' || password FROM users;" | paste -sd, - 2>/dev/null)
+    [[ -z "$_users" ]] && return 0
+    local _arr; _arr=$(echo "$_users" | awk -F, '{for(i=1;i<=NF;i++){if(i>1)printf ","; printf "\"%s\"",$i}; print ""}')
+    jq ".auth.config = [$_arr]" "$_hcfg" > "${_hcfg}.tmp" 2>/dev/null && mv "${_hcfg}.tmp" "$_hcfg"
+    systemctl restart hysteria-server 2>/dev/null
+    return 0
+}
+
+# Mostrar info extra (Dominio CF, NS SlowDNS, Hysteria UDP, V2Ray UUID + URIs)
 _cu_show_extra_info() {
     local _uname="$1"
+    local _upass="$2"
     local _v2uuid=""
 
     # Obtener datos de configuración
     local _cf_dom; _cf_dom=$(cat /etc/v2ray/domain 2>/dev/null | head -1 | tr -d '[:space:]')
     local _ns_dom; _ns_dom=$(cat /etc/slowdns/infons 2>/dev/null | tr -d '\n')
     local _sd_key; _sd_key=$(cat /root/server.pub 2>/dev/null | tr -d '\n')
+
+    # Agregar usuario a Hysteria si está instalado
+    local _hyst_added=0
+    if [[ -n "$_upass" ]]; then
+        _cu_hysteria_add_user "$_uname" "$_upass" && _hyst_added=1
+    fi
 
     # Crear usuario V2Ray si está instalado
     if _cu_v2ray_installed && [[ -d "$_CU_V2RAY_DIR" ]]; then
@@ -294,14 +317,31 @@ _cu_show_extra_info() {
     [[ -n "$_ns_dom" ]] && echo -e "\033[1;32mDominio NS      : \033[1;37m${_ns_dom}\033[0m"
 
     # SlowDNS info
-    if [[ -n "$_ns_dom" && -n "$_sd_key" ]]; then
+    if [[ -n "$_ns_dom" || -n "$_sd_key" ]]; then
         echo ""
         echo -e "\033[1;33m  ── SlowDNS ──\033[0m"
-        echo -e "\033[1;32mNS (Nameserver) : \033[1;37m${_ns_dom}\033[0m"
-        echo -e "\033[1;32mKey Pública     : \033[1;37m${_sd_key}\033[0m"
+        [[ -n "$_ns_dom" ]] && echo -e "\033[1;32mNS (Nameserver) : \033[1;37m${_ns_dom}\033[0m"
+        [[ -n "$_sd_key" ]] && echo -e "\033[1;32mKey Pública     : \033[1;37m${_sd_key}\033[0m"
         if ps aux 2>/dev/null | grep -v grep | grep -q 'dns-server'; then
             echo -e "\033[1;32mEstado SlowDNS  : \033[1;32m● ACTIVO\033[0m"
         fi
+    fi
+
+    # Hysteria UDP info
+    if [[ -x /usr/local/bin/hysteria && -f /etc/hysteria/config.json ]]; then
+        local _h_port; _h_port=$(jq -r '.listen // ":36712"' /etc/hysteria/config.json 2>/dev/null | tr -d ':')
+        local _h_obfs; _h_obfs=$(jq -r '.obfs // "agnudp"' /etc/hysteria/config.json 2>/dev/null)
+        echo ""
+        echo -e "\033[1;33m  ── UDP Hysteria ──\033[0m"
+        [[ -n "$_h_port" ]] && echo -e "\033[1;32mPuerto UDP      : \033[1;37m${_h_port}\033[0m"
+        echo -e "\033[1;32mObfs            : \033[1;37m${_h_obfs}\033[0m"
+        if [[ $_hyst_added -eq 1 && -n "$_upass" ]]; then
+            echo -e "\033[1;32mCredencial      : \033[1;37m${_uname}:${_upass}\033[0m"
+            echo -e "\033[1;33m  (App: campo Obfs=${_h_obfs}, User=${_uname}, Pass=${_upass})\033[0m"
+        fi
+        systemctl is-active --quiet hysteria-server 2>/dev/null && \
+            echo -e "\033[1;32mEstado Hysteria : \033[1;32m● ACTIVO\033[0m" || \
+            echo -e "\033[1;31mEstado Hysteria : ○ INACTIVO\033[0m"
     fi
 
     # V2Ray info
@@ -312,13 +352,13 @@ _cu_show_extra_info() {
         echo ""
         local _uri_h="vless://${_v2uuid}@${IP}:${_http_p}?type=ws&encryption=none&security=none&host=${_addr}&path=${_path_enc}#${_safe}-http-${_http_p}"
         local _uri_t="vless://${_v2uuid}@${IP}:${_tls_p}?type=ws&encryption=none&security=tls&sni=${_addr}&host=${_addr}&path=${_path_enc}&allowInsecure=1#${_safe}-tls-${_tls_p}"
-        echo -e "\033[1;32mVLESS HTTP      : \033[1;36m${_uri_h}\033[0m"
+        echo -e "\033[1;32mVLESS HTTP      :\033[1;36m ${_uri_h}\033[0m"
         echo ""
-        echo -e "\033[1;32mVLESS TLS       : \033[1;36m${_uri_t}\033[0m"
+        echo -e "\033[1;32mVLESS TLS       :\033[1;36m ${_uri_t}\033[0m"
         [[ -n "$_cf_dom" ]] && {
             local _uri_cf="vless://${_v2uuid}@${IP}:443?type=ws&encryption=none&security=tls&sni=${_cf_dom}&host=${_cf_dom}&path=${_path_enc}#${_safe}-cf-443"
             echo ""
-            echo -e "\033[1;32mVLESS Cloudflare: \033[1;36m${_uri_cf}\033[0m"
+            echo -e "\033[1;32mVLESS CF        :\033[1;36m ${_uri_cf}\033[0m"
         }
     fi
 
@@ -381,7 +421,7 @@ fun_usertoken() {
     echo -e "\033[1;32mAuth        :\033[1;37m Password + Clave RSA Master\033[0m"
     echo ""
     fun_show_ports
-    _cu_show_extra_info "$username"
+    _cu_show_extra_info "$username" "$password"
 }
 
 # ── Verificar que el sistema esté instalado ───────────────────
@@ -492,5 +532,5 @@ else
     fi
     echo ""
     fun_show_ports
-    _cu_show_extra_info "$username"
+    _cu_show_extra_info "$username" "$password"
 fi
