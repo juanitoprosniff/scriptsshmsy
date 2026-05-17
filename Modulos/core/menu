@@ -250,7 +250,7 @@ clear
 echo -e "\E[38;5;18m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
 echo -e "\E[38;5;18m┃\E[44;1;37m          HYSTERIA UDP MANAGER           \E[0m\E[38;5;18m┃"
 echo -e "\E[38;5;18m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
-if command -v hysteria-manager &>/dev/null; then
+if command -v hysteria-manager &>/dev/null || [[ -x /usr/local/bin/hysteria-manager ]]; then
 	echo -e "\033[1;32mHysteria UDP ya instalado. Abriendo manager...\033[0m"
 	sleep 1; hysteria-manager; return
 fi
@@ -260,7 +260,7 @@ echo ""
 echo -ne "\033[1;32m¿QUÉ DESEAS HACER \033[1;37m?\033[1;31m?\033[1;37m : "; read opc
 [[ "$opc" != '1' && "$opc" != '01' ]] && { menu; return; }
 echo -e "\n\033[1;32mInstalando Hysteria UDP Manager...\033[0m"
-BASE_URL="https://raw.githubusercontent.com/juanitoprosniff/script_msyvpn/main/installer"
+BASE_URL="https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/Modulos/udphysteria"
 wget -q -O /root/install_agnudp.sh  "$BASE_URL/install_agnudp.sh"  2>/dev/null
 wget -q -O /root/agnudp_manager.sh  "$BASE_URL/agnudp_manager.sh"  2>/dev/null
 if [[ -f /root/install_agnudp.sh ]] && [[ -f /root/agnudp_manager.sh ]]; then
