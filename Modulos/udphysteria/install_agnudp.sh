@@ -1,15 +1,17 @@
 #!/bin/bash
 # ============================================================
 # Instalador UDP Hysteria — MSYVPN-SCRIPT
+# Sin Obfs: autenticación pura por "usuario:contraseña"
 # ============================================================
 
 _HYST_DIR="/etc/hysteria"
 _HYST_BIN="/usr/local/bin/hysteria"
 _HYST_CONFIG="$_HYST_DIR/config.json"
 _HYST_DB="$_HYST_DIR/udpusers.db"
+_HYST_CERT="$_HYST_DIR/hysteria.crt"
+_HYST_KEY="$_HYST_DIR/hysteria.key"
 _HYST_SERVICE="/etc/systemd/system/hysteria-server.service"
 _HYST_PORT="${1:-36712}"
-_HYST_OBFS="${2:-agnudp}"
 
 _detect_arch() {
     local _a; _a=$(uname -m)
@@ -25,11 +27,11 @@ _ARCH=$(_detect_arch)
 echo -e "\033[1;33m[Hysteria] Detectando arquitectura: $_ARCH\033[0m"
 
 # Instalar dependencias
-apt-get install -y curl jq sqlite3 >/dev/null 2>&1
+apt-get install -y curl jq sqlite3 openssl >/dev/null 2>&1
 
 mkdir -p "$_HYST_DIR"
 
-# Descargar binario Hysteria v1 (compatible con protocolo agnudp)
+# Descargar binario Hysteria v1 (compatible con protocolo UDP/QUIC)
 _hyst_download() {
     local _ver="v1.3.5"
     local _url="https://github.com/apernet/hysteria/releases/download/${_ver}/hysteria-linux-${_ARCH}"
@@ -48,16 +50,24 @@ if [[ ! -x "$_HYST_BIN" ]]; then
     _hyst_download || exit 1
 fi
 
-# Obtener IP pública
-_IP=$(cat /etc/IP 2>/dev/null | tr -d '\n' || hostname -I | awk '{print $1}')
+# Generar certificado TLS self-signed (Hysteria v1 lo requiere para QUIC)
+if [[ ! -s "$_HYST_CERT" || ! -s "$_HYST_KEY" ]]; then
+    echo -e "\033[1;33m[Hysteria] Generando certificado TLS self-signed...\033[0m"
+    openssl req -x509 -nodes -newkey rsa:2048 -days 3650 \
+        -subj "/C=CO/ST=Colombia/L=Bogota/O=MSYVPN/CN=msyvpn.local" \
+        -keyout "$_HYST_KEY" -out "$_HYST_CERT" >/dev/null 2>&1
+    chmod 600 "$_HYST_KEY" "$_HYST_CERT"
+    echo -e "\033[1;32m[Hysteria] ✓ Certificado generado\033[0m"
+fi
 
-# Crear configuración base
+# Crear configuración base — sin obfs, auth por "usuario:contraseña"
 if [[ ! -f "$_HYST_CONFIG" ]]; then
     cat > "$_HYST_CONFIG" <<JSON
 {
   "listen": ":${_HYST_PORT}",
   "protocol": "udp",
-  "obfs": "${_HYST_OBFS}",
+  "cert": "${_HYST_CERT}",
+  "key": "${_HYST_KEY}",
   "auth": {
     "mode": "passwords",
     "config": []
@@ -67,13 +77,10 @@ if [[ ! -f "$_HYST_CONFIG" ]]; then
   "down_mbps": 100,
   "recv_window_conn": 15728640,
   "recv_window_client": 67108864,
-  "max_conn_client": 4096,
-  "insecure": true,
-  "cert": "",
-  "key": ""
+  "max_conn_client": 4096
 }
 JSON
-    echo -e "\033[1;32m[Hysteria] ✓ Configuración creada (puerto UDP: $_HYST_PORT, obfs: $_HYST_OBFS)\033[0m"
+    echo -e "\033[1;32m[Hysteria] ✓ Configuración creada (puerto UDP: $_HYST_PORT, sin obfs)\033[0m"
 fi
 
 # Inicializar base de datos de usuarios
@@ -116,15 +123,14 @@ command -v iptables &>/dev/null && {
 }
 
 # Iniciar servicio
-systemctl start hysteria-server 2>/dev/null
+systemctl restart hysteria-server 2>/dev/null
 sleep 2
 
 if systemctl is-active --quiet hysteria-server 2>/dev/null; then
     echo -e "\033[1;32m[Hysteria] ✓ Hysteria UDP activo en puerto $_HYST_PORT (UDP)\033[0m"
-    echo -e "\033[1;32m[Hysteria]   Obfs: $_HYST_OBFS\033[0m"
+    echo -e "\033[1;32m[Hysteria]   Auth: usuario:contraseña por usuario (sin obfs)\033[0m"
     echo -e "\033[1;32m[Hysteria]   Manager: hysteria-manager o agnudp\033[0m"
 else
-    echo -e "\033[1;33m[Hysteria] ⚠ Hysteria instalado pero no pudo iniciar automáticamente.\033[0m"
+    echo -e "\033[1;33m[Hysteria] ⚠ Hysteria instalado pero no pudo iniciar.\033[0m"
     echo -e "\033[1;33m[Hysteria]   Verifique: journalctl -u hysteria-server -n 30\033[0m"
-    echo -e "\033[1;33m[Hysteria]   Nota: Se requiere un certificado TLS válido para producción.\033[0m"
 fi
