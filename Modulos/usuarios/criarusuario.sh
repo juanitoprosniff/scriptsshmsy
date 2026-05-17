@@ -158,6 +158,173 @@ fun_bar() {
     tput cnorm
 }
 
+# ── V2Ray Integration ─────────────────────────────────────────
+_CU_V2RAY_DIR="/etc/v2ray"
+_CU_V2RAY_USERS_DB="$_CU_V2RAY_DIR/users.db"
+_CU_V2RAY_OFFICIAL_DIR="/usr/local/etc/v2ray"
+_CU_V2RAY_CONFIG="$_CU_V2RAY_OFFICIAL_DIR/config.json"
+_CU_V2RAY_SERVICE="v2ray"
+_CU_V2RAY_INTERNAL_PORT="10086"
+_CU_V2RAY_WS_PATH="/vless"
+_CU_V2RAY_VMESS_PORT="10087"
+_CU_V2RAY_VMESS_PATH="/vmess"
+_CU_V2RAY_TROJAN_PORT="10088"
+_CU_V2RAY_TROJAN_PATH="/trojan-ws"
+
+_cu_v2ray_installed() {
+    local _b
+    for _b in /usr/local/bin/v2ray /usr/bin/v2ray; do
+        [[ -x "$_b" ]] && return 0
+    done
+    return 1
+}
+
+_cu_gen_uuid() {
+    cat /proc/sys/kernel/random/uuid 2>/dev/null || \
+    python3 -c 'import uuid; print(uuid.uuid4())' 2>/dev/null || \
+    uuidgen 2>/dev/null | tr 'A-Z' 'a-z'
+}
+
+_cu_valid_uuid() {
+    [[ "$1" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]
+}
+
+_cu_rebuild_v2ray() {
+    [[ ! -s "$_CU_V2RAY_USERS_DB" ]] && return 1
+    local _vless="" _vmess="" _trojan=""
+    local _first_v=1 _first_m=1 _first_t=1
+    local _uuid _alias
+    while IFS='|' read -r _uuid _alias; do
+        [[ -z "$_uuid" ]] && continue
+        _cu_valid_uuid "$_uuid" || continue
+        [[ -z "$_alias" ]] && _alias="$_uuid"
+        [[ $_first_v -eq 1 ]] && _first_v=0 || _vless+=","
+        _vless+=$(printf '\n        {"id": "%s", "level": 0, "email": "%s"}' "$_uuid" "$_alias")
+        [[ $_first_m -eq 1 ]] && _first_m=0 || _vmess+=","
+        _vmess+=$(printf '\n        {"id": "%s", "alterId": 0, "level": 0, "email": "%s"}' "$_uuid" "$_alias")
+        [[ $_first_t -eq 1 ]] && _first_t=0 || _trojan+=","
+        _trojan+=$(printf '\n        {"password": "%s", "level": 0, "email": "%s"}' "$_uuid" "$_alias")
+    done < "$_CU_V2RAY_USERS_DB"
+    [[ -z "$_vless" ]] && return 1
+    mkdir -p "$_CU_V2RAY_OFFICIAL_DIR" /var/log/v2ray
+    cat > "$_CU_V2RAY_CONFIG" <<JSON
+{
+  "log": {"loglevel": "warning", "access": "/var/log/v2ray/access.log", "error": "/var/log/v2ray/error.log"},
+  "inbounds": [
+    {
+      "tag": "vless-ws", "listen": "127.0.0.1", "port": ${_CU_V2RAY_INTERNAL_PORT},
+      "protocol": "vless",
+      "settings": {"clients": [${_vless}
+        ], "decryption": "none"},
+      "streamSettings": {"network": "ws", "security": "none",
+        "wsSettings": {"path": "${_CU_V2RAY_WS_PATH}", "headers": {}}},
+      "sniffing": {"enabled": true, "destOverride": ["http", "tls"]}
+    },
+    {
+      "tag": "vmess-ws", "listen": "127.0.0.1", "port": ${_CU_V2RAY_VMESS_PORT},
+      "protocol": "vmess",
+      "settings": {"clients": [${_vmess}
+        ]},
+      "streamSettings": {"network": "ws", "security": "none",
+        "wsSettings": {"path": "${_CU_V2RAY_VMESS_PATH}", "headers": {}}},
+      "sniffing": {"enabled": true, "destOverride": ["http", "tls"]}
+    },
+    {
+      "tag": "trojan-ws", "listen": "127.0.0.1", "port": ${_CU_V2RAY_TROJAN_PORT},
+      "protocol": "trojan",
+      "settings": {"clients": [${_trojan}
+        ]},
+      "streamSettings": {"network": "ws", "security": "none",
+        "wsSettings": {"path": "${_CU_V2RAY_TROJAN_PATH}", "headers": {}}},
+      "sniffing": {"enabled": true, "destOverride": ["http", "tls"]}
+    }
+  ],
+  "outbounds": [
+    {"tag": "direct",  "protocol": "freedom",   "settings": {}},
+    {"tag": "blocked", "protocol": "blackhole", "settings": {}}
+  ],
+  "routing": {"domainStrategy": "AsIs",
+    "rules": [{"type": "field", "ip": ["geoip:private"], "outboundTag": "blocked"}]}
+}
+JSON
+    chmod 644 "$_CU_V2RAY_CONFIG"
+    systemctl restart "$_CU_V2RAY_SERVICE" 2>/dev/null
+    return 0
+}
+
+# Mostrar info extra (Dominio CF, NS SlowDNS, V2Ray UUID + URIs)
+_cu_show_extra_info() {
+    local _uname="$1"
+    local _v2uuid=""
+
+    # Obtener datos de configuración
+    local _cf_dom; _cf_dom=$(cat /etc/v2ray/domain 2>/dev/null | head -1 | tr -d '[:space:]')
+    local _ns_dom; _ns_dom=$(cat /etc/slowdns/infons 2>/dev/null | tr -d '\n')
+    local _sd_key; _sd_key=$(cat /root/server.pub 2>/dev/null | tr -d '\n')
+
+    # Crear usuario V2Ray si está instalado
+    if _cu_v2ray_installed && [[ -d "$_CU_V2RAY_DIR" ]]; then
+        _v2uuid=$(_cu_gen_uuid)
+        if _cu_valid_uuid "$_v2uuid"; then
+            mkdir -p "$_CU_V2RAY_DIR"
+            touch "$_CU_V2RAY_USERS_DB"
+            echo "${_v2uuid}|${_uname}" >> "$_CU_V2RAY_USERS_DB"
+            _cu_rebuild_v2ray >/dev/null 2>&1
+        fi
+    fi
+
+    # Detectar puertos V2Ray disponibles
+    local _http_p; _http_p=$(ss -tlpn 2>/dev/null | grep -E 'python|python3' | awk '{print $4}' | rev | cut -d: -f1 | rev | sort -n | head -1)
+    local _tls_p;  _tls_p=$(ss -tlpn  2>/dev/null | grep 'stunnel'           | awk '{print $4}' | rev | cut -d: -f1 | rev | sort -n | head -1)
+    [[ -z "$_http_p" ]] && _http_p="80"
+    [[ -z "$_tls_p"  ]] && _tls_p="443"
+
+    local _addr="${_cf_dom:-$IP}"
+    local _safe; _safe=$(echo "$_uname" | tr ' /' '--')
+    local _path_enc="%2Fvless"
+
+    # ─── Mostrar bloque de info extendida ───────────────────────
+    echo ""
+    echo -e "\033[1;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+    echo -e "\033[1;33m  INFORMACIÓN DE CONEXIÓN\033[0m"
+    echo -e "\033[1;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+
+    echo -e "\033[1;32mIP Servidor     : \033[1;37m${IP}\033[0m"
+    [[ -n "$_cf_dom" ]] && echo -e "\033[1;32mDominio CF      : \033[1;37m${_cf_dom}\033[0m"
+    [[ -n "$_ns_dom" ]] && echo -e "\033[1;32mDominio NS      : \033[1;37m${_ns_dom}\033[0m"
+
+    # SlowDNS info
+    if [[ -n "$_ns_dom" && -n "$_sd_key" ]]; then
+        echo ""
+        echo -e "\033[1;33m  ── SlowDNS ──\033[0m"
+        echo -e "\033[1;32mNS (Nameserver) : \033[1;37m${_ns_dom}\033[0m"
+        echo -e "\033[1;32mKey Pública     : \033[1;37m${_sd_key}\033[0m"
+        if ps aux 2>/dev/null | grep -v grep | grep -q 'dns-server'; then
+            echo -e "\033[1;32mEstado SlowDNS  : \033[1;32m● ACTIVO\033[0m"
+        fi
+    fi
+
+    # V2Ray info
+    if [[ -n "$_v2uuid" ]] && _cu_valid_uuid "$_v2uuid"; then
+        echo ""
+        echo -e "\033[1;33m  ── V2Ray VLESS ──\033[0m"
+        echo -e "\033[1;32mUUID V2Ray      : \033[1;37m${_v2uuid}\033[0m"
+        echo ""
+        local _uri_h="vless://${_v2uuid}@${IP}:${_http_p}?type=ws&encryption=none&security=none&host=${_addr}&path=${_path_enc}#${_safe}-http-${_http_p}"
+        local _uri_t="vless://${_v2uuid}@${IP}:${_tls_p}?type=ws&encryption=none&security=tls&sni=${_addr}&host=${_addr}&path=${_path_enc}&allowInsecure=1#${_safe}-tls-${_tls_p}"
+        echo -e "\033[1;32mVLESS HTTP      : \033[1;36m${_uri_h}\033[0m"
+        echo ""
+        echo -e "\033[1;32mVLESS TLS       : \033[1;36m${_uri_t}\033[0m"
+        [[ -n "$_cf_dom" ]] && {
+            local _uri_cf="vless://${_v2uuid}@${IP}:443?type=ws&encryption=none&security=tls&sni=${_cf_dom}&host=${_cf_dom}&path=${_path_enc}#${_safe}-cf-443"
+            echo ""
+            echo -e "\033[1;32mVLESS Cloudflare: \033[1;36m${_uri_cf}\033[0m"
+        }
+    fi
+
+    echo -e "\033[1;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+}
+
 # ── Token SSH ─────────────────────────────────────────────────
 fun_usertoken() {
     clear
@@ -214,6 +381,7 @@ fun_usertoken() {
     echo -e "\033[1;32mAuth        :\033[1;37m Password + Clave RSA Master\033[0m"
     echo ""
     fun_show_ports
+    _cu_show_extra_info "$username"
 }
 
 # ── Verificar que el sistema esté instalado ───────────────────
@@ -324,4 +492,5 @@ else
     fi
     echo ""
     fun_show_ports
+    _cu_show_extra_info "$username"
 fi

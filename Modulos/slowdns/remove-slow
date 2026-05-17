@@ -1,51 +1,44 @@
 #!/bin/bash
-fun_bar () {
-comando[0]="$1"
-comando[1]="$2"
- (
-[[ -e $HOME/fim ]] && rm $HOME/fim
-${comando[0]} -y > /dev/null 2>&1
-${comando[1]} -y > /dev/null 2>&1
-touch $HOME/fim
- ) > /dev/null 2>&1 &
- tput civis
-echo -ne "  \033[1;33mAGUARDE \033[1;37m- \033[1;33m["
-while true; do
-   for((i=0; i<18; i++)); do
-   echo -ne "\033[1;31m#"
-   sleep 0.1s
-   done
-   [[ -e $HOME/fim ]] && rm $HOME/fim && break
-   echo -e "\033[1;33m]"
-   sleep 1s
-   tput cuu1
-   tput dl1
-   echo -ne "  \033[1;33mAGUARDE \033[1;37m- \033[1;33m["
-done
-echo -e "\033[1;33m]\033[1;37m -\033[1;32m OK !\033[1;37m"
-tput cnorm
-}
-cd /root
-echo -e "Parando serviço de DNS"
-fun_stop () {
-screen -ls | grep slowdns | cut -d. -f1 | awk '{print $1}' | xargs kill
-sleep 1.5
-}
-fun_bar 'fun_stop'
 echo ""
-echo -e "Removendo SlowDNS"
-fun_rm () {
-rm /etc/rc.local; mv /etc/rc.local.bkp /etc/rc.local
-sleep 1.5
-}
-fun_bar 'fun_rm'
+echo -e "\033[1;31mELIMINANDO SLOWDNS...\033[0m"
 echo ""
-fun_revdns () {
-echo "nameserver 8.8.8.8" > /etc/resolv.conf
-systemctl enable systemd-resolved.service && systemctl start systemd-resolved.service &&
-sleep 1.5
-}
-fun_bar 'fun_revdns'
+
+# Detener servicio
+screen -ls 2>/dev/null | grep 'slowdns' | awk '{print $1}' | xargs -I{} screen -X -S {} quit 2>/dev/null
+pkill -f 'dns-server' 2>/dev/null
+sleep 1
+
+# Remover reglas iptables
+iptables -D INPUT  -p udp --dport 5300 -j ACCEPT 2>/dev/null
+iptables -t nat -D PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 5300 2>/dev/null
+
+# Limpiar rc.local — solo las líneas que MSYVPN agregó, sin reemplazar el archivo
+if [[ -f /etc/rc.local ]]; then
+    sed -i '/SLOWDNS_IPTABLES/d' /etc/rc.local 2>/dev/null
+    sed -i '/dport 5300.*ACCEPT/d' /etc/rc.local 2>/dev/null
+    sed -i '/dport 53.*REDIRECT.*5300/d' /etc/rc.local 2>/dev/null
+fi
+
+# Limpiar /etc/autostart
+sed -i '/startdns\|dns-server/d' /etc/autostart 2>/dev/null
+
+# Remover comandos globales
+rm -f /bin/slowdns /bin/startdns /bin/restartdns 2>/dev/null
+
+# Restaurar DNS si resolvconf está vacío
+if ! grep -q 'nameserver' /etc/resolv.conf 2>/dev/null; then
+    echo "nameserver 8.8.8.8" > /etc/resolv.conf
+fi
+
 echo ""
-echo -e "SlowDNS Removido Com Sucesso!"
+if [[ -f /root/server.pub ]]; then
+    echo -e "\033[1;33m  Tus claves se conservan en:\033[0m"
+    echo -e "\033[1;37m  /root/server.key  y  /root/server.pub\033[0m"
+fi
+
+echo ""
+echo -e "\033[1;32m  SlowDNS eliminado correctamente. [✔]\033[0m"
+echo ""
+
+# Eliminar directorio de configuración
 rm -rf /etc/slowdns
