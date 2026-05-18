@@ -21,5 +21,4 @@ bash <(wget -qO- https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/
 * **Ubuntu 24.04 AMD y ARM** ✅(Recomendado)
 * **Ubuntu 25.XX AMD y ARM** ✅
 * **Ubuntu 26.XX AMD** ☑️
-*  **Ubuntu 27.XX ⚠️
 * Se recomienda usar una distribución nueva o formateada
