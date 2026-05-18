@@ -104,8 +104,8 @@ cat > "$_HYST_CONFIG" <<JSON
     "mode": "passwords",
     "config": [${_arr}]
   },
-  "up_mbps": 100,
-  "down_mbps": 100
+  "up_mbps": 2000,
+  "down_mbps": 2000
 }
 JSON
 echo -e "\033[1;32m[Hysteria v1] ✓ Config escrita: $_HYST_CONFIG\033[0m"
@@ -130,9 +130,9 @@ SERVICE
 systemctl daemon-reload 2>/dev/null
 systemctl enable hysteria-server 2>/dev/null
 
-# Symlinks de acceso rápido
-[[ ! -e /usr/local/bin/agnudp ]] && \
-    ln -sf /usr/local/bin/hysteria-manager /usr/local/bin/agnudp 2>/dev/null
+# Acceso rápido: escribir 'agnudp' abre el manager directamente
+cp -f /usr/local/bin/hysteria-manager /usr/local/bin/agnudp 2>/dev/null
+chmod +x /usr/local/bin/agnudp 2>/dev/null
 
 # Firewall — abrir puerto UDP
 command -v ufw &>/dev/null && ufw allow "${_HYST_PORT}/udp" >/dev/null 2>&1
