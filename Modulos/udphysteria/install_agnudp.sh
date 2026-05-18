@@ -1,164 +1,822 @@
-#!/bin/bash
-# ============================================================
-# Instalador UDP Hysteria v1 — MSYVPN-SCRIPT
-# Referencia: https://github.com/apernet/hysteria/tree/hy1
-# Auth: per-usuario via password field "usuario:contraseña"
-# Obfs:  fijo (global) — requerido por el protocolo QUIC obfuscado
-# ============================================================
+#!/usr/bin/env bash
+#
+# Try `install_agnudp.sh --help` for usage.
+#
+# (c) 2025 Juanitoprosniff 
+#
 
-_HYST_DIR="/etc/hysteria"
-_HYST_BIN="/usr/local/bin/hysteria"
-_HYST_CONFIG="$_HYST_DIR/config.json"
-_HYST_DB="$_HYST_DIR/udpusers.db"
-_HYST_CERT="$_HYST_DIR/hysteria.crt"
-_HYST_KEY="$_HYST_DIR/hysteria.key"
-_HYST_SERVICE="/etc/systemd/system/hysteria-server.service"
-_HYST_PORT="${1:-36712}"
-_HYST_OBFS="${2:-agnudp}"
+set -e
 
-# Usuario por defecto para pruebas rápidas
-_DEF_USER="udptest"
-_DEF_PASS="1234msy"
+# Domain Name
+DOMAIN="juaniroprosniff.site"
 
-_detect_arch() {
-    local _a; _a=$(uname -m)
-    case "$_a" in
-        x86_64|amd64)  echo "amd64" ;;
-        aarch64|arm64) echo "arm64" ;;
-        armv7*|armhf)  echo "arm"   ;;
-        *)             echo "amd64" ;;
+# PROTOCOL
+PROTOCOL="udp"
+
+# UDP PORT
+UDP_PORT=":36712"
+
+# OBFS
+OBFS="agnudp"
+
+# PASSWORDS
+PASSWORD="agnudp"
+
+# Script paths
+SCRIPT_NAME="$(basename "$0")"
+SCRIPT_ARGS=("$@")
+EXECUTABLE_INSTALL_PATH="/usr/local/bin/hysteria"
+SYSTEMD_SERVICES_DIR="/etc/systemd/system"
+CONFIG_DIR="/etc/hysteria"
+USER_DB="$CONFIG_DIR/udpusers.db"
+REPO_URL="https://github.com/apernet/hysteria"
+CONFIG_FILE="$CONFIG_DIR/config.json"
+API_BASE_URL="https://api.github.com/repos/apernet/hysteria"
+CURL_FLAGS=(-L -f -q --retry 5 --retry-delay 10 --retry-max-time 60)
+PACKAGE_MANAGEMENT_INSTALL="${PACKAGE_MANAGEMENT_INSTALL:-}"
+SYSTEMD_SERVICE="$SYSTEMD_SERVICES_DIR/hysteria-server.service"
+mkdir -p "$CONFIG_DIR"
+touch "$USER_DB"
+
+# Other configurations
+OPERATING_SYSTEM=""
+ARCHITECTURE=""
+HYSTERIA_USER=""
+HYSTERIA_HOME_DIR=""
+VERSION=""
+FORCE=""
+LOCAL_FILE=""
+FORCE_NO_ROOT=""
+FORCE_NO_SYSTEMD=""
+
+# Utility functions
+has_command() {
+    local _command=$1
+    type -P "$_command" > /dev/null 2>&1
+}
+
+curl() {
+    command curl "${CURL_FLAGS[@]}" "$@"
+}
+
+mktemp() {
+    command mktemp "$@" "hyservinst.XXXXXXXXXX"
+}
+
+tput() {
+    if has_command tput; then
+        command tput "$@"
+    fi
+}
+
+tred() {
+    tput setaf 1
+}
+
+tgreen() {
+    tput setaf 2
+}
+
+tyellow() {
+    tput setaf 3
+}
+
+tblue() {
+    tput setaf 4
+}
+
+taoi() {
+    tput setaf 6
+}
+
+tbold() {
+    tput bold
+}
+
+treset() {
+    tput sgr0
+}
+
+note() {
+    local _msg="$1"
+    echo -e "$SCRIPT_NAME: $(tbold)note: $_msg$(treset)"
+}
+
+warning() {
+    local _msg="$1"
+    echo -e "$SCRIPT_NAME: $(tyellow)warning: $_msg$(treset)"
+}
+
+error() {
+    local _msg="$1"
+    echo -e "$SCRIPT_NAME: $(tred)error: $_msg$(treset)"
+}
+
+show_argument_error_and_exit() {
+    local _error_msg="$1"
+    error "$_error_msg"
+    echo "Try \"$0 --help\" for the usage." >&2
+    exit 22
+}
+
+install_content() {
+    local _install_flags="$1"
+    local _content="$2"
+    local _destination="$3"
+
+    local _tmpfile="$(mktemp)"
+
+    echo -ne "Install $_destination ... "
+    echo "$_content" > "$_tmpfile"
+    if install "$_install_flags" "$_tmpfile" "$_destination"; then
+        echo -e "ok"
+    fi
+
+    rm -f "$_tmpfile"
+}
+
+remove_file() {
+    local _target="$1"
+
+    echo -ne "Remove $_target ... "
+    if rm "$_target"; then
+        echo -e "ok"
+    fi
+}
+
+exec_sudo() {
+    local _saved_ifs="$IFS"
+    IFS=$'\n'
+    local _preserved_env=(
+        $(env | grep "^PACKAGE_MANAGEMENT_INSTALL=" || true)
+        $(env | grep "^OPERATING_SYSTEM=" || true)
+        $(env | grep "^ARCHITECTURE=" || true)
+        $(env | grep "^HYSTERIA_\w*=" || true)
+        $(env | grep "^FORCE_\w*=" || true)
+    )
+    IFS="$_saved_ifs"
+
+    exec sudo env \
+    "${_preserved_env[@]}" \
+    "$@"
+}
+
+install_software() {
+    local package="$1"
+    if has_command apt-get; then
+        echo "Installing $package using apt-get..."
+        apt-get update && apt-get install -y "$package"
+    elif has_command dnf; then
+        echo "Installing $package using dnf..."
+        dnf install -y "$package"
+    elif has_command yum; then
+        echo "Installing $package using yum..."
+        yum install -y "$package"
+    elif has_command zypper; then
+        echo "Installing $package using zypper..."
+        zypper install -y "$package"
+    elif has_command pacman; then
+        echo "Installing $package using pacman..."
+        pacman -Sy --noconfirm "$package"
+    else
+        echo "Error: No supported package manager found. Please install $package manually."
+        exit 1
+    fi
+}
+
+is_user_exists() {
+    local _user="$1"
+    id "$_user" > /dev/null 2>&1
+}
+
+check_permission() {
+    if [[ "$UID" -eq '0' ]]; then
+        return
+    fi
+
+    note "The user currently executing this script is not root."
+
+    case "$FORCE_NO_ROOT" in
+        '1')
+            warning "FORCE_NO_ROOT=1 is specified, we will process without root and you may encounter the insufficient privilege error."
+            ;;
+        *)
+            if has_command sudo; then
+                note "Re-running this script with sudo, you can also specify FORCE_NO_ROOT=1 to force this script running with current user."
+                exec_sudo "$0" "${SCRIPT_ARGS[@]}"
+            else
+                error "Please run this script with root or specify FORCE_NO_ROOT=1 to force this script running with current user."
+                exit 13
+            fi
+            ;;
     esac
 }
-_ARCH=$(_detect_arch)
 
-echo -e "\033[1;33m[Hysteria v1] Arquitectura: $_ARCH | Puerto: $_HYST_PORT | Obfs: $_HYST_OBFS\033[0m"
+check_environment_operating_system() {
+    if [[ -n "$OPERATING_SYSTEM" ]]; then
+        warning "OPERATING_SYSTEM=$OPERATING_SYSTEM is specified, operating system detection will not be performed."
+        return
+    fi
 
-# Dependencias
-apt-get install -y curl jq sqlite3 openssl >/dev/null 2>&1
-mkdir -p "$_HYST_DIR"
+    if [[ "x$(uname)" == "xLinux" ]]; then
+        OPERATING_SYSTEM=linux
+        return
+    fi
 
-# Detener servicio antes de tocar binario
-systemctl stop hysteria-server 2>/dev/null
-
-# Descarga Hysteria v1.3.5 (tag oficial v1 — branch hy1 de apernet/hysteria)
-# Se fuerza la descarga para evitar binarios viejos o de v2 dejados por
-# instalaciones previas.
-_HYST_VER="v1.3.5"
-_HYST_URL="https://github.com/apernet/hysteria/releases/download/${_HYST_VER}/hysteria-linux-${_ARCH}"
-echo -e "\033[1;33m[Hysteria v1] Descargando binario ${_HYST_VER} (${_ARCH})...\033[0m"
-curl -fsSL --max-time 120 "$_HYST_URL" -o "$_HYST_BIN" 2>/dev/null
-if [[ ! -s "$_HYST_BIN" ]]; then
-    echo -e "\033[1;31m[Hysteria v1] ✗ No se pudo descargar binario\033[0m"
-    exit 1
-fi
-chmod +x "$_HYST_BIN"
-echo -e "\033[1;32m[Hysteria v1] ✓ Binario descargado\033[0m"
-
-# IP pública (para SAN del certificado)
-_IP=$(cat /etc/IP 2>/dev/null | tr -d '\n')
-[[ -z "$_IP" ]] && _IP=$(hostname -I | awk '{print $1}')
-
-# Certificado TLS self-signed con IP como SAN
-# (Hysteria v1 corre sobre QUIC y QUIC siempre necesita TLS;
-# los clientes se conectan con insecure=true para aceptar self-signed)
-if [[ ! -s "$_HYST_CERT" || ! -s "$_HYST_KEY" ]]; then
-    echo -e "\033[1;33m[Hysteria v1] Generando certificado TLS self-signed...\033[0m"
-    _san="DNS:msyvpn.local"
-    [[ -n "$_IP" ]] && _san="${_san},IP:${_IP}"
-    openssl req -x509 -nodes -newkey rsa:2048 -days 3650 \
-        -subj "/C=CO/ST=Colombia/L=Bogota/O=MSYVPN/CN=msyvpn.local" \
-        -addext "subjectAltName=${_san}" \
-        -keyout "$_HYST_KEY" -out "$_HYST_CERT" >/dev/null 2>&1
-    chmod 600 "$_HYST_KEY" "$_HYST_CERT"
-    echo -e "\033[1;32m[Hysteria v1] ✓ Certificado generado (SAN: $_san)\033[0m"
-fi
-
-# Inicializar BD de usuarios
-if [[ ! -f "$_HYST_DB" ]]; then
-    sqlite3 "$_HYST_DB" "CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password TEXT NOT NULL);" 2>/dev/null
-    echo -e "\033[1;32m[Hysteria v1] ✓ Base de datos creada\033[0m"
-fi
-
-# Asegurar usuario de prueba en BD
-sqlite3 "$_HYST_DB" \
-    "INSERT OR IGNORE INTO users (username, password) VALUES ('$_DEF_USER', '$_DEF_PASS');" 2>/dev/null
-
-# Construir auth.config desde BD
-_arr=""
-while IFS='|' read -r _u _p; do
-    [[ -z "$_u" ]] && continue
-    [[ -n "$_arr" ]] && _arr+=","
-    _arr+="\"${_u}:${_p}\""
-done < <(sqlite3 "$_HYST_DB" "SELECT username, password FROM users;" 2>/dev/null)
-[[ -z "$_arr" ]] && _arr="\"${_DEF_USER}:${_DEF_PASS}\""
-
-# Escribir config.json con obfs + cert + auth completos
-# (sobrescribimos para corregir cualquier config rota de instalaciones previas)
-cat > "$_HYST_CONFIG" <<JSON
-{
-  "listen": ":${_HYST_PORT}",
-  "cert": "${_HYST_CERT}",
-  "key": "${_HYST_KEY}",
-  "obfs": "${_HYST_OBFS}",
-  "auth": {
-    "mode": "passwords",
-    "config": [${_arr}]
-  },
-  "up_mbps": 100,
-  "down_mbps": 100
+    error "This script only supports Linux."
+    note "Specify OPERATING_SYSTEM=[linux|darwin|freebsd|windows] to bypass this check and force this script running on this $(uname)."
+    exit 95
 }
-JSON
-echo -e "\033[1;32m[Hysteria v1] ✓ Config escrita: $_HYST_CONFIG\033[0m"
 
-# Crear/actualizar servicio systemd
-cat > "$_HYST_SERVICE" <<SERVICE
+check_environment_architecture() {
+    if [[ -n "$ARCHITECTURE" ]]; then
+        warning "ARCHITECTURE=$ARCHITECTURE is specified, architecture detection will not be performed."
+        return
+    fi
+
+    case "$(uname -m)" in
+        'i386' | 'i686')
+            ARCHITECTURE='386'
+            ;;
+        'amd64' | 'x86_64')
+            ARCHITECTURE='amd64'
+            ;;
+        'armv5tel' | 'armv6l' | 'armv7' | 'armv7l')
+            ARCHITECTURE='arm'
+            ;;
+        'armv8' | 'aarch64')
+            ARCHITECTURE='arm64'
+            ;;
+        'mips' | 'mipsle' | 'mips64' | 'mips64le')
+            ARCHITECTURE='mipsle'
+            ;;
+        's390x')
+            ARCHITECTURE='s390x'
+            ;;
+        *)
+            error "The architecture '$(uname -a)' is not supported."
+            note "Specify ARCHITECTURE=<architecture> to bypass this check and force this script running on this $(uname -m)."
+            exit 8
+            ;;
+    esac
+}
+
+check_environment_systemd() {
+    if [[ -d "/run/systemd/system" ]] || grep -q systemd <(ls -l /sbin/init); then
+        return
+    fi
+
+    case "$FORCE_NO_SYSTEMD" in
+        '1')
+            warning "FORCE_NO_SYSTEMD=1 is specified, we will process as normal even if systemd is not detected by us."
+            ;;
+        '2')
+            warning "FORCE_NO_SYSTEMD=2 is specified, we will process but all systemd related commands will not be executed."
+            ;;
+        *)
+            error "This script only supports Linux distributions with systemd."
+            note "Specify FORCE_NO_SYSTEMD=1 to disable this check and force this script running as systemd is detected."
+            note "Specify FORCE_NO_SYSTEMD=2 to disable this check along with all systemd related commands."
+            ;;
+    esac
+}
+
+parse_arguments() {
+    while [[ "$#" -gt '0' ]]; do
+        case "$1" in
+            '--remove')
+                if [[ -n "$OPERATION" && "$OPERATION" != 'remove' ]]; then
+                    show_argument_error_and_exit "Option '--remove' is conflicted with other options."
+                fi
+                OPERATION='remove'
+                ;;
+            '--version')
+                VERSION="$2"
+                if [[ -z "$VERSION" ]]; then
+                    show_argument_error_and_exit "Please specify the version for option '--version'."
+                fi
+                shift
+                if ! [[ "$VERSION" == v* ]]; then
+                    show_argument_error_and_exit "Version numbers should begin with 'v' (such like 'v1.3.1'), got '$VERSION'"
+                fi
+                ;;
+            '-h' | '--help')
+                show_usage_and_exit
+                ;;
+            '-l' | '--local')
+                LOCAL_FILE="$2"
+                if [[ -z "$LOCAL_FILE" ]]; then
+                    show_argument_error_and_exit "Please specify the local binary to install for option '-l' or '--local'."
+                fi
+                break
+                ;;
+            *)
+                show_argument_error_and_exit "Unknown option '$1'"
+                ;;
+        esac
+        shift
+    done
+
+    if [[ -z "$OPERATION" ]]; then
+        OPERATION='install'
+    fi
+
+    # validate arguments
+    case "$OPERATION" in
+        'install')
+            if [[ -n "$VERSION" && -n "$LOCAL_FILE" ]]; then
+                show_argument_error_and_exit '--version and --local cannot be specified together.'
+            fi
+            ;;
+        *)
+            if [[ -n "$VERSION" ]]; then
+                show_argument_error_and_exit "--version is only available when installing."
+            fi
+            if [[ -n "$LOCAL_FILE" ]]; then
+                show_argument_error_and_exit "--local is only available when installing."
+            fi
+            ;;
+    esac
+}
+
+check_hysteria_homedir() {
+    local _default_hysteria_homedir="$1"
+
+    if [[ -n "$HYSTERIA_HOME_DIR" ]]; then
+        return
+    fi
+
+    if ! is_user_exists "$HYSTERIA_USER"; then
+        HYSTERIA_HOME_DIR="$_default_hysteria_homedir"
+        return
+    fi
+
+    HYSTERIA_HOME_DIR="$(eval echo ~"$HYSTERIA_USER")"
+}
+
+download_hysteria() {
+    local _version="$1"
+    local _destination="$2"
+
+    local _download_url="$REPO_URL/releases/download/v1.3.5/hysteria-$OPERATING_SYSTEM-$ARCHITECTURE"
+    echo "Downloading hysteria archive: $_download_url ..."
+    if ! curl -R -H 'Cache-Control: no-cache' "$_download_url" -o "$_destination"; then
+        error "Download failed! Please check your network and try again."
+        return 11
+    fi
+    return 0
+}
+
+check_hysteria_user() {
+    local _default_hysteria_user="$1"
+
+    if [[ -n "$HYSTERIA_USER" ]]; then
+        return
+    fi
+
+    if [[ ! -e "$SYSTEMD_SERVICES_DIR/hysteria-server.service" ]]; then
+        HYSTERIA_USER="$_default_hysteria_user"
+        return
+    fi
+
+    HYSTERIA_USER="$(grep -o '^User=\w*' "$SYSTEMD_SERVICES_DIR/hysteria-server.service" | tail -1 | cut -d '=' -f 2 || true)"
+
+    if [[ -z "$HYSTERIA_USER" ]]; then
+        HYSTERIA_USER="$_default_hysteria_user"
+    fi
+}
+
+check_environment_curl() {
+    if ! has_command curl; then
+        install_software "curl"
+    fi
+}
+
+check_environment_grep() {
+    if ! has_command grep; then
+        install_software "grep"
+    fi
+}
+
+check_environment_sqlite3() {
+    if ! has_command sqlite3; then
+        install_software "sqlite3"
+    fi
+}
+
+check_environment_pip() {
+    if ! has_command pip; then
+        install_software "pip"
+    fi
+}
+
+check_environment_jq() {
+    if ! has_command jq; then
+        install_software "jq"
+    fi
+}
+
+check_environment() {
+    check_environment_operating_system
+    check_environment_architecture
+    check_environment_systemd
+    check_environment_curl
+    check_environment_grep
+    check_environment_pip
+    check_environment_sqlite3
+    check_environment_jq
+}
+
+show_usage_and_exit() {
+    echo
+    echo -e "\t$(tbold)$SCRIPT_NAME$(treset) - AGN-UDP server install script"
+    echo
+    echo -e "Usage:"
+    echo
+    echo -e "$(tbold)Install AGN-UDP$(treset)"
+    echo -e "\t$0 [ -f | -l <file> | --version <version> ]"
+    echo -e "Flags:"
+    echo -e "\t-f, --force\tForce re-install latest or specified version even if it has been installed."
+    echo -e "\t-l, --local <file>\tInstall specified AGN-UDP binary instead of download it."
+    echo -e "\t--version <version>\tInstall specified version instead of the latest."
+    echo
+    echo -e "$(tbold)Remove AGN-UDP$(treset)"
+    echo -e "\t$0 --remove"
+    echo
+    echo -e "$(tbold)Check for the update$(treset)"
+    echo -e "\t$0 -c"
+    echo -e "\t$0 --check"
+    echo
+    echo -e "$(tbold)Show this help$(treset)"
+    echo -e "\t$0 -h"
+    echo -e "\t$0 --help"
+    exit 0
+}
+
+tpl_hysteria_server_service_base() {
+    local _config_name="$1"
+
+    cat << EOF
 [Unit]
-Description=Hysteria UDP Tunnel Server v1 — MSYVPN
+Description=AGN-UDP Service
 After=network.target
 
 [Service]
-Type=simple
-ExecStart=$_HYST_BIN server --config $_HYST_CONFIG
-Restart=on-failure
-RestartSec=5
-LimitNOFILE=65535
+User=root
+Group=root
+WorkingDirectory=/etc/hysteria
+Environment="PATH=/usr/local/bin/hysteria"
+ExecStart=/usr/local/bin/hysteria server --config /etc/hysteria/config.json
 
 [Install]
 WantedBy=multi-user.target
-SERVICE
-
-systemctl daemon-reload 2>/dev/null
-systemctl enable hysteria-server 2>/dev/null
-
-# Symlinks de acceso rápido
-[[ ! -e /usr/local/bin/agnudp ]] && \
-    ln -sf /usr/local/bin/hysteria-manager /usr/local/bin/agnudp 2>/dev/null
-
-# Firewall — abrir puerto UDP
-command -v ufw &>/dev/null && ufw allow "${_HYST_PORT}/udp" >/dev/null 2>&1
-command -v iptables &>/dev/null && {
-    iptables -C INPUT -p udp --dport "${_HYST_PORT}" -j ACCEPT 2>/dev/null || \
-    iptables -I INPUT -p udp --dport "${_HYST_PORT}" -j ACCEPT 2>/dev/null
+EOF
 }
 
-# Arrancar servicio
-systemctl restart hysteria-server 2>/dev/null
-sleep 2
+tpl_hysteria_server_service() {
+    tpl_hysteria_server_service_base 'config'
+}
 
-echo ""
-if systemctl is-active --quiet hysteria-server 2>/dev/null; then
-    echo -e "\033[1;32m[Hysteria v1] ✓ Servicio ACTIVO en UDP $_HYST_PORT\033[0m"
-    echo ""
-    echo -e "\033[1;33m  ── Datos en la app (test rápido) ──\033[0m"
-    echo -e "\033[1;32m  Servidor   : \033[1;37m${_IP}\033[0m"
-    echo -e "\033[1;32m  Puerto UDP : \033[1;37m${_HYST_PORT}\033[0m"
-    echo -e "\033[1;32m  Obfs       : \033[1;37m${_HYST_OBFS}     \033[1;33m← fijo, igual para todos\033[0m"
-    echo -e "\033[1;32m  Password   : \033[1;37m${_DEF_USER}:${_DEF_PASS}\033[0m"
-    echo -e "\033[1;33m  Importante : Activar 'Insecure' / 'Allow self-signed' en la app\033[0m"
-    echo ""
-    echo -e "\033[1;37m  Gestionar usuarios: hysteria-manager   (o: agnudp)\033[0m"
-else
-    echo -e "\033[1;31m[Hysteria v1] ✗ El servicio no arrancó.\033[0m"
-    echo -e "\033[1;37m  journalctl -u hysteria-server -n 20\033[0m"
-fi
-echo ""
+tpl_hysteria_server_x_service() {
+    tpl_hysteria_server_service_base '%i'
+}
+
+
+
+tpl_etc_hysteria_config_json() {
+    local_users=$(fetch_users)
+
+    mkdir -p "$CONFIG_DIR"
+
+    cat << EOF > "$CONFIG_FILE"
+{
+  "server": "$DOMAIN",
+  "listen": "$UDP_PORT",
+  "protocol": "$PROTOCOL",
+  "cert": "/etc/hysteria/hysteria.server.crt",
+  "key": "/etc/hysteria/hysteria.server.key",
+  "up": "4000 Mbps",
+  "up_mbps": 4000,
+  "down": "4000 Mbps",
+  "down_mbps": 4000,
+  "disable_udp": false,
+  "insecure": true,
+  "obfs": "$OBFS",
+  "auth": {
+ 	"mode": "passwords",
+  "config": [
+      "$(echo $local_users)"
+    ]
+         }
+}
+EOF
+}
+
+
+
+setup_db() {
+    echo "Setting up database"
+    mkdir -p "$(dirname "$USER_DB")"
+
+    if [[ ! -f "$USER_DB" ]]; then
+        # Create the database file
+        sqlite3 "$USER_DB" ".databases"
+        if [[ $? -ne 0 ]]; then
+            echo "Error: Unable to create database file at $USER_DB"
+            exit 1
+        fi
+    fi
+
+    # Create the users table
+    sqlite3 "$USER_DB" <<EOF
+CREATE TABLE IF NOT EXISTS users (
+    username TEXT PRIMARY KEY,
+    password TEXT NOT NULL
+);
+EOF
+
+    # Check if the table 'users' was created successfully
+    table_exists=$(sqlite3 "$USER_DB" "SELECT name FROM sqlite_master WHERE type='table' AND name='users';")
+    if [[ "$table_exists" == "users" ]]; then
+        echo "Database setup completed successfully. Table 'users' exists."
+        
+        # Add a default user if not already exists
+        default_username="MSYUDP"
+        default_password="@FREEINTERNETVPNMSY"
+        user_exists=$(sqlite3 "$USER_DB" "SELECT username FROM users WHERE username='$default_username';")
+        
+        if [[ -z "$user_exists" ]]; then
+            sqlite3 "$USER_DB" "INSERT INTO users (username, password) VALUES ('$default_username', '$default_password');"
+            if [[ $? -eq 0 ]]; then
+                echo "Default user created successfully."
+            else
+                echo "Error: Failed to create default user."
+            fi
+        else
+            echo "Default user already exists."
+        fi
+    else
+        echo "Error: Table 'users' was not created successfully."
+        # Show the database schema for debugging
+        echo "Current database schema:"
+        sqlite3 "$USER_DB" ".schema"
+        exit 1
+    fi
+}
+
+
+fetch_users() {
+    DB_PATH="/etc/hysteria/udpusers.db"
+    if [[ -f "$DB_PATH" ]]; then
+        sqlite3 "$DB_PATH" "SELECT username || ':' || password FROM users;" | paste -sd, -
+    fi
+}
+
+
+perform_install_hysteria_binary() {
+    if [[ -n "$LOCAL_FILE" ]]; then
+        note "Performing local install: $LOCAL_FILE"
+
+        echo -ne "Installing hysteria executable ... "
+
+        if install -Dm755 "$LOCAL_FILE" "$EXECUTABLE_INSTALL_PATH"; then
+            echo "ok"
+        else
+            exit 2
+        fi
+
+        return
+    fi
+
+    local _tmpfile=$(mktemp)
+
+    if ! download_hysteria "$VERSION" "$_tmpfile"; then
+        rm -f "$_tmpfile"
+        exit 11
+    fi
+
+    echo -ne "Installing hysteria executable ... "
+
+    if install -Dm755 "$_tmpfile" "$EXECUTABLE_INSTALL_PATH"; then
+        echo "ok"
+    else
+        exit 13
+    fi
+
+    rm -f "$_tmpfile"
+}
+
+perform_remove_hysteria_binary() {
+    remove_file "$EXECUTABLE_INSTALL_PATH"
+}
+
+perform_install_hysteria_example_config() {
+    tpl_etc_hysteria_config_json
+}
+
+perform_install_hysteria_systemd() {
+    if [[ "x$FORCE_NO_SYSTEMD" == "x2" ]]; then
+        return
+    fi
+
+    install_content -Dm644 "$(tpl_hysteria_server_service)" "$SYSTEMD_SERVICES_DIR/hysteria-server.service"
+    install_content -Dm644 "$(tpl_hysteria_server_x_service)" "$SYSTEMD_SERVICES_DIR/hysteria-server@.service"
+
+    systemctl daemon-reload
+}
+
+perform_remove_hysteria_systemd() {
+    remove_file "$SYSTEMD_SERVICES_DIR/hysteria-server.service"
+    remove_file "$SYSTEMD_SERVICES_DIR/hysteria-server@.service"
+
+    systemctl daemon-reload
+}
+
+perform_install_hysteria_home_legacy() {
+    if ! is_user_exists "$HYSTERIA_USER"; then
+        echo -ne "Creating user $HYSTERIA_USER ... "
+        useradd -r -d "$HYSTERIA_HOME_DIR" -m "$HYSTERIA_USER"
+        echo "ok"
+    fi
+}
+
+perform_install_manager_script() {
+    local _manager_script="/usr/local/bin/agnudp_manager.sh"
+    local _symlink_path="/usr/local/bin/agnudp"
+    
+    echo "Downloading manager script..."
+    curl -o "$_manager_script" "https://github.com/Juanitoprosniff/script_msyvpn/raw/main/agnudp_manager.sh"
+    chmod +x "$_manager_script"
+    
+    echo "Creating symbolic link to run the manager script using 'agnudp' command..."
+    ln -sf "$_manager_script" "$_symlink_path"
+    
+    echo "Manager script installed at $_manager_script"
+    echo "You can now run the manager using the 'agnudp' command."
+}
+
+
+is_hysteria_installed() {
+    # RETURN VALUE
+    # 0: hysteria is installed
+    # 1: hysteria is not installed
+    
+    if [[ -f "$EXECUTABLE_INSTALL_PATH" || -h "$EXECUTABLE_INSTALL_PATH" ]]; then
+        return 0
+    fi
+    return 1
+}
+
+get_running_services() {
+    if [[ "x$FORCE_NO_SYSTEMD" == "x2" ]]; then
+        return
+    fi
+    
+    systemctl list-units --state=active --plain --no-legend \
+    | grep -o "hysteria-server@*[^\s]*.service" || true
+}
+
+restart_running_services() {
+    if [[ "x$FORCE_NO_SYSTEMD" == "x2" ]]; then
+        return
+    fi
+    
+    echo "Restarting running service ... "
+    
+    for service in $(get_running_services); do
+        echo -ne "Restarting $service ... "
+        systemctl restart "$service"
+        echo "done"
+    done
+}
+
+stop_running_services() {
+    if [[ "x$FORCE_NO_SYSTEMD" == "x2" ]]; then
+        return
+    fi
+    
+    echo "Stopping running service ... "
+    
+    for service in $(get_running_services); do
+        echo -ne "Stopping $service ... "
+        systemctl stop "$service"
+        echo "done"
+    done
+}
+
+perform_install() {
+    local _is_fresh_install
+    if ! is_hysteria_installed; then
+        _is_fresh_install=1
+    fi
+
+    perform_install_hysteria_binary
+    perform_install_hysteria_example_config
+    perform_install_hysteria_home_legacy
+    perform_install_hysteria_systemd
+    setup_ssl
+    start_services
+    perform_install_manager_script
+
+    if [[ -n "$_is_fresh_install" ]]; then
+        echo
+        echo -e "$(tbold)Congratulations! AGN-UDP has been successfully installed on your server.$(treset)"
+        echo "Use 'agnudp' command to access the manager."
+
+        echo
+        echo -e "$(tbold)Client app MSY VPN:$(treset)"
+        echo -e "$(tblue)https://play.google.com/store/apps/details?id=com.msyvpn.lite$(treset)"
+        echo
+        echo -e "Sigueme!"
+        echo
+        echo -e "\t+ Grupo de Telegram at $(tblue)https://https://t.me/MSYinternetGratisGrupo$(treset)"
+        echo -e "\t+ Follow me on Telegram: $(tblue)https://t.me/JuanitoProSniff$(treset)"
+        echo -e "\t+ Canal Telegram: $(tblue)https://t.me/FREEINTERNETVPNMSY$(treset)"
+        echo
+    else
+        restart_running_services
+        start_services
+        echo
+        echo -e "$(tbold)MSY SCRIPT UDP has been successfully updated to $VERSION.$(treset)"
+        echo
+    fi
+}
+
+perform_remove() {
+    perform_remove_hysteria_binary
+    stop_running_services
+    perform_remove_hysteria_systemd
+
+    echo
+    echo -e "$(tbold)Congratulations! MSY-UDP has been successfully removed from your server.$(treset)"
+    echo
+    echo -e "You still need to remove configuration files and ACME certificates manually with the following commands:"
+    echo
+    echo -e "\t$(tred)rm -rf "$CONFIG_DIR"$(treset)"
+    if [[ "x$HYSTERIA_USER" != "xroot" ]]; then
+        echo -e "\t$(tred)userdel -r "$HYSTERIA_USER"$(treset)"
+    fi
+    if [[ "x$FORCE_NO_SYSTEMD" != "x2" ]]; then
+        echo
+        echo -e "You still might need to disable all related systemd services with the following commands:"
+        echo
+        echo -e "\t$(tred)rm -f /etc/systemd/system/multi-user.target.wants/hysteria-server.service$(treset)"
+        echo -e "\t$(tred)rm -f /etc/systemd/system/multi-user.target.wants/hysteria-server@*.service$(treset)"
+        echo -e "\t$(tred)systemctl daemon-reload$(treset)"
+    fi
+    echo
+}
+
+setup_ssl() {
+    echo "Installing SSL certificates"
+
+    openssl genrsa -out /etc/hysteria/hysteria.ca.key 2048
+
+    openssl req -new -x509 -days 3650 -key /etc/hysteria/hysteria.ca.key -subj "/C=CN/ST=GD/L=SZ/O=Hysteria, Inc./CN=Hysteria Root CA" -out /etc/hysteria/hysteria.ca.crt
+
+    openssl req -newkey rsa:2048 -nodes -keyout /etc/hysteria/hysteria.server.key -subj "/C=CN/ST=GD/L=SZ/O=Hysteria, Inc./CN=$DOMAIN" -out /etc/hysteria/hysteria.server.csr
+
+    openssl x509 -req -extfile <(printf "subjectAltName=DNS:$DOMAIN,DNS:$DOMAIN") -days 3650 -in /etc/hysteria/hysteria.server.csr -CA /etc/hysteria/hysteria.ca.crt -CAkey /etc/hysteria/hysteria.ca.key -CAcreateserial -out /etc/hysteria/hysteria.server.crt
+}
+
+start_services() {
+    echo "Starting AGN-UDP"
+    apt update
+    sudo debconf-set-selections <<< "iptables-persistent iptables-persistent/autosave_v4 boolean true"
+    sudo debconf-set-selections <<< "iptables-persistent iptables-persistent/autosave_v6 boolean true"
+    apt -y install iptables-persistent
+    iptables -t nat -A PREROUTING -i $(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1) -p udp --dport 10000:65000 -j DNAT --to-destination $UDP_PORT
+    ip6tables -t nat -A PREROUTING -i $(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1) -p udp --dport 10000:65000 -j DNAT --to-destination $UDP_PORT
+    sysctl net.ipv4.conf.all.rp_filter=0
+    sysctl net.ipv4.conf.$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1).rp_filter=0
+    echo "net.ipv4.ip_forward = 1
+    net.ipv4.conf.all.rp_filter=0
+    net.ipv4.conf.$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1).rp_filter=0" > /etc/sysctl.conf
+    sysctl -p
+    sudo iptables-save > /etc/iptables/rules.v4
+    sudo ip6tables-save > /etc/iptables/rules.v6
+    systemctl enable hysteria-server.service
+    systemctl start hysteria-server.service
+}
+
+main() {
+    parse_arguments "$@"
+    check_permission
+    check_environment
+    check_hysteria_user "hysteria"
+    check_hysteria_homedir "/var/lib/$HYSTERIA_USER"
+    case "$OPERATION" in
+        "install")
+            setup_db
+            perform_install
+            ;;
+        "remove")
+            perform_remove
+            ;;
+        *)
+            error "Unknown operation '$OPERATION'."
+            ;;
+    esac
+}
+
+main "$@"
