@@ -2,7 +2,7 @@
 # ============================================================
 # * Creado y modificado por t:me/JuanitoProSniff
 # ============================================================
-# EXITVPN_MODULE_VERSION: msyvpn-exitvpn-1
+# EXITVPN_MODULE_VERSION: msyvpn-exitvpn-2
 #
 # MÓDULO SALIDA REMOTA (DOBLE VPN) — MSYVPN-SCRIPT
 # ------------------------------------------------------------
@@ -36,6 +36,7 @@ _EV_WATCHDOG="$_EV_DIR/watchdog.sh"
 _EV_SVC="msy-exitvpn"
 _EV_SVC_WD="msy-exitvpn-watchdog"
 _EV_TPROXY_PORT="12345"
+_EV_SOCKS_PORT="10808"
 _EV_MARK="1"
 _EV_SELF_MARK="255"
 _EV_TABLE="100"
@@ -225,6 +226,13 @@ _ev_write_config() {
       "settings": { "network": "tcp,udp", "followRedirect": true },
       "streamSettings": { "sockopt": { "tproxy": "tproxy" } },
       "sniffing": { "enabled": true, "destOverride": ["http","tls","quic"], "routeOnly": false }
+    },
+    {
+      "tag": "socks-probe",
+      "listen": "127.0.0.1",
+      "port": ${_EV_SOCKS_PORT},
+      "protocol": "socks",
+      "settings": { "udp": false }
     }
   ],
   "outbounds": [
@@ -272,6 +280,7 @@ AUSTRIA_IP=${_EV_SERVER_IP}
 AUSTRIA_PORT=${EV_PORT}
 AUSTRIA_HOST=${EV_HOST}
 TPROXY_PORT=${_EV_TPROXY_PORT}
+SOCKS_PORT=${_EV_SOCKS_PORT}
 MARK=${_EV_MARK}
 SELF_MARK=${_EV_SELF_MARK}
 TABLE=${_EV_TABLE}
@@ -302,8 +311,11 @@ ip route replace local default dev lo table $T
 
 PRIV="0.0.0.0/8 10.0.0.0/8 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 224.0.0.0/4 240.0.0.0/4"
 
-# PREROUTING — tráfico reenviado desde otros equipos (inofensivo si no hay)
+# PREROUTING — solo intercepta el tráfico re-inyectado desde OUTPUT (destino remoto).
+# CLAVE: el tráfico dirigido a la PROPIA IP del VPS (SSH admin, clientes que se
+# conectan a tus servicios) se EXCLUYE con addrtype LOCAL → nunca se secuestra.
 iptables -t mangle -F XRAY 2>/dev/null; iptables -t mangle -N XRAY 2>/dev/null
+iptables -t mangle -A XRAY -m addrtype --dst-type LOCAL -j RETURN
 iptables -t mangle -A XRAY -m mark --mark $SM -j RETURN
 for n in $PRIV; do iptables -t mangle -A XRAY -d $n -j RETURN; done
 [ -n "$SIP" ] && iptables -t mangle -A XRAY -d "$SIP" -j RETURN
@@ -313,10 +325,11 @@ iptables -t mangle -C PREROUTING -j XRAY 2>/dev/null || iptables -t mangle -A PR
 
 # OUTPUT — tráfico generado por el propio VPS (lo que sale por cada protocolo)
 iptables -t mangle -F XRAY_SELF 2>/dev/null; iptables -t mangle -N XRAY_SELF 2>/dev/null
-iptables -t mangle -A XRAY_SELF -m mark --mark $SM -j RETURN        # el propio Xray → directo (evita bucle)
+iptables -t mangle -A XRAY_SELF -m addrtype --dst-type LOCAL -j RETURN  # a la propia máquina → directo
+iptables -t mangle -A XRAY_SELF -m mark --mark $SM -j RETURN            # el propio Xray → directo (evita bucle)
 for n in $PRIV; do iptables -t mangle -A XRAY_SELF -d $n -j RETURN; done
 [ -n "$SIP" ] && iptables -t mangle -A XRAY_SELF -d "$SIP" -j RETURN
-iptables -t mangle -A XRAY_SELF -m conntrack --ctdir REPLY -j RETURN # respuestas a clientes entrantes → no tocar
+iptables -t mangle -A XRAY_SELF -m conntrack --ctdir REPLY -j RETURN    # respuestas a clientes entrantes → no tocar
 iptables -t mangle -A XRAY_SELF -p udp -j MARK --set-mark $M
 iptables -t mangle -A XRAY_SELF -p tcp -j MARK --set-mark $M
 iptables -t mangle -C OUTPUT -j XRAY_SELF 2>/dev/null || iptables -t mangle -A OUTPUT -j XRAY_SELF
@@ -362,33 +375,42 @@ NETDOWN
     cat > "$_EV_WATCHDOG" <<'WD'
 #!/bin/bash
 # Failover HÍBRIDO anti-parpadeo entre salida-Austria e IP-normal.
+# La salud se mide de EXTREMO A EXTREMO: una petición real a través del túnel
+# (SOCKS interno → Xray → Austria). Así la redirección global solo se aplica
+# cuando el túnel DE VERDAD navega; si no, se usa la IP normal del VPS.
 D="/etc/SSHPlus/exitvpn"
 . "$D/vars" 2>/dev/null
-IPV="${AUSTRIA_IP}"; PORT="${AUSTRIA_PORT:-443}"; TP="${TPROXY_PORT:-12345}"
+SOCKS="${SOCKS_PORT:-10808}"; TP="${TPROXY_PORT:-12345}"
 SVC="msy-exitvpn"
 CHECK_INT=10        # cada 10s
-FAIL_NEEDED=3       # ~30s caído antes de pasar a IP normal
-OK_NEEDED=2         # ~20s estable antes de volver a Austria
+FAIL_NEEDED=3       # ~30s sin túnel antes de pasar a IP normal
+OK_NEEDED=2         # ~20s de túnel estable antes de volver a Austria
 
-reachable() { timeout 6 bash -c "exec 3<>/dev/tcp/${IPV}/${PORT}" 2>/dev/null; }
-xray_ok()   { systemctl is-active --quiet "$SVC" && ss -tlnp 2>/dev/null | grep -q "127.0.0.1:${TP} "; }
-healthy()   { [ -n "$IPV" ] && reachable && xray_ok; }
+xray_up()   { systemctl is-active --quiet "$SVC" && ss -tlnp 2>/dev/null | grep -q "127.0.0.1:${TP} "; }
+tunnel_ok() {
+    # Navega a través del túnel sin depender de las reglas iptables.
+    local u
+    for u in "http://www.gstatic.com/generate_204" "http://cp.cloudflare.com/generate_204" "http://connectivitycheck.gstatic.com/generate_204"; do
+        curl -s --max-time 8 --socks5-hostname "127.0.0.1:${SOCKS}" -o /dev/null "$u" 2>/dev/null && return 0
+    done
+    return 1
+}
 rules_on()  { iptables -t mangle -C OUTPUT -j XRAY_SELF 2>/dev/null; }
 
 fails=0; oks=0
 while true; do
-    if healthy; then
+    if xray_up && tunnel_ok; then
         oks=$((oks+1)); fails=0
         if ! rules_on && [ "$oks" -ge "$OK_NEEDED" ]; then
             bash "$D/netup.sh"
-            logger -t exitvpn "Austria estable -> salida por Austria ACTIVADA"
+            logger -t exitvpn "Tunel estable -> salida remota ACTIVADA"
         fi
     else
         fails=$((fails+1)); oks=0
         systemctl is-active --quiet "$SVC" || systemctl start "$SVC" 2>/dev/null
         if rules_on && [ "$fails" -ge "$FAIL_NEEDED" ]; then
             bash "$D/netdown.sh"
-            logger -t exitvpn "Austria caido -> FALLBACK a IP normal del VPS"
+            logger -t exitvpn "Tunel caido -> FALLBACK a IP normal del VPS"
         fi
     fi
     sleep "$CHECK_INT"
@@ -532,19 +554,43 @@ _ev_start() {
     fi
     echo -e "\033[1;32m  ✓ Xray activo (tproxy 127.0.0.1:${_EV_TPROXY_PORT})\033[0m"
 
-    echo -e "\033[1;33m  Aplicando redirección de salida...\033[0m"
-    bash "$_EV_NETUP"
-
+    # Watchdog primero: él es el dueño de aplicar/quitar la redirección de forma
+    # segura (solo la pone si el túnel navega de verdad). Así nunca te encierra.
     echo -e "\033[1;33m  Activando watchdog de failover...\033[0m"
     systemctl enable "$_EV_SVC_WD" >/dev/null 2>&1
     systemctl restart "$_EV_SVC_WD"
 
-    echo -e "\n\033[1;32m  ✓ SALIDA POR AUSTRIA ACTIVA.\033[0m"
-    echo -e "\033[1;37m  Verificando IP de salida (puede tardar unos segundos)...\033[0m"
-    sleep 2
-    _ev_show_exit_ip
+    echo -e "\033[1;33m  Verificando que el túnel realmente navega (sonda interna)...\033[0m"
+    local i probe=0
+    for ((i=0; i<15; i++)); do
+        if _ev_tunnel_probe; then probe=1; break; fi
+        sleep 2
+    done
+
+    if [[ $probe -eq 1 ]]; then
+        bash "$_EV_NETUP"
+        echo -e "\n\033[1;32m  ✓ TÚNEL OK — SALIDA REMOTA ACTIVA.\033[0m"
+        sleep 1
+        _ev_show_exit_ip
+    else
+        echo -e "\n\033[1;31m  ⚠ El túnel aún no navega — NO se activó la redirección.\033[0m"
+        echo -e "\033[1;32m  Tu VPS sigue accesible con su IP normal (no te encierra).\033[0m"
+        echo -e "\033[1;37m  El watchdog activará la salida AUTOMÁTICAMENTE en cuanto el\033[0m"
+        echo -e "\033[1;37m  túnel funcione. Si nunca lo hace, revisa la URI:\033[0m"
+        echo -e "\033[1;33m    journalctl -u ${_EV_SVC} -n 30\033[0m"
+    fi
     [[ "$mode" != "silent" ]] && { echo -ne "\n\033[1;33m  ENTER para continuar...\033[0m"; read; }
     return 0
+}
+
+# Sonda de túnel: navega a través del SOCKS interno (Xray→remoto), sin
+# depender de las reglas iptables. Devuelve 0 si el túnel funciona.
+_ev_tunnel_probe() {
+    local u
+    for u in "http://www.gstatic.com/generate_204" "http://cp.cloudflare.com/generate_204" "http://connectivitycheck.gstatic.com/generate_204"; do
+        curl -s --max-time 8 --socks5-hostname "127.0.0.1:${_EV_SOCKS_PORT}" -o /dev/null "$u" 2>/dev/null && return 0
+    done
+    return 1
 }
 
 _ev_stop() {

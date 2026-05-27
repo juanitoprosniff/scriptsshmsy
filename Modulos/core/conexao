@@ -1407,7 +1407,7 @@ fun_v2ray_safe() {
 # Auto-actualiza si la versión local es vieja.
 # ============================================================
 _EXITVPN_MODULE="/etc/SSHPlus/exitvpn.sh"
-_EXITVPN_REQ_VER="msyvpn-exitvpn-1"
+_EXITVPN_REQ_VER="msyvpn-exitvpn-2"
 
 _exitvpn_module_ok() {
     [[ -s "$_EXITVPN_MODULE" ]] && \
