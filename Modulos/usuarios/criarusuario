@@ -353,13 +353,13 @@ _cu_show_extra_info() {
         echo -e "\033[1;33m  ── V2Ray VLESS ──\033[0m"
         echo -e "\033[1;32mUUID V2Ray      : \033[1;37m${_v2uuid}\033[0m"
         echo ""
-        local _uri_h="vless://${_v2uuid}@${IP}:${_http_p}?type=ws&encryption=none&security=none&host=${_addr}&path=${_path_enc}#${_safe}-http-${_http_p}"
+        local _uri_h="vless://${_v2uuid}@${IP}:${_http_p}?type=ws&encryption=none&security=none&host=${_addr}&path=${_path_enc}&allowInsecure=1#${_safe}-http-${_http_p}"
         local _uri_t="vless://${_v2uuid}@${IP}:${_tls_p}?type=ws&encryption=none&security=tls&sni=${_addr}&host=${_addr}&path=${_path_enc}&allowInsecure=1#${_safe}-tls-${_tls_p}"
         echo -e "\033[1;32mVLESS HTTP      :\033[1;36m ${_uri_h}\033[0m"
         echo ""
         echo -e "\033[1;32mVLESS TLS       :\033[1;36m ${_uri_t}\033[0m"
         [[ -n "$_cf_dom" ]] && {
-            local _uri_cf="vless://${_v2uuid}@${IP}:443?type=ws&encryption=none&security=tls&sni=${_cf_dom}&host=${_cf_dom}&path=${_path_enc}#${_safe}-cf-443"
+            local _uri_cf="vless://${_v2uuid}@${IP}:443?type=ws&encryption=none&security=tls&sni=${_cf_dom}&host=${_cf_dom}&path=${_path_enc}&allowInsecure=1#${_safe}-cf-443"
             echo ""
             echo -e "\033[1;32mVLESS CF        :\033[1;36m ${_uri_cf}\033[0m"
         }
