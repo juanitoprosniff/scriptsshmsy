@@ -16,9 +16,29 @@ _HYST_SERVICE="/etc/systemd/system/hysteria-server.service"
 _HYST_PORT="${1:-36712}"
 _HYST_OBFS="${2:-agnudp}"
 
-# Usuario por defecto para pruebas rápidas
+# Usuario por defecto para pruebas rápidas (solo si no hay usuarios del sistema)
 _DEF_USER="udptest"
 _DEF_PASS="1234msy"
+
+# ── Leer usuarios desde el sistema MSYVPN (/etc/SSHPlus/senha/) ──────────────
+# criarusuario.sh guarda la contraseña real de cada usuario en ese directorio.
+# Si existe, usamos esos usuarios en Hysteria en vez de uno hardcodeado.
+_build_arr_from_sshmsy() {
+    local _arr="" _u _p
+    if [[ -d /etc/SSHPlus/senha ]]; then
+        for _pfile in /etc/SSHPlus/senha/*; do
+            [[ -f "$_pfile" ]] || continue
+            _u=$(basename "$_pfile")
+            _p=$(cat "$_pfile" 2>/dev/null | tr -d '\n')
+            [[ -z "$_u" || -z "$_p" ]] && continue
+            # Verificar que el usuario del sistema exista y no esté expirado
+            id "$_u" &>/dev/null || continue
+            [[ -n "$_arr" ]] && _arr+=","
+            _arr+="\"${_u}:${_p}\""
+        done
+    fi
+    echo "$_arr"
+}
 
 _detect_arch() {
     local _a; _a=$(uname -m)
@@ -83,13 +103,17 @@ fi
 sqlite3 "$_HYST_DB" \
     "INSERT OR IGNORE INTO users (username, password) VALUES ('$_DEF_USER', '$_DEF_PASS');" 2>/dev/null
 
-# Construir auth.config desde BD
-_arr=""
-while IFS='|' read -r _u _p; do
-    [[ -z "$_u" ]] && continue
-    [[ -n "$_arr" ]] && _arr+=","
-    _arr+="\"${_u}:${_p}\""
-done < <(sqlite3 "$_HYST_DB" "SELECT username, password FROM users;" 2>/dev/null)
+# Construir auth.config: primero intenta desde /etc/SSHPlus/senha/ (usuarios MSYVPN),
+# si no hay, cae a la BD SQLite, y si tampoco hay, usa el usuario por defecto.
+_arr=$(_build_arr_from_sshmsy)
+if [[ -z "$_arr" ]]; then
+    # Fallback: leer desde BD SQLite
+    while IFS='|' read -r _u _p; do
+        [[ -z "$_u" ]] && continue
+        [[ -n "$_arr" ]] && _arr+=","
+        _arr+="\"${_u}:${_p}\""
+    done < <(sqlite3 "$_HYST_DB" "SELECT username, password FROM users;" 2>/dev/null)
+fi
 [[ -z "$_arr" ]] && _arr="\"${_DEF_USER}:${_DEF_PASS}\""
 
 # Escribir config.json con obfs + cert + auth completos

@@ -8,6 +8,43 @@ CONFIG_DIR="/etc/hysteria"
 CONFIG_FILE="$CONFIG_DIR/config.json"
 USER_DB="$CONFIG_DIR/udpusers.db"
 
+# ── Reconstruir auth.config desde usuarios MSYVPN (/etc/SSHPlus/senha/) ─────
+# Lee los usuarios reales del sistema (creados con criarusuario.sh) y
+# actualiza el config.json de Hysteria. Si no hay usuarios del sistema,
+# cae a la BD SQLite como fallback.
+_hyst_rebuild_config() {
+    local _arr="" _u _p
+
+    # Prioridad 1: usuarios del sistema MSYVPN
+    if [[ -d /etc/SSHPlus/senha ]]; then
+        for _pfile in /etc/SSHPlus/senha/*; do
+            [[ -f "$_pfile" ]] || continue
+            _u=$(basename "$_pfile")
+            _p=$(cat "$_pfile" 2>/dev/null | tr -d '\n')
+            [[ -z "$_u" || -z "$_p" ]] && continue
+            id "$_u" &>/dev/null || continue
+            [[ -n "$_arr" ]] && _arr+=","
+            _arr+="\"${_u}:${_p}\""
+        done
+    fi
+
+    # Prioridad 2 (fallback): BD SQLite
+    if [[ -z "$_arr" && -f "$USER_DB" ]]; then
+        local _line
+        while IFS= read -r _line; do
+            [[ -z "$_line" ]] && continue
+            [[ -n "$_arr" ]] && _arr+=","
+            _arr+="\"$_line\""
+        done < <(sqlite3 "$USER_DB" "SELECT username || ':' || password FROM users;" 2>/dev/null)
+    fi
+
+    [[ -z "$_arr" ]] && return 1
+
+    jq ".auth.config = [${_arr}]" "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" 2>/dev/null && \
+        mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+    systemctl restart hysteria-server 2>/dev/null
+}
+
 _hyst_header() {
     clear
     echo -e "\033[1;34m╔══════════════════════════════════════════════════╗\033[0m"
@@ -77,6 +114,7 @@ hyst_menu() {
     echo -e "\033[1;34m║\033[1;31m[\033[1;36m02\033[1;31m]\033[1;37m Detener UDP                              \033[1;34m║\033[0m"
     echo -e "\033[1;34m║\033[1;31m[\033[1;36m03\033[1;31m]\033[1;37m Iniciar UDP                              \033[1;34m║\033[0m"
     echo -e "\033[1;34m║\033[1;31m[\033[1;36m04\033[1;31m]\033[1;37m Cambiar Obfs                             \033[1;34m║\033[0m"
+    echo -e "\033[1;34m║\033[1;31m[\033[1;36m06\033[1;31m]\033[1;37m Sincronizar usuarios MSYVPN              \033[1;34m║\033[0m"
     echo -e "\033[1;34m║\033[1;31m[\033[1;36m05\033[1;31m]\033[1;37m Desinstalar Hysteria                     \033[1;34m║\033[0m"
     echo -e "\033[1;34m║\033[1;31m[\033[1;36m00\033[1;31m]\033[1;37m Salir                                    \033[1;34m║\033[0m"
     echo -e "\033[1;34m╚══════════════════════════════════════════════════╝\033[0m"
@@ -100,6 +138,12 @@ hyst_menu() {
                 echo -e "\033[1;31m✗ No pudo iniciar — ver: journalctl -u hysteria-server -n 20\033[0m"
             sleep 2; hyst_menu ;;
         4|04) _hyst_change_obfs; hyst_menu ;;
+        6|06)
+            echo -e "\033[1;33mSincronizando usuarios desde /etc/SSHPlus/senha/...\033[0m"
+            _hyst_rebuild_config && \
+                echo -e "\033[1;32m✓ Usuarios sincronizados y Hysteria reiniciado.\033[0m" || \
+                echo -e "\033[1;31m✗ No se encontraron usuarios MSYVPN válidos.\033[0m"
+            sleep 2; hyst_menu ;;
         5|05) _hyst_uninstall ;;
         0|00) exit 0 ;;
         *) echo -e "\033[1;31mOpción inválida\033[0m"; sleep 1; hyst_menu ;;
