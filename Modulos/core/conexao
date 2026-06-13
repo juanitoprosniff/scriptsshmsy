@@ -968,6 +968,9 @@ EOF
     local _ws_auto
     _ws_auto=$(ss -tlpn 2>/dev/null | grep -E 'python|python3' | \
                awk '{print $4}' | rev | cut -d: -f1 | rev | head -1)
+    # FIX: si no se detecta ningún proxy activo, usar 80 por defecto
+    # (el proxy WS puede arrancar después, y el dispatcher lo necesita en 80
+    # para que funcionen los payloads que inyectan Host en ese puerto)
     [[ -z "$_ws_auto" ]] && _ws_auto=80
 
     echo -e "\n\033[1;33mPaso 2 — Destino WebSocket (wsproxy):\033[0m"
