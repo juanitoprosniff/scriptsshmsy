@@ -1,0 +1,25 @@
+#!/bin/bash
+# Reinicia SlowDNS — lee NS y puerto destino desde los archivos de config
+_ns=$(cat /etc/slowdns/infons 2>/dev/null | tr -d '\n')
+_port=$(cat /etc/slowdns/infopuerto 2>/dev/null | tr -d '\n')
+[[ -z "$_port" ]] && _port="22"
+
+echo ""
+echo "REINICIANDO SLOWDNS → 127.0.0.1:$_port"
+echo ""
+
+screen -ls 2>/dev/null | grep 'slowdns' | awk '{print $1}' | xargs -I{} screen -X -S {} quit 2>/dev/null
+pkill -f 'dns-server' 2>/dev/null
+sleep 2
+
+cd /etc/slowdns
+screen -dmS slowdns /etc/slowdns/dns-server -udp :5300 -privkey-file /root/server.key "$_ns" 127.0.0.1:"$_port"
+sleep 1
+
+if ps aux 2>/dev/null | grep -v grep | grep -q 'dns-server'; then
+    echo "  SLOWDNS REINICIADO CORRECTAMENTE ✔"
+else
+    echo "  ADVERTENCIA: SlowDNS no parece estar corriendo."
+fi
+echo ""
+sleep 2

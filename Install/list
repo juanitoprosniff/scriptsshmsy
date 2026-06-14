@@ -1,0 +1,144 @@
+#!/bin/bash
+_lvk=$(wget -qO- https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/versao)
+IP=$(wget -qO- ipv4.icanhazip.com)
+IP2=$(wget -qO- http://whatismyip.akamai.com/)
+[[ "$IP" != "$IP2" ]] && ipdovps="$IP2" || ipdovps="$IP"
+echo -e "$ipdovps" >/etc/IP
+lst=$1 && lst1=$2 && lst2=$3 && key1=$4 && key2=crz
+echo -e "America/Sao_Paulo" >/etc/timezone
+ln -fs /usr/share/zoneinfo/America/Sao_Paulo /etc/localtime >/dev/null 2>&1
+dpkg-reconfigure --frontend noninteractive tzdata >/dev/null 2>&1
+[[ -z $lst1 ]] && {
+	rm -rf $_Ink/list >/dev/null 2>&1 && cat /dev/null >~/.bash_history && history -c && exit 0
+}
+[[ ! -d /etc/SSHPlus ]] && mkdir /etc/SSHPlus
+[[ ! -d /etc/SSHPlus/v2ray ]] && mkdir /etc/SSHPlus/v2ray
+[[ ! -d /etc/SSHPlus/senha ]] && mkdir /etc/SSHPlus/senha
+[[ ! -e /etc/SSHPlus/Exp ]] && touch /etc/SSHPlus/Exp
+[[ ! -d /etc/SSHPlus/userteste ]] && mkdir /etc/SSHPlus/userteste
+[[ ! -d /etc/SSHPlus/.tmp ]] && mkdir /etc/SSHPlus/.tmp
+[[ ! -d /etc/bot ]] && mkdir /etc/bot
+[[ ! -d /etc/bot/info-users ]] && mkdir /etc/bot/info-users
+[[ ! -d /etc/bot/arquivos ]] && mkdir /etc/bot/arquivos
+[[ ! -d /etc/bot/revenda ]] && mkdir /etc/bot/revenda
+[[ ! -d /etc/bot/suspensos ]] && mkdir /etc/bot/suspensos
+[[ ! -d /etc/rec ]] && mkdir /etc/rec
+[[ ! -e /etc/bot/lista_ativos ]] && touch /etc/bot/lista_ativos
+[[ ! -e /etc/bot/lista_suspensos ]] && touch /etc/bot/lista_suspensos
+echo -e 'by: @KIRITO_SSH' >/usr/lib/sshplus && cat /usr/lib/sshplus >$lst2/licence && cat /usr/lib/sshplus > /etc/SSHPlus/.tmp/crazy
+netstat -nplt | grep -w 'apache2' | grep -w '80' && sed -i "s/Listen 80/Listen 81/g" /etc/apache2/ports.conf && service apache2 restart
+[[ "$(grep -o '#Port 22' /etc/ssh/sshd_config)" == "#Port 22" ]] && sed -i "s;#Port 22;Port 22;" /etc/ssh/sshd_config && service ssh restart
+grep -v "^PasswordAuthentication" /etc/ssh/sshd_config >/tmp/passlogin && mv /tmp/passlogin /etc/ssh/sshd_config
+echo "PasswordAuthentication yes" >>/etc/ssh/sshd_config
+_dir1='/bin'
+_dir2='/etc/SSHPlus'
+_REPO_BASE="https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main"
+
+# Mapa: nombre_final:ruta_en_repo
+# Formato: "basename:subcarpeta/archivo"
+declare -A _mdls_map
+# core
+_mdls_map["menu"]="core/menu"
+_mdls_map["conexao"]="core/conexao"
+# usuarios
+_mdls_map["criarusuario"]="usuarios/criarusuario"
+_mdls_map["remover"]="usuarios/remover"
+_mdls_map["alterarsenha"]="usuarios/alterarsenha"
+_mdls_map["alterarlimite"]="usuarios/alterarlimite"
+_mdls_map["mudardata"]="usuarios/mudardata"
+_mdls_map["expcleaner"]="usuarios/expcleaner"
+_mdls_map["uexpired"]="usuarios/uexpired"
+# monitoreo
+_mdls_map["sshmonitor"]="monitoreo/sshmonitor"
+_mdls_map["infousers"]="monitoreo/infousers"
+_mdls_map["detalhes"]="monitoreo/detalhes"
+_mdls_map["blockt"]="monitoreo/blockt"
+_mdls_map["droplimiter"]="monitoreo/droplimiter"
+_mdls_map["limiter"]="monitoreo/limiter"
+# sistema
+_mdls_map["otimizar"]="sistema/otimizar"
+_mdls_map["reiniciarservicos"]="sistema/reiniciarservicos"
+_mdls_map["reiniciarsistema"]="sistema/reiniciarsistema"
+_mdls_map["swapmemory"]="sistema/swapmemory"
+_mdls_map["attscript"]="sistema/attscript"
+_mdls_map["banner"]="sistema/banner"
+_mdls_map["verifatt"]="sistema/verifatt"
+_mdls_map["senharoot"]="sistema/senharoot"
+_mdls_map["badvpn"]="sistema/badvpn"
+# telegram/bot
+_mdls_map["bot"]="telegram/bot"
+_mdls_map["ShellBot.sh"]="telegram/ShellBot.sh"
+_mdls_map["botssh"]="telegram/botssh"
+_mdls_map["initbot"]="telegram/initbot"
+_mdls_map["verifbot"]="telegram/verifbot"
+# instalacion
+_mdls_map["instalar_conteo.sh"]="instalacion/instalar_conteo.sh"
+_mdls_map["initcheck"]="instalacion/initcheck"
+_mdls_map["instsqd"]="instalacion/instsqd"
+_mdls_map["delscript"]="instalacion/delscript"
+_mdls_map["delhost"]="instalacion/delhost"
+# backup
+_mdls_map["userbackup"]="backup/userbackup"
+# proxy / red
+_mdls_map["cabecalho"]="sistema/cabecalho"
+_mdls_map["open.py"]="proxy/open.py"
+_mdls_map["proxy.py"]="proxy/proxy.py"
+_mdls_map["wsproxy.py"]="proxy/wsproxy.py"
+_mdls_map["ssldispatcher.py"]="proxy/ssldispatcher.py"
+
+rm $_dir2/ShellBot.sh $_dir2/cabecalho $_dir2/open.py $_dir2/proxy.py $_dir2/wsproxy.py >/dev/null 2>&1
+
+for _bn in "${!_mdls_map[@]}"; do
+	_path="${_mdls_map[$_bn]}"
+	[[ -e $_dir1/$_bn ]] && rm $_dir1/$_bn >/dev/null 2>&1
+	wget -q -O $_dir1/$_bn "${_REPO_BASE}/Modulos/${_path}" >/dev/null 2>&1
+	chmod +x $_dir1/$_bn
+done
+
+mv $_dir1/cabecalho $_dir1/bot $_dir1/open.py $_dir1/proxy.py $_dir1/wsproxy.py $_dir2 2>/dev/null
+mv $_dir1/ShellBot.sh $_dir2 2>/dev/null
+
+_arq_host="/etc/hosts"
+_host[0]="d1n212ccp6ldpw.cloudfront.net"
+_host[1]="dns.whatsapp.net"
+_host[2]="portalrecarga.vivo.com.br/recarga"
+_host[3]="navegue.vivo.com.br/controle/"
+_host[4]="navegue.vivo.com.br/pre/"
+_host[5]="www.whatsapp.net"
+_host[6]="/SSHPLUS?"
+for host in ${_host[@]}; do
+	if [[ "$(grep -w "$host" $_arq_host | wc -l)" = "0" ]]; then
+		sed -i "3i\127.0.0.1 $host" $_arq_host
+	fi
+done
+[[ ! -e /etc/autostart ]] && {
+	echo '#!/bin/bash
+clear
+#INICIO AUTOMATICO' >/etc/autostart
+	chmod +x /etc/autostart
+} || {
+	[[ $(ps x | grep "bot_plus" | grep -v grep | wc -l) != '0' ]] && wget -qO- https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/Install/ShellBot.sh
+	for proc in $(ps x | grep 'dmS' | grep -v 'grep' | awk {'print $1'}); do
+		screen -r -S "$proc" -X quit
+done
+	screen -wipe >/dev/null
+	echo '#!/bin/bash
+clear
+#INICIO AUTOMATICO' >/etc/autostart
+	chmod +x /etc/autostart
+}
+crontab -r >/dev/null 2>&1
+(
+	crontab -l 2>/dev/null
+	echo "@daily /bin/verifatt"
+	echo "@reboot /etc/autostart"
+	echo "* * * * * /etc/autostart"
+	echo "0 */6 * * * /bin/uexpired"
+) | crontab -
+echo "$_lvk" | sed -n '1 p' | cut -d' ' -f2 >/bin/versao && cat /bin/versao >/home/sshplus
+wget https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/Install/jq-linux64 >/dev/null 2>&1
+chmod +x jq-linux64 && mv jq-linux64 $(which jq)
+service cron restart >/dev/null 2>&1
+service ssh restart >/dev/null 2>&1
+[[ -d /var/www/html/openvpn ]] && service apache2 restart >/dev/null 2>&1
+rm -rf $lst1/list >/dev/null 2>&1

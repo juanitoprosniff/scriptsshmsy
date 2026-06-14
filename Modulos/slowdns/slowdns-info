@@ -1,0 +1,35 @@
+#!/bin/bash
+clear
+echo -e "\033[1;36m╔══════════════════════════════════════════════════╗\033[0m"
+echo -e "\033[1;36m║         INFORMACIÓN DE SLOWDNS                   ║\033[0m"
+echo -e "\033[1;36m╚══════════════════════════════════════════════════╝\033[0m"
+echo ""
+
+_ip=$(cat /etc/IP 2>/dev/null | tr -d '\n' || hostname -I | awk '{print $1}')
+_ns=$(cat /etc/slowdns/infons 2>/dev/null | tr -d '\n')
+_port=$(cat /etc/slowdns/infopuerto 2>/dev/null | tr -d '\n')
+_key=$(cat /root/server.pub 2>/dev/null | tr -d '\n')
+
+[[ -n "$_ip" ]]   && echo -e "\033[1;32m  IP del Servidor  : \033[1;37m${_ip}\033[0m"
+[[ -n "$_ns" ]]   && echo -e "\033[1;32m  NS (Nameserver)  : \033[1;37m${_ns}\033[0m"
+[[ -n "$_port" ]] && echo -e "\033[1;32m  Puerto Destino   : \033[1;37m${_port}\033[0m"
+[[ -n "$_key" ]]  && echo -e "\033[1;32m  Clave Pública    : \033[1;37m${_key}\033[0m"
+
+if ps aux 2>/dev/null | grep -v grep | grep -q 'dns-server'; then
+    echo ""
+    echo -e "\033[1;32m  Estado SlowDNS   : ● ACTIVO\033[0m"
+else
+    echo ""
+    echo -e "\033[1;31m  Estado SlowDNS   : ○ INACTIVO\033[0m"
+fi
+
+if [[ -n "$_ns" && -n "$_key" ]]; then
+    echo ""
+    echo -e "\033[1;33m  Comando para conectar (cliente):\033[0m"
+    echo -e "\033[1;37m  slowdns ${_ns} ${_key}\033[0m"
+fi
+
+echo ""
+echo -e "\033[1;33m  La clave está guardada en: /root/server.pub\033[0m"
+echo ""
+read -p "  Presione [Enter] para volver"
