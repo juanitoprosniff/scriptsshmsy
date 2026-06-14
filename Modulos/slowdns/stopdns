@@ -1,0 +1,12 @@
+#!/bin/bash
+echo ""
+echo -e "\033[1;33mDETENIENDO SLOWDNS...\033[0m"
+echo ""
+
+screen -ls 2>/dev/null | grep 'slowdns' | awk '{print $1}' | xargs -I{} screen -X -S {} quit 2>/dev/null
+pkill -f 'dns-server' 2>/dev/null
+sleep 1
+
+echo -e "\033[1;32m  SlowDNS detenido. [✔]\033[0m"
+echo ""
+sleep 2
