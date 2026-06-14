@@ -968,9 +968,6 @@ EOF
     local _ws_auto
     _ws_auto=$(ss -tlpn 2>/dev/null | grep -E 'python|python3' | \
                awk '{print $4}' | rev | cut -d: -f1 | rev | head -1)
-    # FIX: si no se detecta ningún proxy activo, usar 80 por defecto
-    # (el proxy WS puede arrancar después, y el dispatcher lo necesita en 80
-    # para que funcionen los payloads que inyectan Host en ese puerto)
     [[ -z "$_ws_auto" ]] && _ws_auto=80
 
     echo -e "\n\033[1;33mPaso 2 — Destino WebSocket (wsproxy):\033[0m"
@@ -1406,46 +1403,6 @@ fun_v2ray_safe() {
 }
 
 # ============================================================
-# CARGAR MÓDULO SALIDA REMOTA / DOBLE VPN (Xray Reality cliente)
-# Auto-actualiza si la versión local es vieja.
-# ============================================================
-_EXITVPN_MODULE="/etc/SSHPlus/exitvpn.sh"
-_EXITVPN_REQ_VER="msyvpn-exitvpn-2"
-
-_exitvpn_module_ok() {
-    [[ -s "$_EXITVPN_MODULE" ]] && \
-        grep -q "EXITVPN_MODULE_VERSION: ${_EXITVPN_REQ_VER}" "$_EXITVPN_MODULE"
-}
-
-if ! _exitvpn_module_ok; then
-    wget -q --timeout=30 \
-        "${_REPO_BASE}/Modulos/exitvpn/exitvpn.sh" \
-        -O "${_EXITVPN_MODULE}.new" 2>/dev/null
-    if [[ -s "${_EXITVPN_MODULE}.new" ]] && \
-       grep -q "EXITVPN_MODULE_VERSION: ${_EXITVPN_REQ_VER}" "${_EXITVPN_MODULE}.new"; then
-        mv -f "${_EXITVPN_MODULE}.new" "$_EXITVPN_MODULE"
-        chmod 755 "$_EXITVPN_MODULE"
-    else
-        rm -f "${_EXITVPN_MODULE}.new" 2>/dev/null
-    fi
-fi
-if [[ -s "$_EXITVPN_MODULE" ]]; then
-    # shellcheck disable=SC1090
-    . "$_EXITVPN_MODULE"
-fi
-
-fun_exitvpn_safe() {
-    if declare -F fun_exitvpn >/dev/null 2>&1; then
-        fun_exitvpn
-    else
-        echo -e "\n\033[1;31m✗ Módulo Salida Remota no disponible.\033[0m"
-        echo -e "\033[1;33m  Esperado en: $_EXITVPN_MODULE\033[0m"
-        echo -e "\033[1;33m  URL fuente : ${_REPO_BASE}/Modulos/exitvpn/exitvpn.sh\033[0m"
-        sleep 4
-    fi
-}
-
-# ============================================================
 # MENÚ PRINCIPAL DE CONEXIÓN
 # ============================================================
 x="ok"; clear
@@ -1494,11 +1451,6 @@ fun_conexao() {
             && conteo_sts="\033[1;32m✓ " || conteo_sts="\033[1;31m✕ "
         systemctl is-active --quiet v2ray 2>/dev/null \
             && v2ray_sts="\033[1;32m✓ " || v2ray_sts="\033[1;31m✕ "
-        if iptables -t mangle -C OUTPUT -j XRAY_SELF 2>/dev/null; then
-            exit_sts="\033[1;32m✓ "
-        else
-            exit_sts="\033[1;31m✕ "
-        fi
 
         # ── Puerto interno V2Ray (informativo) ────────────────
         ss -tlpn 2>/dev/null | grep -q ":10086 " && \
@@ -1513,7 +1465,6 @@ fun_conexao() {
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m06\033[1;31m] \033[1;33mCLAVE MAESTRA $mk_sts                 \033[0;34m┃"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m08\033[1;31m] \033[1;33mSERVIDOR CONTEO $conteo_sts           \033[0;34m┃"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m09\033[1;31m] \033[1;32mV2RAY VLESS $v2ray_sts(WS + /vless)    \033[0;34m┃"
-        echo -e "\033[0;34m┃\033[1;31m[\033[1;36m10\033[1;31m] \033[1;36mSALIDA AUSTRIA $exit_sts(Doble VPN)    \033[0;34m┃"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m07\033[1;31m] \033[1;33mVOLVER \033[1;32m<<<                          \033[0;34m┃"
         echo -e "\033[0;34m┃\033[1;31m[\033[1;36m00\033[1;31m] \033[1;33mSALIR \033[1;32m<<<                            \033[0;34m┃"
         echo -e "\033[0;34m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
@@ -1530,7 +1481,6 @@ fun_conexao() {
         7|07)  tput reset; menu ;;
         8|08)  tput reset; fun_instalar_conteo ;;
         9|09)  tput reset; fun_v2ray_safe ;;
-        10)    tput reset; fun_exitvpn_safe ;;
         0|00)  tput reset; echo -e "\033[1;31mSaliendo...\033[0m"; sleep 1; exit ;;
         *)     echo -e "\033[1;31mOpción inválida!\033[0m"; sleep 1 ;;
         esac
