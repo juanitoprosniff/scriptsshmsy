@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # encoding: utf-8
-# ssldispatcher.py — Dispatcher SSL inteligente v2
+# ssldispatcher.py — Dispatcher SSL inteligente
 # ─────────────────────────────────────────────────────────────
 # Recibe conexiones ya descifradas de Stunnel y detecta
 # automáticamente si es SSH directo o HTTP/WebSocket,
@@ -55,53 +55,27 @@ def parse_host_port(hostport: str):
     return hostport[:i], int(hostport[i+1:])
 
 
-def relay_bidireccional(client, backend, prefetch=b''):
-    """
-    Relay bidireccional entre client y backend.
-    Si hay datos en prefetch, se envían al backend antes de arrancar
-    el bucle select. Esto evita que el backend espere datos que ya
-    fueron leídos del socket cliente.
-    """
-    stop = threading.Event()
-
-    # Enviar prefetch al backend antes del relay
-    if prefetch:
-        try:
-            backend.sendall(prefetch)
-        except Exception:
-            return
-
-    def _pump(src, dst):
-        try:
-            while not stop.is_set():
-                r, _, e = select.select([src], [], [src, dst], 3)
-                if e:
-                    break
-                if r:
-                    try:
-                        data = src.recv(BUFLEN)
-                        if not data:
-                            break
-                        # Loop de envío completo (evita envíos parciales)
-                        mv = memoryview(data)
-                        sent = 0
-                        while sent < len(data):
-                            n = dst.send(mv[sent:])
-                            if n == 0:
-                                return
-                            sent += n
-                    except Exception:
-                        break
-        finally:
-            stop.set()
-
-    t1 = threading.Thread(target=_pump, args=(client, backend), daemon=True)
-    t2 = threading.Thread(target=_pump, args=(backend, client), daemon=True)
-    t1.start()
-    t2.start()
-    # Esperar a que alguno termine
-    t1.join()
-    t2.join()
+def relay(src, dst, stop_event):
+    """Hilo bidireccional: reenvía datos entre dos sockets."""
+    try:
+        while not stop_event.is_set():
+            r, _, e = select.select([src, dst], [], [src, dst], 3)
+            if e:
+                break
+            for s in r:
+                try:
+                    data = s.recv(BUFLEN)
+                    if not data:
+                        stop_event.set(); return
+                    other = dst if s is src else src
+                    # envío completo con loop
+                    while data:
+                        sent = other.send(data)
+                        data = data[sent:]
+                except Exception:
+                    stop_event.set(); return
+    finally:
+        stop_event.set()
 
 
 class DispatchHandler(threading.Thread):
@@ -111,8 +85,10 @@ class DispatchHandler(threading.Thread):
         super().__init__(daemon=True)
         self.client  = client_sock
         self.addr    = addr
+        self.backend = None
 
-    def _connect_backend(self, hostport: str):
+    # ── Conectar al backend elegido ───────────────────────────
+    def connect_backend(self, hostport: str):
         host, port = parse_host_port(hostport)
         fam, typ, proto, _, address = socket.getaddrinfo(host, port)[0]
         s = socket.socket(fam, typ, proto)
@@ -124,22 +100,19 @@ class DispatchHandler(threading.Thread):
     def run(self):
         backend_sock = None
         try:
-            # 1. Peek del primer fragmento para detectar protocolo.
-            #    Usamos MSG_PEEK para NO consumir los datos del buffer
-            #    del socket — así el backend ve el stream completo.
+            # 1. Leer el primer bloque sin consumir demasiado
             self.client.settimeout(8)
             try:
-                # MSG_PEEK: lee sin consumir el buffer del socket
-                peek_data = self.client.recv(BUFLEN, socket.MSG_PEEK)
+                first_data = self.client.recv(BUFLEN)
             except socket.timeout:
-                peek_data = b''
+                first_data = b''
             self.client.settimeout(None)
 
-            if not peek_data:
+            if not first_data:
                 return
 
-            # 2. Decidir destino según contenido (solo leemos, no consumimos)
-            if is_http(peek_data):
+            # 2. Decidir destino según contenido
+            if is_http(first_data):
                 target = WS_BACKEND
                 label  = 'HTTP/WS'
             else:
@@ -147,14 +120,25 @@ class DispatchHandler(threading.Thread):
                 label  = 'SSH'
 
             # 3. Conectar al backend
-            backend_sock = self._connect_backend(target)
+            backend_sock = self.connect_backend(target)
 
-            # 4. Relay SIN prefetch — los datos siguen en el buffer del socket
-            #    gracias al MSG_PEEK, el backend recibirá el stream completo
-            #    sin que el dispatcher haya "partido" ningún fragmento.
-            relay_bidireccional(self.client, backend_sock, prefetch=b'')
+            # 4. Enviar el bloque inicial ya leído
+            backend_sock.sendall(first_data)
 
-        except Exception:
+            # 5. Relay bidireccional
+            stop = threading.Event()
+            t = threading.Thread(
+                target=relay,
+                args=(self.client, backend_sock, stop),
+                daemon=True
+            )
+            t.start()
+
+            # Esperar hasta que el relay termine
+            while not stop.is_set():
+                stop.wait(timeout=1)
+
+        except Exception as e:
             pass
         finally:
             for s in (self.client, backend_sock):
@@ -174,11 +158,6 @@ class DispatchServer(threading.Thread):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-        # Keep-alive fino para detectar conexiones muertas más rápido
-        if hasattr(socket, 'TCP_KEEPIDLE'):
-            self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE,  30)
-            self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)
-            self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT,    3)
         self.sock.settimeout(2)
         self.sock.bind((LISTENING_ADDR, LISTEN_PORT))
         self.sock.listen(256)
@@ -199,7 +178,7 @@ class DispatchServer(threading.Thread):
 
 
 def main():
-    print("\033[0;34m" + "━" * 8 + "\033[1;32m SSL DISPATCHER v2 \033[0;34m" + "━" * 8)
+    print("\033[0;34m" + "━" * 8 + "\033[1;32m SSL DISPATCHER \033[0;34m" + "━" * 8)
     print("")
     print(f"\033[1;33mPUERTO LISTEN : \033[1;32m{LISTEN_PORT}")
     print(f"\033[1;33mSSH  BACKEND  : \033[1;32m{SSH_BACKEND}")
@@ -207,7 +186,7 @@ def main():
     print("")
     print("\033[0;34m" + "━" * 8 + "\033[1;32m VPSMANAGER \033[0;34m" + "━" * 12 + "\033[0m")
     print("")
-    print("\033[1;33mDetección automática de protocolo (MSG_PEEK):\033[0m")
+    print("\033[1;33mDetección automática de protocolo:\033[0m")
     print("\033[1;37m  HTTP/GET/CONNECT → \033[1;32m" + WS_BACKEND + " (WebSocket/HTTP)")
     print("\033[1;37m  SSH raw          → \033[1;32m" + SSH_BACKEND + " (SSH directo)")
     print("")
