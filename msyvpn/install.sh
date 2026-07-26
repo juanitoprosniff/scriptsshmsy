@@ -17,12 +17,12 @@ echo "[1/9] Dependencias..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y >/dev/null 2>&1
 apt-get install -y haproxy python3 openssl curl wget iproute2 iptables \
-    cron jq sqlite3 net-tools ca-certificates >/dev/null 2>&1
+    cron jq conntrack net-tools ca-certificates >/dev/null 2>&1
 
 # --- 2. Copiar modulos a /etc/msyvpn --------------------------------
 echo "[2/9] Copiando modulos..."
 mkdir -p "$BASE_DIR/bin" "$BASE_DIR/data/senha"
-MODS="lib.sh wsproxy.py proxy.sh v2ray.sh slowdns.sh hysteria.sh users.sh menu master_pubkey.pub"
+MODS="lib.sh wsproxy.py proxy.sh v2ray.sh slowdns.sh hysteria.sh users.sh monitor.sh update.sh menu master_pubkey.pub"
 for m in $MODS; do
     if [[ -f "$SRC_DIR/$m" ]]; then
         cp -f "$SRC_DIR/$m" "$BASE_DIR/$m"
@@ -52,6 +52,7 @@ grep -qx '/bin/false' /etc/shells 2>/dev/null || echo '/bin/false' >> /etc/shell
 grep -qx '/usr/sbin/nologin' /etc/shells 2>/dev/null || echo '/usr/sbin/nologin' >> /etc/shells
 SSH_TUNE='UseDNS no
 Compression no
+DebianBanner no
 TCPKeepAlive yes
 ClientAliveInterval 30
 ClientAliveCountMax 3
@@ -101,7 +102,9 @@ proxy_gen_cert
 
 # --- 6. wsproxy como servicio (auto-reinicio) -----------------------
 echo "[6/9] Servicio wsproxy..."
-printf 'WSPROXY_NAME=MSY VPN\n' > "$BASE_DIR/wsproxy.env"
+# WSPROXY_SSH_BANNER: linea mostrada antes del banner SSH.
+# NO puede empezar con "SSH-" (el cliente la tomaria como la version real).
+[[ -s "$BASE_DIR/wsproxy.env" ]] || printf 'WSPROXY_NAME=MSY VPN\nWSPROXY_COLOR=green\nWSPROXY_SSH_BANNER=MSY_VPN_SCRIPT\n' > "$BASE_DIR/wsproxy.env"
 cat > /etc/systemd/system/msyvpn-wsproxy.service <<EOF
 [Unit]
 Description=MSYVPN WebSocket Proxy (async)
@@ -152,29 +155,31 @@ ln -sf "$BASE_DIR/menu" /usr/bin/menu
 chmod +x /usr/bin/menu
 touch /usr/lib/msyvpn
 
-# --- Auto-activar Hysteria v1 (UDP) ---------------------------------
-echo "[+] Activando Hysteria v1 (UDP juegos/streaming)..."
+# --- Auto-activar Hysteria v1 y v2 (UDP) ----------------------------
+echo "[+] Activando Hysteria UDP (v1 y v2)..."
 source "$BASE_DIR/hysteria.sh"
-hy_install 1 >/dev/null 2>&1 && echo "    Hysteria v1 activo en UDP :$(hy_port)" \
-    || echo "    (Hysteria se puede activar luego desde el menu)"
+hy_install 1 >/dev/null 2>&1 && echo "    Hysteria v1 activo en UDP :$(hy_port 1)" \
+    || echo "    (Hysteria v1 se puede activar luego desde el menu)"
+hy_install 2 >/dev/null 2>&1 && echo "    Hysteria v2 activo en UDP :$(hy_port 2)" \
+    || echo "    (Hysteria v2 se puede activar luego desde el menu)"
 
-# --- TLS con dominio (opcional) -------------------------------------
-read -rp "Activar TLS con tu dominio ahora? [s/N]: " _tls
-if [[ "$_tls" =~ ^[sS]$ ]]; then
-    source "$BASE_DIR/v2ray.sh"
-    read -rp "Dominio (debe apuntar a esta IP): " _dom
-    _dom=$(echo "$_dom" | tr 'A-Z' 'a-z' | xargs)
-    if [[ -n "$_dom" ]]; then
-        echo "$_dom" > "$DATA_DIR/domain"
-        if v2_check_domain "$_dom"; then proxy_cert_real "$_dom"
-        else echo "    Reintenta luego en: menu -> V2Ray -> Activar TLS"; fi
+# En una actualizacion no se vuelve a preguntar nada
+if [[ -z "$MSYVPN_UPDATE" ]]; then
+    read -rp "Activar TLS con tu dominio ahora? [s/N]: " _tls
+    if [[ "$_tls" =~ ^[sS]$ ]]; then
+        source "$BASE_DIR/v2ray.sh"
+        read -rp "Dominio (debe apuntar a esta IP): " _dom
+        _dom=$(echo "$_dom" | tr 'A-Z' 'a-z' | xargs)
+        if [[ -n "$_dom" ]]; then
+            echo "$_dom" > "$DATA_DIR/domain"
+            if v2_check_domain "$_dom"; then proxy_cert_real "$_dom"
+            else echo "    Reintenta luego en: menu -> V2Ray -> Activar TLS"; fi
+        fi
     fi
-fi
-
-# --- SlowDNS (opcional: requiere un NS delegado) --------------------
-read -rp "Configurar SlowDNS ahora? (necesita un NS delegado) [s/N]: " _sd
-if [[ "$_sd" =~ ^[sS]$ ]]; then
-    source "$BASE_DIR/slowdns.sh"; sd_install
+    read -rp "Configurar SlowDNS ahora? (necesita un NS delegado) [s/N]: " _sd
+    if [[ "$_sd" =~ ^[sS]$ ]]; then
+        source "$BASE_DIR/slowdns.sh"; sd_install
+    fi
 fi
 
 echo ""

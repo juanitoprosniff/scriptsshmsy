@@ -73,6 +73,26 @@ EOF
     fi
 }
 
+# Permite fijar un par de claves propio (para no cambiar la config
+# de los clientes ya repartidos). SlowDNS necesita AMBAS: priv y pub.
+sd_set_key() {
+    local priv pub
+    echo "  Las claves son cadenas hexadecimales de 64 caracteres."
+    priv=$(ask 'Clave PRIVADA (server.key): '); priv=$(echo "$priv" | tr -cd '[:xdigit:]')
+    pub=$(ask  'Clave PUBLICA  (server.pub): '); pub=$(echo "$pub" | tr -cd '[:xdigit:]')
+    if [[ ${#priv} -ne 64 || ${#pub} -ne 64 ]]; then
+        err "Claves invalidas (se esperan 64 caracteres hex cada una)"
+        info "Privada: ${#priv} car.  ·  Publica: ${#pub} car."
+        return 1
+    fi
+    mkdir -p "$SD_DIR"
+    printf '%s' "$priv" > "$SD_KEY"
+    printf '%s' "$pub"  > "$SD_PUB"
+    chmod 600 "$SD_KEY"
+    svc_active msyvpn-slowdns && svc_restart msyvpn-slowdns
+    ok "Claves personalizadas instaladas"
+}
+
 sd_info() {
     line
     if [[ -s "$SD_DIR/ns" ]]; then
@@ -101,15 +121,17 @@ sd_menu() {
         sd_info
         echo "  1) Instalar / Reconfigurar"
         echo "  2) Ver datos (NS + clave)"
-        echo "  3) Reaplicar reglas de red"
-        echo "  4) Eliminar"
+        echo "  3) Usar clave personalizada (priv + pub)"
+        echo "  4) Reaplicar reglas de red"
+        echo "  5) Eliminar"
         echo "  0) Volver"
         line
         case "$(ask 'Opcion: ')" in
             1) sd_install; pause ;;
             2) sd_info; pause ;;
-            3) sd_apply_net; ok "Reglas aplicadas"; pause ;;
-            4) sd_remove; pause ;;
+            3) sd_set_key; pause ;;
+            4) sd_apply_net; ok "Reglas aplicadas"; pause ;;
+            5) sd_remove; pause ;;
             0) return ;;
         esac
     done

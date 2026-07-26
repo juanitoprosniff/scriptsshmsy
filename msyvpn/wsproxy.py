@@ -24,23 +24,23 @@ DEFAULT_SSH = sys.argv[2] if len(sys.argv) > 2 else "127.0.0.1:22"
 if ":" not in DEFAULT_SSH:
     DEFAULT_SSH = "127.0.0.1:22"
 
-# Banner: el nombre de la app va coloreado con <font> (lo renderizan las apps).
-# NO se cambia el codigo globalmente (eso rompe los payloads WebSocket).
-# Se responde 101 para el upgrade normal y 200 para metodos CONNECT.
-APP = os.environ.get("WSPROXY_NAME", "MSY VPN")
+# Banner: siempre 101 (lo que esperan los payloads) con el nombre de la
+# app coloreado. Cambiar el codigo rompia los metodos normales, por eso
+# se responde 101 a todo.
+APP   = os.environ.get("WSPROXY_NAME", "MSY VPN")
+COLOR = os.environ.get("WSPROXY_COLOR", "green")
 
-_COLORS = {101: "red", 200: "green", 301: "orange", 302: "orange",
-           400: "yellow", 403: "magenta", 404: "gray", 500: "cyan"}
+RESPONSE = ('HTTP/1.1 101 <font color="%s">%s</font>\r\n\r\n'
+            % (COLOR, APP)).encode()
 
-
-def banner(code):
-    color = _COLORS.get(code, "red")
-    return ('HTTP/1.1 %d <font color="%s">%s</font>\r\n\r\n'
-            % (code, color, APP)).encode()
-
-
-RESP_101 = banner(101)   # upgrade WebSocket (metodo normal)
-RESP_200 = banner(200)   # CONNECT / payloads que esperan 200
+# Linea informativa que se envia ANTES del banner del servidor SSH.
+# El RFC 4253 permite lineas previas al "SSH-..." y los clientes las
+# ignoran, asi que la app muestra este texto sin romper el handshake.
+# Guarda: si empieza por "SSH-" el cliente la tomaria como la version
+# real del servidor y el intercambio de claves fallaria -> se descarta.
+SSH_BANNER = os.environ.get("WSPROXY_SSH_BANNER", "").strip()
+if SSH_BANNER.upper().startswith("SSH-"):
+    SSH_BANNER = SSH_BANNER[4:].lstrip("-") or "MSY_VPN_SCRIPT"
 
 BUFLEN = 65536
 IDLE_TIMEOUT = 600          # segundos sin datos antes de cerrar
@@ -164,9 +164,11 @@ async def handle(cr, cw):
             except asyncio.TimeoutError:
                 buf = b""
 
+            is_ssh = False
             if buf.startswith(b"SSH-"):
                 host, port = parse_hp(DEFAULT_SSH)          # SSH directo
                 first = buf
+                is_ssh = True
             else:
                 route = match_route(buf)
                 if route:
@@ -174,9 +176,12 @@ async def handle(cr, cw):
                     first = buf
                 else:
                     target = find_header(buf, "X-Real-Host") # WebSocket/payload
-                    host, port = parse_hp(target) if target else parse_hp(DEFAULT_SSH)
-                    method = buf.split(b" ", 1)[0].upper() if buf else b""
-                    cw.write(RESP_200 if method == b"CONNECT" else RESP_101)
+                    if target:
+                        host, port = parse_hp(target)
+                    else:
+                        host, port = parse_hp(DEFAULT_SSH)
+                        is_ssh = True
+                    cw.write(RESPONSE)
                     await cw.drain()
                     if find_header(buf, "X-Split"):
                         try:
@@ -190,6 +195,9 @@ async def handle(cr, cw):
             if first:
                 tw.write(first)
                 await tw.drain()
+            if is_ssh and SSH_BANNER:
+                cw.write(SSH_BANNER.encode() + b"\r\n")
+                await cw.drain()
             await relay(cr, cw, tr, tw)
         except Exception:
             pass
