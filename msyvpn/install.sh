@@ -22,7 +22,7 @@ apt-get install -y haproxy python3 openssl curl wget iproute2 iptables \
 # --- 2. Copiar modulos a /etc/msyvpn --------------------------------
 echo "[2/9] Copiando modulos..."
 mkdir -p "$BASE_DIR/bin" "$BASE_DIR/data/senha"
-MODS="lib.sh wsproxy.py proxy.sh v2ray.sh slowdns.sh hysteria.sh users.sh menu"
+MODS="lib.sh wsproxy.py proxy.sh v2ray.sh slowdns.sh hysteria.sh users.sh menu master_pubkey.pub"
 for m in $MODS; do
     if [[ -f "$SRC_DIR/$m" ]]; then
         cp -f "$SRC_DIR/$m" "$BASE_DIR/$m"
@@ -30,20 +30,18 @@ for m in $MODS; do
         wget -q "$REPO_RAW/$m" -O "$BASE_DIR/$m"
     fi
 done
+# Binarios incluidos (amd64) — para otras arquitecturas fetch_bin descarga
 for b in badvpn-udpgw dns-server; do
-    if [[ -f "$SRC_DIR/bin/$b" ]]; then
-        cp -f "$SRC_DIR/bin/$b" "$BASE_DIR/bin/$b"
-    else
-        wget -q "$REPO_RAW/bin/$b" -O "$BASE_DIR/bin/$b"
-    fi
+    [[ -f "$SRC_DIR/bin/$b" ]] && cp -f "$SRC_DIR/bin/$b" "$BASE_DIR/bin/$b"
     chmod +x "$BASE_DIR/bin/$b" 2>/dev/null
 done
 chmod +x "$BASE_DIR"/*.sh "$BASE_DIR"/wsproxy.py "$BASE_DIR"/menu 2>/dev/null
-cp -f "$BASE_DIR/bin/badvpn-udpgw" /usr/bin/badvpn-udpgw 2>/dev/null
-chmod +x /usr/bin/badvpn-udpgw 2>/dev/null
 
 # shellcheck source=/dev/null
 source "$BASE_DIR/lib.sh"
+
+# Binario badvpn segun arquitectura -> /usr/bin
+fetch_bin badvpn-udpgw /usr/bin/badvpn-udpgw || err "badvpn no disponible para $(arch)"
 
 # Guardar IP publica
 get_ip > "$BASE_DIR/ip"
@@ -52,11 +50,7 @@ get_ip > "$BASE_DIR/ip"
 echo "[3/9] Afinando OpenSSH..."
 grep -qx '/bin/false' /etc/shells 2>/dev/null || echo '/bin/false' >> /etc/shells
 grep -qx '/usr/sbin/nologin' /etc/shells 2>/dev/null || echo '/usr/sbin/nologin' >> /etc/shells
-SSHD=/etc/ssh/sshd_config
-sed -i '/# MSYVPN-BEGIN/,/# MSYVPN-END/d' "$SSHD" 2>/dev/null
-cat >> "$SSHD" <<'EOF'
-# MSYVPN-BEGIN (afinado baja latencia)
-UseDNS no
+SSH_TUNE='UseDNS no
 Compression no
 TCPKeepAlive yes
 ClientAliveInterval 30
@@ -64,10 +58,16 @@ ClientAliveCountMax 3
 IPQoS lowdelay throughput
 AllowTcpForwarding yes
 GatewayPorts yes
+PubkeyAuthentication yes
 MaxStartups 100:30:1000
-MaxSessions 20
-# MSYVPN-END
-EOF
+MaxSessions 20'
+if [[ -d /etc/ssh/sshd_config.d ]]; then
+    # Drop-in: no toca sshd_config ni rompe bloques Match (Ubuntu 22+)
+    printf '%s\n' "$SSH_TUNE" > /etc/ssh/sshd_config.d/00-msyvpn.conf
+else
+    sed -i '/# MSYVPN-BEGIN/,/# MSYVPN-END/d' /etc/ssh/sshd_config 2>/dev/null
+    printf '# MSYVPN-BEGIN\n%s\n# MSYVPN-END\n' "$SSH_TUNE" >> /etc/ssh/sshd_config
+fi
 systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null
 
 # --- 4. Kernel: BBR + baja latencia + forwarding --------------------
@@ -101,7 +101,7 @@ proxy_gen_cert
 
 # --- 6. wsproxy como servicio (auto-reinicio) -----------------------
 echo "[6/9] Servicio wsproxy..."
-touch "$BASE_DIR/wsproxy.env"
+printf 'WSPROXY_NAME=MSY VPN\nWSPROXY_CODE=101\n' > "$BASE_DIR/wsproxy.env"
 cat > /etc/systemd/system/msyvpn-wsproxy.service <<EOF
 [Unit]
 Description=MSYVPN WebSocket Proxy (async)
@@ -152,8 +152,21 @@ ln -sf "$BASE_DIR/menu" /usr/bin/menu
 chmod +x /usr/bin/menu
 touch /usr/lib/msyvpn
 
+# --- Auto-activar Hysteria2 (UDP) -----------------------------------
+echo "[+] Activando Hysteria2 (UDP juegos/streaming)..."
+source "$BASE_DIR/hysteria.sh"
+hy_install >/dev/null 2>&1 && echo "    Hysteria2 activo en UDP :$(hy_port)" \
+    || echo "    (Hysteria2 se puede activar luego desde el menu)"
+
+# --- SlowDNS (opcional: requiere un NS delegado) --------------------
+read -rp "Configurar SlowDNS ahora? (necesita un NS delegado) [s/N]: " _sd
+if [[ "$_sd" =~ ^[sS]$ ]]; then
+    source "$BASE_DIR/slowdns.sh"; sd_install
+fi
+
 echo ""
 echo "=== MSYVPN INSTALADO ==="
 echo "IP        : $(cat "$BASE_DIR/ip")"
+[[ -s "$MASTER_PUBKEY" ]] && echo "Clave RSA : instalada (auth por llave activo)"
 echo "Escribe 'menu' para administrar."
 echo ""

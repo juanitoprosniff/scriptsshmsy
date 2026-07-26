@@ -14,6 +14,8 @@ SSH_PORT="22"                    # backend SSH por defecto
 HAPROXY_CFG="/etc/haproxy/haproxy.cfg"
 CERT_PEM="$BASE_DIR/cert.pem"
 ROUTES_CONF="$BASE_DIR/routes.conf"
+MASTER_PUBKEY="$BASE_DIR/master_pubkey.pub"
+APP_NAME="MSY VPN"
 
 mkdir -p "$DATA_DIR" "$SENHA_DIR" 2>/dev/null
 
@@ -37,9 +39,31 @@ arch() {
         x86_64|amd64)  echo "amd64" ;;
         aarch64|arm64) echo "arm64" ;;
         armv7*|armhf)  echo "arm"   ;;
+        armv6*)        echo "armv6" ;;
         i386|i686)     echo "386"   ;;
+        mips64*)       echo "mips64";;
+        s390x)         echo "s390x" ;;
+        riscv64)       echo "riscv64";;
         *)             echo "amd64" ;;
     esac
+}
+
+# Obtiene un binario segun la arquitectura.
+# Uso: fetch_bin <nombre> <destino>
+#   - amd64: usa el binario incluido en bin/ (o lo descarga del repo)
+#   - otras: descarga del repo (bin/<nombre>-<arch>) si existe
+fetch_bin() {
+    local name="$1" dest="$2" a; a=$(arch)
+    if [[ "$a" == "amd64" && -f "$BASE_DIR/bin/$name" ]]; then
+        cp -f "$BASE_DIR/bin/$name" "$dest"
+    elif [[ -f "$BASE_DIR/bin/$name-$a" ]]; then
+        cp -f "$BASE_DIR/bin/$name-$a" "$dest"
+    else
+        wget -q "$REPO_RAW/bin/$name-$a" -O "$dest" 2>/dev/null || \
+        wget -q "$REPO_RAW/bin/$name"    -O "$dest" 2>/dev/null
+    fi
+    [[ -s "$dest" ]] && chmod +x "$dest" && return 0
+    return 1
 }
 
 get_ip() {
