@@ -40,8 +40,8 @@ Al terminar, escribe `menu` para administrar.
 | `menu`        | Menu principal                            |
 | `proxy.sh`    | HAProxy + wsproxy + certificado           |
 | `wsproxy.py`  | Proxy WebSocket/SSH/V2Ray (asyncio)       |
-| `v2ray.sh`    | V2Ray (VLESS/VMess/Trojan)                |
+| `v2ray.sh`    | Xray: VLESS (auto) + VMess/Trojan/SS/Reality/xhttp |
 | `slowdns.sh`  | Tunel DNS SlowDNS                         |
-| `hysteria.sh` | UDP Hysteria (juegos/streaming)           |
+| `hysteria.sh` | UDP Hysteria v1 / v2 (juegos/streaming)   |
 | `users.sh`    | Crear y administrar cuentas               |
 | `bin/`        | Binarios (badvpn-udpgw, dns-server)       |

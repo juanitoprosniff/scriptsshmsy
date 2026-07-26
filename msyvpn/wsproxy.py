@@ -25,8 +25,9 @@ if ":" not in DEFAULT_SSH:
     DEFAULT_SSH = "127.0.0.1:22"
 
 # Banner: el nombre de la app va coloreado con <font> (lo renderizan las apps).
-APP  = os.environ.get("WSPROXY_NAME", "MSY VPN")
-CODE = int(os.environ.get("WSPROXY_CODE", "101"))
+# NO se cambia el codigo globalmente (eso rompe los payloads WebSocket).
+# Se responde 101 para el upgrade normal y 200 para metodos CONNECT.
+APP = os.environ.get("WSPROXY_NAME", "MSY VPN")
 
 _COLORS = {101: "red", 200: "green", 301: "orange", 302: "orange",
            400: "yellow", 403: "magenta", 404: "gray", 500: "cyan"}
@@ -38,7 +39,8 @@ def banner(code):
             % (code, color, APP)).encode()
 
 
-RESPONSE = banner(CODE)
+RESP_101 = banner(101)   # upgrade WebSocket (metodo normal)
+RESP_200 = banner(200)   # CONNECT / payloads que esperan 200
 
 BUFLEN = 65536
 IDLE_TIMEOUT = 600          # segundos sin datos antes de cerrar
@@ -173,7 +175,8 @@ async def handle(cr, cw):
                 else:
                     target = find_header(buf, "X-Real-Host") # WebSocket/payload
                     host, port = parse_hp(target) if target else parse_hp(DEFAULT_SSH)
-                    cw.write(RESPONSE)
+                    method = buf.split(b" ", 1)[0].upper() if buf else b""
+                    cw.write(RESP_200 if method == b"CONNECT" else RESP_101)
                     await cw.drain()
                     if find_header(buf, "X-Split"):
                         try:

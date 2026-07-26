@@ -16,7 +16,7 @@ estado() {
     echo "Carga CPU : $(uptime | awk -F'load average:' '{print $2}')"
     line
     proxy_status
-    svc_active v2ray            && echo "V2Ray         : activo"
+    svc_active xray             && echo "Xray (V2Ray)  : activo"
     svc_active msyvpn-slowdns   && echo "SlowDNS       : activo"
     svc_active msyvpn-hysteria  && echo "Hysteria      : activo"
     line

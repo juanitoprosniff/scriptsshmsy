@@ -81,15 +81,19 @@ v2_rebuild() {
         inb+=$(printf ',{"listen":"0.0.0.0","port":%s,"protocol":"vless","settings":{"clients":[%s],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"show":false,"dest":"%s:443","serverNames":["%s"],"privateKey":"%s","shortIds":["%s"]}}}' "$rport" "$rcl" "$V2_REALITY_DEST" "$V2_REALITY_DEST" "$pk" "$sid")
     fi
 
-    printf '{"log":{"loglevel":"warning"},"inbounds":[%s],"outbounds":[{"protocol":"freedom"}]}' "$inb" > "$XR_CFG.new"
+    # El archivo de prueba DEBE terminar en .json (Xray detecta el formato
+    # por la extension). Se prueba en /tmp para no ensuciar el confdir.
+    local tmp="/tmp/xray_msy_$$.json"
+    printf '{"log":{"loglevel":"warning"},"inbounds":[%s],"outbounds":[{"protocol":"freedom"}]}' "$inb" > "$tmp"
 
     if xr_installed; then
-        if ! ( "$(xr_bin)" test -c "$XR_CFG.new" >/tmp/xr.log 2>&1 || "$(xr_bin)" -test -config "$XR_CFG.new" >/tmp/xr.log 2>&1 ); then
+        if ! ( "$(xr_bin)" test -c "$tmp" >/tmp/xr.log 2>&1 || "$(xr_bin)" run -test -c "$tmp" >/tmp/xr.log 2>&1 ); then
             err "Config Xray invalida — se mantiene la anterior:"; tail -3 /tmp/xr.log
-            rm -f "$XR_CFG.new"; return 1
+            rm -f "$tmp"; return 1
         fi
     fi
-    mv -f "$XR_CFG.new" "$XR_CFG"
+    mkdir -p "$(dirname "$XR_CFG")"
+    mv -f "$tmp" "$XR_CFG"
     v2_write_routes
     return 0
 }
@@ -223,6 +227,42 @@ v2_uninstall() {
     ok "Xray desinstalado"
 }
 
+# ---- Dominio + verificacion de DNS ----------------------------------
+# Comprueba que el dominio apunte a esta VPS (o a Cloudflare).
+v2_check_domain() {
+    local dom="$1" ip dns; ip=$(get_ip)
+    dns=$(getent hosts "$dom" 2>/dev/null | awk '{print $1; exit}')
+    [[ -z "$dns" ]] && dns=$(python3 -c "import socket;print(socket.gethostbyname('$dom'))" 2>/dev/null)
+    if [[ -z "$dns" ]]; then
+        err "El dominio $dom no resuelve todavia (revisa el DNS)."; return 1
+    fi
+    if [[ "$dns" == "$ip" ]]; then
+        ok "Dominio $dom -> $dns  (coincide con esta VPS)"; return 0
+    fi
+    if [[ "$dns" =~ ^(104\.(1[6-9]|2[0-9]|3[01])\.|172\.(6[4-9]|[78][0-9]|9[0-5])\.|188\.114\.|162\.158\.|141\.101\.|173\.245\.) ]]; then
+        info "Dominio $dom -> $dns  (IP de Cloudflare, proxy activo — normal)."; return 0
+    fi
+    err "Dominio $dom -> $dns  pero esta VPS es $ip (no coincide)."
+    info "Corrige el registro A para que apunte a $ip, o usa Cloudflare."
+    return 1
+}
+
+v2_set_domain() {
+    local dom; dom=$(ask 'Dominio (Host/SNI): ')
+    dom=$(echo "$dom" | tr 'A-Z' 'a-z' | xargs)
+    [[ -z "$dom" ]] && return
+    echo "$dom" > "$DATA_DIR/domain"
+    v2_check_domain "$dom"
+}
+
+# Emite el certificado TLS real usando el dominio ya guardado/verificado.
+v2_cert_tls() {
+    local d; d=$(cat "$DATA_DIR/domain" 2>/dev/null)
+    [[ -z "$d" ]] && { err "Primero fija el dominio (opcion 7)"; return; }
+    v2_check_domain "$d" || { info "Corrige el DNS y reintenta."; return; }
+    source "$BASE_DIR/proxy.sh"; proxy_cert_real "$d"
+}
+
 v2_menu() {
     while true; do
         clear; title "V2RAY / XRAY  (VLESS por defecto)"
@@ -234,8 +274,8 @@ v2_menu() {
         echo "  3) Eliminar usuario"
         echo "  4) Ver URIs"
         echo "  5) Protocolos opcionales (VMess/Trojan/SS/Reality/xhttp)"
-        echo "  6) Certificado TLS real (dominio)"
-        echo "  7) Fijar dominio (Host/SNI)"
+        echo "  6) Activar TLS real (dominio verificado)"
+        echo "  7) Fijar/verificar dominio (Host/SNI)"
         echo "  8) Desinstalar"
         echo "  0) Volver"
         line
@@ -245,8 +285,8 @@ v2_menu() {
             3) v2_del_user; pause ;;
             4) v2_uris; pause ;;
             5) v2_protocols_menu ;;
-            6) source "$BASE_DIR/proxy.sh"; proxy_cert_real "$(ask 'Dominio: ')"; pause ;;
-            7) ask 'Dominio: ' > "$DATA_DIR/domain"; ok "Guardado"; pause ;;
+            6) v2_cert_tls; pause ;;
+            7) v2_set_domain; pause ;;
             8) v2_uninstall; pause ;;
             0) return ;;
         esac
