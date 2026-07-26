@@ -101,7 +101,7 @@ proxy_gen_cert
 
 # --- 6. wsproxy como servicio (auto-reinicio) -----------------------
 echo "[6/9] Servicio wsproxy..."
-printf 'WSPROXY_NAME=MSY VPN\nWSPROXY_CODE=101\n' > "$BASE_DIR/wsproxy.env"
+printf 'WSPROXY_NAME=MSY VPN\n' > "$BASE_DIR/wsproxy.env"
 cat > /etc/systemd/system/msyvpn-wsproxy.service <<EOF
 [Unit]
 Description=MSYVPN WebSocket Proxy (async)
@@ -152,11 +152,24 @@ ln -sf "$BASE_DIR/menu" /usr/bin/menu
 chmod +x /usr/bin/menu
 touch /usr/lib/msyvpn
 
-# --- Auto-activar Hysteria2 (UDP) -----------------------------------
-echo "[+] Activando Hysteria2 (UDP juegos/streaming)..."
+# --- Auto-activar Hysteria v1 (UDP) ---------------------------------
+echo "[+] Activando Hysteria v1 (UDP juegos/streaming)..."
 source "$BASE_DIR/hysteria.sh"
-hy_install >/dev/null 2>&1 && echo "    Hysteria2 activo en UDP :$(hy_port)" \
-    || echo "    (Hysteria2 se puede activar luego desde el menu)"
+hy_install 1 >/dev/null 2>&1 && echo "    Hysteria v1 activo en UDP :$(hy_port)" \
+    || echo "    (Hysteria se puede activar luego desde el menu)"
+
+# --- TLS con dominio (opcional) -------------------------------------
+read -rp "Activar TLS con tu dominio ahora? [s/N]: " _tls
+if [[ "$_tls" =~ ^[sS]$ ]]; then
+    source "$BASE_DIR/v2ray.sh"
+    read -rp "Dominio (debe apuntar a esta IP): " _dom
+    _dom=$(echo "$_dom" | tr 'A-Z' 'a-z' | xargs)
+    if [[ -n "$_dom" ]]; then
+        echo "$_dom" > "$DATA_DIR/domain"
+        if v2_check_domain "$_dom"; then proxy_cert_real "$_dom"
+        else echo "    Reintenta luego en: menu -> V2Ray -> Activar TLS"; fi
+    fi
+fi
 
 # --- SlowDNS (opcional: requiere un NS delegado) --------------------
 read -rp "Configurar SlowDNS ahora? (necesita un NS delegado) [s/N]: " _sd

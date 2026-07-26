@@ -8,7 +8,6 @@ PLAIN_FILE="$BASE_DIR/ports.plain"
 TLS_FILE="$BASE_DIR/ports.tls"
 DEF_PLAIN="80 8080 8880 2086"
 DEF_TLS="443 444 8443"
-WS_ENV="$BASE_DIR/wsproxy.env"
 
 _plain_ports() { cat "$PLAIN_FILE" 2>/dev/null || echo "$DEF_PLAIN"; }
 _tls_ports()   { cat "$TLS_FILE"   2>/dev/null || echo "$DEF_TLS"; }
@@ -76,14 +75,6 @@ proxy_del_port() {
     proxy_write_config; ok "Puerto $pt eliminado"
 }
 
-# Cambia el codigo del banner de respuesta (101 rojo / 200 verde)
-proxy_set_code() {
-    local code="$1"; [[ "$code" =~ ^[0-9]+$ ]] || { err "Codigo invalido"; return; }
-    printf 'WSPROXY_NAME=%s\nWSPROXY_CODE=%s\n' "$APP_NAME" "$code" > "$WS_ENV"
-    svc_restart msyvpn-wsproxy
-    ok "Banner en codigo $code"
-}
-
 # Certificado real Let's Encrypt (detiene HAProxy para validar en el 80).
 # Con cert real, V2Ray funciona con allowInsecure ON u OFF.
 proxy_cert_real() {
@@ -127,20 +118,14 @@ proxy_menu() {
         echo "  1) Agregar puerto PLANO (sin TLS)"
         echo "  2) Agregar puerto TLS (SSL)"
         echo "  3) Eliminar puerto"
-        echo "  4) Banner respuesta 101 (rojo)"
-        echo "  5) Banner respuesta 200 (verde)"
-        echo "  6) Certificado real Let's Encrypt (dominio)"
-        echo "  7) Reiniciar proxy"
+        echo "  4) Reiniciar proxy"
         echo "  0) Volver"
         line
         case "$(ask 'Opcion: ')" in
             1) proxy_add_port plain "$(ask 'Puerto plano: ')"; pause ;;
             2) proxy_add_port tls   "$(ask 'Puerto TLS: ')";   pause ;;
             3) proxy_del_port "$(ask 'Puerto a eliminar: ')";  pause ;;
-            4) proxy_set_code 101; pause ;;
-            5) proxy_set_code 200; pause ;;
-            6) proxy_cert_real "$(ask 'Dominio: ')"; pause ;;
-            7) proxy_write_config; svc_restart msyvpn-wsproxy; ok "Reiniciado"; pause ;;
+            4) proxy_write_config; svc_restart msyvpn-wsproxy; ok "Reiniciado"; pause ;;
             0) return ;;
         esac
     done
