@@ -1,31 +1,53 @@
 #!/bin/bash
 # slowdns.sh - Tunel DNS (SlowDNS) sobre UDP 53 -> SSH
-# Usa el binario incluido y corre bajo systemd con auto-reinicio.
+# Corre bajo systemd con auto-reinicio. Reglas NAT aplicadas al instalar.
 [[ -n "$BASE_DIR" ]] || source /etc/msyvpn/lib.sh
 
 SD_DIR="/etc/slowdns"
 SD_BIN="$SD_DIR/dns-server"
 SD_KEY="$SD_DIR/server.key"
 SD_PUB="$SD_DIR/server.pub"
+SD_NAT="$SD_DIR/nat.sh"
+
+# Aplica (idempotente) las reglas de red que SlowDNS necesita.
+sd_apply_net() {
+    # Si systemd-resolved ocupa el 53 en la IP publica, desactivar su stub.
+    if ss -ulnp 2>/dev/null | grep -qE '0\.0\.0\.0:53 |:::53 '; then
+        if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+            mkdir -p /etc/systemd/resolved.conf.d
+            printf '[Resolve]\nDNSStubListener=no\n' > /etc/systemd/resolved.conf.d/msyvpn.conf
+            systemctl restart systemd-resolved 2>/dev/null
+        fi
+    fi
+    # Aceptar UDP 53 y 5300, y redirigir 53 -> 5300
+    iptables -C INPUT -p udp --dport 53   -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport 53   -j ACCEPT
+    iptables -C INPUT -p udp --dport 5300 -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport 5300 -j ACCEPT
+    iptables -t nat -C PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 5300 2>/dev/null || \
+        iptables -t nat -I PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 5300
+    command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi active && ufw allow 53/udp >/dev/null 2>&1
+}
 
 sd_install() {
     local ns port
     ns=$(ask 'Nameserver (ej: ns.tudominio.com): ')
-    [[ -z "$ns" ]] && { err "El NS no puede estar vacio"; return; }
+    [[ -z "$ns" ]] && { err "El NS no puede estar vacio"; return 1; }
     port=$(ask 'Puerto destino [22]: '); [[ "$port" =~ ^[0-9]+$ ]] || port=22
 
     mkdir -p "$SD_DIR"
-    if [[ -f "$BASE_DIR/bin/dns-server" ]]; then
-        cp -f "$BASE_DIR/bin/dns-server" "$SD_BIN"
-    else
-        wget -q "$REPO_RAW/bin/dns-server" -O "$SD_BIN"
-    fi
-    chmod +x "$SD_BIN"
+    fetch_bin dns-server "$SD_BIN" || { err "dns-server no disponible para $(arch)"; return 1; }
 
-    if [[ ! -s "$SD_KEY" || ! -s "$SD_PUB" ]]; then
+    [[ -s "$SD_KEY" && -s "$SD_PUB" ]] || \
         "$SD_BIN" -gen-key -privkey-file "$SD_KEY" -pubkey-file "$SD_PUB" >/dev/null 2>&1
-    fi
     echo "$ns" > "$SD_DIR/ns"
+
+    # Script NAT persistente (lo llama el servicio en cada arranque)
+    cat > "$SD_NAT" <<EOF
+#!/bin/bash
+source /etc/msyvpn/slowdns.sh
+sd_apply_net
+EOF
+    chmod +x "$SD_NAT"
+    sd_apply_net
 
     cat > /etc/systemd/system/msyvpn-slowdns.service <<EOF
 [Unit]
@@ -33,8 +55,7 @@ Description=MSYVPN SlowDNS
 After=network.target
 
 [Service]
-ExecStartPre=-/bin/bash -c 'iptables -C INPUT -p udp --dport 5300 -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport 5300 -j ACCEPT'
-ExecStartPre=-/bin/bash -c 'iptables -t nat -C PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 5300 2>/dev/null || iptables -t nat -I PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 5300'
+ExecStartPre=$SD_NAT
 ExecStart=$SD_BIN -udp :5300 -privkey-file $SD_KEY $ns 127.0.0.1:$port
 Restart=always
 RestartSec=3
@@ -47,6 +68,9 @@ EOF
     svc_restart msyvpn-slowdns
     sleep 1
     sd_info
+    if ! ss -ulnp 2>/dev/null | grep -q ':5300 '; then
+        err "SlowDNS no escucha en 5300. Ver: journalctl -u msyvpn-slowdns -n 20"
+    fi
 }
 
 sd_info() {
@@ -54,7 +78,9 @@ sd_info() {
     if [[ -s "$SD_DIR/ns" ]]; then
         echo "NS          : $(cat "$SD_DIR/ns")"
         echo "Clave pub   : $(cat "$SD_PUB" 2>/dev/null)"
+        ss -ulnp 2>/dev/null | grep -q ':5300 ' && echo "Escucha 5300: si" || echo "Escucha 5300: NO"
         svc_active msyvpn-slowdns && echo "Estado      : activo" || echo "Estado      : inactivo"
+        echo "Recuerda: el NS debe estar delegado (registro NS + A) hacia esta IP."
     else
         echo "SlowDNS no instalado."
     fi
@@ -75,13 +101,15 @@ sd_menu() {
         sd_info
         echo "  1) Instalar / Reconfigurar"
         echo "  2) Ver datos (NS + clave)"
-        echo "  3) Eliminar"
+        echo "  3) Reaplicar reglas de red"
+        echo "  4) Eliminar"
         echo "  0) Volver"
         line
         case "$(ask 'Opcion: ')" in
             1) sd_install; pause ;;
             2) sd_info; pause ;;
-            3) sd_remove; pause ;;
+            3) sd_apply_net; ok "Reglas aplicadas"; pause ;;
+            4) sd_remove; pause ;;
             0) return ;;
         esac
     done

@@ -6,6 +6,24 @@
 source "$BASE_DIR/v2ray.sh"    >/dev/null 2>&1
 source "$BASE_DIR/hysteria.sh" >/dev/null 2>&1
 
+# Instala la clave maestra en el usuario (auth por llave, solo tunel).
+# Asi la app se conecta con la llave y la contrasena no viaja en claro.
+u_install_authkey() {
+    local usr="$1" home="/home/$usr"
+    [[ -s "$MASTER_PUBKEY" ]] || return
+    mkdir -p "$home/.ssh"
+    local opts='no-pty,no-X11-forwarding,no-agent-forwarding,command="/bin/false"'
+    local pub; pub=$(cat "$MASTER_PUBKEY")
+    if [[ "$pub" == ssh-* || "$pub" == ecdsa-* ]]; then
+        echo "$opts $pub" > "$home/.ssh/authorized_keys"
+    else
+        echo "$pub" > "$home/.ssh/authorized_keys"
+    fi
+    chmod 700 "$home" "$home/.ssh"
+    chmod 600 "$home/.ssh/authorized_keys"
+    chown -R "$usr:$usr" "$home"
+}
+
 u_create() {
     local name pass days lim exp gui
     name=$(ask 'Usuario: ')
@@ -18,10 +36,11 @@ u_create() {
     if [[ "$days" -eq 0 ]]; then exp="2099-12-31"; gui="ilimitado"
     else exp=$(date +%Y-%m-%d -d "+$days days"); gui=$(date +%d/%m/%Y -d "+$days days"); fi
 
-    useradd -e "$exp" -M -s /bin/false "$name" >/dev/null 2>&1
+    useradd -e "$exp" -m -s /bin/false "$name" >/dev/null 2>&1
     echo "$name:$pass" | chpasswd 2>/dev/null
     echo "$pass" > "$SENHA_DIR/$name"
     grep -qw "^$name " "$USERS_DB" 2>/dev/null || echo "$name $lim" >> "$USERS_DB"
+    u_install_authkey "$name"
 
     clear; title "CUENTA CREADA"
     echo "IP       : $(get_ip)"
@@ -29,12 +48,14 @@ u_create() {
     echo "Password : $pass"
     echo "Expira   : $gui"
     echo "Limite   : $lim conexiones"
+    [[ -s "$MASTER_PUBKEY" ]] && echo "Auth     : Password + Clave Maestra RSA" \
+                              || echo "Auth     : Solo password"
 
-    # Integracion V2Ray
+    # Integracion V2Ray/Xray
     if v2_installed; then
         local uuid; uuid=$(v2_uuid)
-        echo "$uuid|$name" >> "$V2_DB"
-        v2_rebuild; svc_restart v2ray
+        echo "$uuid|$name" >> "$XR_DB"
+        v2_rebuild && svc_restart xray
         v2_show_one "$uuid" "$name"
     fi
     # Integracion Hysteria
@@ -49,8 +70,8 @@ u_remove() {
     userdel -r "$name" >/dev/null 2>&1
     rm -f "$SENHA_DIR/$name"
     sed -i "/^$name /d" "$USERS_DB" 2>/dev/null
-    sed -i "/|$name$/d" "$V2_DB" 2>/dev/null
-    v2_installed && { v2_rebuild; svc_restart v2ray; }
+    sed -i "/|$name$/d" "$XR_DB" 2>/dev/null
+    v2_installed && { v2_rebuild && svc_restart xray; }
     hy_add_user
     ok "Usuario $name eliminado"
 }
@@ -85,6 +106,17 @@ u_list() {
     line
 }
 
+# Reinstala la clave maestra en todas las cuentas existentes
+u_reinstall_keys() {
+    [[ -s "$MASTER_PUBKEY" ]] || { err "No hay clave maestra en $MASTER_PUBKEY"; return; }
+    local u n=0
+    while read -r u _; do
+        [[ -z "$u" ]] && continue
+        id "$u" >/dev/null 2>&1 && { u_install_authkey "$u"; n=$((n+1)); }
+    done < <(cat "$USERS_DB" 2>/dev/null)
+    ok "Clave maestra reinstalada en $n cuentas"
+}
+
 u_menu() {
     while true; do
         clear
@@ -94,6 +126,7 @@ u_menu() {
         echo "  3) Cambiar contrasena"
         echo "  4) Renovar dias"
         echo "  5) Listar usuarios"
+        echo "  6) Reinstalar clave maestra en todos"
         echo "  0) Volver"
         line
         case "$(ask 'Opcion: ')" in
@@ -102,6 +135,7 @@ u_menu() {
             3) u_passwd; pause ;;
             4) u_renew;  pause ;;
             5) u_list;   pause ;;
+            6) u_reinstall_keys; pause ;;
             0) return ;;
         esac
     done

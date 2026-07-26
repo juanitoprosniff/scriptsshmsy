@@ -24,8 +24,21 @@ DEFAULT_SSH = sys.argv[2] if len(sys.argv) > 2 else "127.0.0.1:22"
 if ":" not in DEFAULT_SSH:
     DEFAULT_SSH = "127.0.0.1:22"
 
-STATUS = os.environ.get("WSPROXY_STATUS", "")
-RESPONSE = ("HTTP/1.1 101 " + STATUS + "\r\n\r\n").encode()
+# Banner: el nombre de la app va coloreado con <font> (lo renderizan las apps).
+APP  = os.environ.get("WSPROXY_NAME", "MSY VPN")
+CODE = int(os.environ.get("WSPROXY_CODE", "101"))
+
+_COLORS = {101: "red", 200: "green", 301: "orange", 302: "orange",
+           400: "yellow", 403: "magenta", 404: "gray", 500: "cyan"}
+
+
+def banner(code):
+    color = _COLORS.get(code, "red")
+    return ('HTTP/1.1 %d <font color="%s">%s</font>\r\n\r\n'
+            % (code, color, APP)).encode()
+
+
+RESPONSE = banner(CODE)
 
 BUFLEN = 65536
 IDLE_TIMEOUT = 600          # segundos sin datos antes de cerrar
