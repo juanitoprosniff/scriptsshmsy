@@ -69,8 +69,16 @@ hy_write_v2() {
         up+="    ${line%%:*}: \"${line#*:}\""$'\n'
     done < <(hy_userlist)
     [[ -z "$up" ]] && up='    test: "1234msy"'
+    # API local de estadisticas: permite contar usuarios online exactos
+    [[ -s "$HY_DIR/apisecret" ]] || openssl rand -hex 12 > "$HY_DIR/apisecret"
+    [[ -s "$HY_DIR/apiport"   ]] || echo 27998 > "$HY_DIR/apiport"
+    local asec aport
+    asec=$(cat "$HY_DIR/apisecret"); aport=$(cat "$HY_DIR/apiport")
     cat > "$HY_DIR/config.yaml" <<YAML
 listen: ":$(hy_port 2)"
+trafficStats:
+  listen: 127.0.0.1:$aport
+  secret: $asec
 tls:
   cert: $HY_CERT
   key: $HY_KEY

@@ -48,9 +48,50 @@ MAX_CONNS = 8000            # tope de conexiones simultaneas
 HEADER_WAIT = 8             # segundos para leer la primera peticion
 
 ROUTES_PATH = "/etc/msyvpn/routes.conf"
+STATS_PATH = "/etc/msyvpn/data/stats.json"
+STATS_EVERY = 5             # segundos entre escrituras del archivo de stats
+
 _routes = []                # lista de (path, host, port)
 _routes_mtime = 0
 _sem = None                 # se crea dentro del loop (compat 3.6+)
+
+# Conteo exacto: por categoria, {ip: nº de conexiones abiertas}
+_live = {"ssh": {}, "v2ray": {}}
+
+
+def _track(cat, ip, delta):
+    """Suma/resta una conexion de esa IP en la categoria indicada."""
+    if not ip:
+        return
+    d = _live.get(cat)
+    if d is None:
+        return
+    n = d.get(ip, 0) + delta
+    if n > 0:
+        d[ip] = n
+    else:
+        d.pop(ip, None)
+
+
+def read_proxy_header(buf):
+    """Extrae la IP real del header PROXY (v1) que envia HAProxy.
+
+    Devuelve (ip, resto_del_buffer). Si no hay header, (None, buf), asi
+    que el proxy sigue funcionando aunque HAProxy no lo mande.
+    """
+    if not buf.startswith(b"PROXY "):
+        return None, buf
+    i = buf.find(b"\r\n")
+    if i == -1:
+        return None, buf
+    parts = buf[:i].split(b" ")
+    rest = buf[i + 2:]
+    if len(parts) >= 3:
+        try:
+            return parts[2].decode("latin-1"), rest
+        except Exception:
+            return None, rest
+    return None, rest
 
 
 def load_routes():
@@ -157,12 +198,22 @@ async def handle(cr, cw):
         return
     async with _sem:
         tw = None
+        cat = ip = None
+        tracked = False
         try:
             load_routes()
             try:
                 buf = await asyncio.wait_for(cr.read(BUFLEN), HEADER_WAIT)
             except asyncio.TimeoutError:
                 buf = b""
+
+            # IP real del cliente (HAProxy la envia con send-proxy)
+            ip, buf = read_proxy_header(buf)
+            if not buf:
+                try:
+                    buf = await asyncio.wait_for(cr.read(BUFLEN), HEADER_WAIT)
+                except asyncio.TimeoutError:
+                    buf = b""
 
             is_ssh = False
             if buf.startswith(b"SSH-"):
@@ -174,6 +225,7 @@ async def handle(cr, cw):
                 if route:
                     host, port = route                       # V2Ray crudo
                     first = buf
+                    cat = "v2ray"
                 else:
                     target = find_header(buf, "X-Real-Host") # WebSocket/payload
                     if target:
@@ -190,8 +242,13 @@ async def handle(cr, cw):
                             pass
                     first = b""
 
+            if cat is None and is_ssh:
+                cat = "ssh"
+
             tr, tw = await asyncio.wait_for(
                 asyncio.open_connection(host, port), 10)
+            _track(cat, ip, 1)
+            tracked = True
             if first:
                 tw.write(first)
                 await tw.drain()
@@ -202,6 +259,8 @@ async def handle(cr, cw):
         except Exception:
             pass
         finally:
+            if tracked:
+                _track(cat, ip, -1)
             for w in (cw, tw):
                 try:
                     if w:
@@ -210,12 +269,32 @@ async def handle(cr, cw):
                     pass
 
 
+async def stats_writer():
+    """Guarda el conteo real (IPs unicas y conexiones) para el menu."""
+    tmp = STATS_PATH + ".tmp"
+    while True:
+        await asyncio.sleep(STATS_EVERY)
+        try:
+            data = {}
+            for cat, d in _live.items():
+                data[cat + "_ips"] = len(d)
+                data[cat + "_conns"] = sum(d.values())
+            os.makedirs(os.path.dirname(STATS_PATH), exist_ok=True)
+            with open(tmp, "w") as f:
+                f.write("{%s}" % ", ".join(
+                    '"%s": %d' % (k, v) for k, v in sorted(data.items())))
+            os.rename(tmp, STATS_PATH)
+        except Exception:
+            pass
+
+
 def run():
     # Patron portable (Python 3.6 -> 3.13): sin asyncio.run ni serve_forever
     global _sem
     loop = asyncio.get_event_loop()
     _sem = asyncio.Semaphore(MAX_CONNS)
     load_routes()
+    loop.create_task(stats_writer()) if hasattr(loop, "create_task") else None
     server = loop.run_until_complete(
         asyncio.start_server(handle, "127.0.0.1", LISTEN_PORT))
     print("wsproxy async en 127.0.0.1:%d -> %s" % (LISTEN_PORT, DEFAULT_SSH))
