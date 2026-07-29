@@ -83,8 +83,13 @@ v2_rebuild() {
 
     # El archivo de prueba DEBE terminar en .json (Xray detecta el formato
     # por la extension). Se prueba en /tmp para no ensuciar el confdir.
+    # domainStrategy decide por que IP sale el trafico (geolocalizacion).
+    # UseIPv6v4 = IPv6 primero, IPv4 solo si el destino no tiene IPv6.
+    local dstr="UseIPv4"
+    prefer_ipv6 && dstr="UseIPv6v4"
     local tmp="/tmp/xray_msy_$$.json"
-    printf '{"log":{"loglevel":"warning"},"inbounds":[%s],"outbounds":[{"protocol":"freedom"}]}' "$inb" > "$tmp"
+    printf '{"log":{"loglevel":"warning"},"inbounds":[%s],"outbounds":[{"protocol":"freedom","settings":{"domainStrategy":"%s"}}]}' \
+        "$inb" "$dstr" > "$tmp"
 
     if xr_installed; then
         if ! ( "$(xr_bin)" test -c "$tmp" >/tmp/xr.log 2>&1 || "$(xr_bin)" run -test -c "$tmp" >/tmp/xr.log 2>&1 ); then

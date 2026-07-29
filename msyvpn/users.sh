@@ -9,10 +9,15 @@ source "$BASE_DIR/hysteria.sh" >/dev/null 2>&1
 # Instala la clave maestra en el usuario (auth por llave, solo tunel).
 # Asi la app se conecta con la llave y la contrasena no viaja en claro.
 u_install_authkey() {
-    local usr="$1" home="/home/$usr"
+    local usr="$1" home
+    home=$(getent passwd "$usr" | cut -d: -f6)
+    [[ -z "$home" ]] && home="/home/$usr"
     [[ -s "$MASTER_PUBKEY" ]] || return
     mkdir -p "$home/.ssh"
-    local opts='no-pty,no-X11-forwarding,no-agent-forwarding,command="/bin/false"'
+    # Sin command="/bin/false": esa opcion ejecuta un comando que termina
+    # al instante y cierra la sesion, tumbando el tunel de la app.
+    # Se permite solo reenvio de puertos, que es lo que necesita la VPN.
+    local opts='no-pty,no-X11-forwarding,no-agent-forwarding'
     local pub; pub=$(cat "$MASTER_PUBKEY")
     if [[ "$pub" == ssh-* || "$pub" == ecdsa-* ]]; then
         echo "$opts $pub" > "$home/.ssh/authorized_keys"
@@ -117,6 +122,43 @@ u_reinstall_keys() {
     ok "Clave maestra reinstalada en $n cuentas"
 }
 
+# Diagnostico de la clave maestra: revisa los puntos donde suele fallar
+u_check_key() {
+    local usr="$1" home ok=1
+    line
+    if [[ -s "$MASTER_PUBKEY" ]]; then
+        ok "Clave maestra presente: $(awk '{print $1}' "$MASTER_PUBKEY")"
+    else
+        err "Falta la clave maestra en $MASTER_PUBKEY"; ok=0
+    fi
+    # ssh-rsa desactivado es la causa mas comun en Ubuntu 22/24
+    local sshd; sshd=$(command -v sshd || echo /usr/sbin/sshd)
+    if [[ -x "$sshd" ]]; then
+        if "$sshd" -T 2>/dev/null | grep -qi 'pubkeyacceptedalgorithms.*ssh-rsa\|pubkeyacceptedkeytypes.*ssh-rsa'; then
+            ok "sshd acepta claves ssh-rsa"
+        else
+            err "sshd NO acepta ssh-rsa (OpenSSH 8.8+ lo desactiva)"
+            info "Se arregla reinstalando/actualizando el script."; ok=0
+        fi
+        "$sshd" -T 2>/dev/null | grep -qi '^pubkeyauthentication yes' \
+            && ok "PubkeyAuthentication activo" || { err "PubkeyAuthentication desactivado"; ok=0; }
+    fi
+    if [[ -n "$usr" ]]; then
+        home=$(getent passwd "$usr" | cut -d: -f6)
+        if [[ -s "$home/.ssh/authorized_keys" ]]; then
+            ok "authorized_keys de $usr instalado"
+            grep -q 'command=' "$home/.ssh/authorized_keys" && \
+                err "Tiene command= forzado: cierra el tunel. Usa la opcion 6."
+            local p; p=$(stat -c '%a %U' "$home/.ssh/authorized_keys" 2>/dev/null)
+            info "Permisos: $p (debe ser 600 $usr)"
+        else
+            err "$usr no tiene authorized_keys — usa la opcion 6"; ok=0
+        fi
+    fi
+    line
+    [[ $ok == 1 ]] && ok "Todo correcto" || err "Revisa los puntos marcados"
+}
+
 u_menu() {
     while true; do
         clear
@@ -127,6 +169,7 @@ u_menu() {
         echo "  4) Renovar dias"
         echo "  5) Listar usuarios"
         echo "  6) Reinstalar clave maestra en todos"
+        echo "  7) Diagnosticar clave maestra"
         echo "  0) Volver"
         line
         case "$(ask 'Opcion: ')" in
@@ -136,6 +179,7 @@ u_menu() {
             4) u_renew;  pause ;;
             5) u_list;   pause ;;
             6) u_reinstall_keys; pause ;;
+            7) u_check_key "$(ask 'Usuario a revisar (ENTER omite): ')"; pause ;;
             0) return ;;
         esac
     done
