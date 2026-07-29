@@ -50,7 +50,8 @@ EOF
     default_backend bk_ws
 
 backend bk_ws
-    server ws 127.0.0.1:$WSPROXY_INTERNAL
+    # send-proxy: pasa la IP real del cliente al wsproxy (conteo exacto)
+    server ws 127.0.0.1:$WSPROXY_INTERNAL send-proxy
 EOF
     } > "$HAPROXY_CFG"
     for p in $(_plain_ports) $(_tls_ports); do open_port "$p" tcp; done
