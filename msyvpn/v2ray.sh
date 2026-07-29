@@ -9,6 +9,8 @@ XR_DB="$DATA_DIR/xray.db"          # uuid|alias
 XR_UUID="$DATA_DIR/xray.uuid"      # uuid por defecto persistente
 XR_ON="$DATA_DIR/xray.on"          # protocolos activos (vless siempre)
 XR_SS="$DATA_DIR/xray.sspass"
+XR_V6X="$DATA_DIR/v6exit"          # salida IPv6 transparente activada
+V2_V6X_PORT=12346                  # puerto local del proxy transparente
 XR_RPORT="$DATA_DIR/xray.rport"
 XR_RKEYS="$DATA_DIR/xray.reality"  # privkey|pubkey|shortid
 
@@ -63,6 +65,11 @@ v2_rebuild() {
     fi
     if xr_is_on xhttp; then
         inb+=$(printf ',{"listen":"127.0.0.1","port":%s,"protocol":"vless","settings":{"clients":[%s],"decryption":"none"},"streamSettings":{"network":"xhttp","xhttpSettings":{"path":"%s"}}}' "$V2_XH_PORT" "$vless" "$V2_XH_PATH")
+    fi
+    # Proxy transparente para dar salida IPv6 a SSH/UDP: lee el dominio
+    # del SNI (sniffing) y lo resuelve por IPv6, igual que hace VLESS.
+    if [[ "$(cat "$XR_V6X" 2>/dev/null)" == "1" ]]; then
+        inb+=$(printf ',{"listen":"127.0.0.1","port":%s,"protocol":"dokodemo-door","settings":{"network":"tcp","followRedirect":true},"sniffing":{"enabled":true,"destOverride":["http","tls"]}}' "$V2_V6X_PORT")
     fi
     if xr_is_on ss; then
         local sp; sp=$(cat "$XR_SS" 2>/dev/null || { openssl rand -hex 8 | tee "$XR_SS"; })
