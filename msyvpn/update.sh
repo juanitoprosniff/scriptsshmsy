@@ -5,7 +5,7 @@
 [[ -n "$BASE_DIR" ]] || source /etc/msyvpn/lib.sh
 
 MSY_SERVICES="msyvpn-wsproxy msyvpn-badvpn msyvpn-hysteria1 msyvpn-hysteria2 msyvpn-slowdns haproxy xray"
-MSY_MODULES="lib.sh wsproxy.py proxy.sh v2ray.sh slowdns.sh hysteria.sh users.sh monitor.sh update.sh menu install.sh master_pubkey.pub"
+MSY_MODULES="VERSION lib.sh wsproxy.py proxy.sh v2ray.sh slowdns.sh hysteria.sh users.sh monitor.sh update.sh menu install.sh master_pubkey.pub"
 
 msy_stop_all() {
     local s

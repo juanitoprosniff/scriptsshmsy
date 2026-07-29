@@ -30,7 +30,7 @@ estado() {
 
 while true; do
     clear
-    title "MSYVPN  -  PANEL VPN"
+    title "MSYVPN $(cat /etc/msyvpn/VERSION 2>/dev/null)  -  PANEL VPN"
     echo "IP: $(get_ip)   |   'menu' para volver aqui"
     line
     echo "  1) Usuarios / Cuentas"

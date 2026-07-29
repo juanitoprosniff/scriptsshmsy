@@ -175,6 +175,41 @@ speed_test() {
     ping -c 3 -W 2 1.1.1.1 2>/dev/null | tail -1 || echo "  (ping no disponible)"
 }
 
+# --- Geolocalizacion de salida --------------------------------------
+# Consulta como te ve internet por IPv4 y por IPv6. Sirve para saber
+# que pais reporta cada familia de direcciones.
+_geo_of() {
+    local fam="$1" j
+    j=$(curl -s "$fam" --max-time 8 https://ifconfig.co/json 2>/dev/null)
+    [[ -z "$j" ]] && j=$(curl -s "$fam" --max-time 8 https://ipinfo.io/json 2>/dev/null)
+    [[ -z "$j" ]] && { echo "sin respuesta"; return; }
+    local ip pais ciudad
+    ip=$(echo "$j"     | grep -o '"ip"[^,]*'      | head -1 | cut -d'"' -f4)
+    pais=$(echo "$j"   | grep -o '"country[^,]*'  | head -1 | cut -d'"' -f4)
+    ciudad=$(echo "$j" | grep -o '"city"[^,]*'    | head -1 | cut -d'"' -f4)
+    echo "${ip:-?}  ->  ${pais:-?} ${ciudad:+/ $ciudad}"
+}
+
+geo_check() {
+    clear; title "GEOLOCALIZACION DE SALIDA"
+    prefer_ipv6 && echo "  Preferencia configurada : IPv6" \
+                || echo "  Preferencia configurada : IPv4"
+    line
+    echo "  Saliendo por IPv4:"
+    echo "    $(_geo_of -4)"
+    echo ""
+    echo "  Saliendo por IPv6:"
+    echo "    $(_geo_of -6)"
+    line
+    echo "  Por defecto (lo que decide el sistema):"
+    echo "    $(_geo_of '')"
+    line
+    echo "  Un destino solo-IPv4 obliga a salir por IPv4: en ese caso"
+    echo "  se ve el pais de tu IPv4 aunque prefieras IPv6."
+    echo "  Para que un protocolo salga por IPv6, la app debe enviar el"
+    echo "  DOMINIO (DNS remoto), no una IP ya resuelta."
+}
+
 mon_menu() {
     while true; do
         clear
@@ -182,12 +217,14 @@ mon_menu() {
         echo "  1) Ver usuarios online"
         echo "  2) Monitor en vivo (ancho de banda)"
         echo "  3) Test de velocidad (speedtest)"
+        echo "  4) Geolocalizacion de salida (IPv4 / IPv6)"
         echo "  0) Volver"
         line
         case "$(ask 'Opcion: ')" in
             1) mon_show; pause ;;
             2) mon_live ;;
             3) speed_test; pause ;;
+            4) geo_check; pause ;;
             0) return ;;
         esac
     done
