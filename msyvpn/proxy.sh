@@ -103,9 +103,48 @@ proxy_cert_real() {
     fi
 }
 
+# Cambia la salida a internet entre IPv6 e IPv4 y lo aplica a todo
+# (sistema, Xray e Hysteria) para que la geolocalizacion sea la correcta.
+proxy_set_ipvpref() {
+    local pref="$1"
+    if [[ "$pref" == 6 ]] && ! has_ipv6; then
+        err "Esta VPS no tiene IPv6 global asignada."
+        info "Actívala en el panel de tu proveedor y vuelve a intentar."
+        return 1
+    fi
+    net_apply_pref "$pref"
+    # Reconstruir configs que llevan la preferencia dentro
+    if declare -F v2_rebuild >/dev/null 2>&1 && [[ -n "$(command -v xray)" ]]; then
+        v2_rebuild && svc_restart xray
+    fi
+    if declare -F hy_add_user >/dev/null 2>&1; then hy_add_user; fi
+    if [[ "$pref" == 6 ]]; then
+        ok "Salida preferente por IPv6: $(get_ip6)"
+        info "Comprueba con: curl -s https://ifconfig.co"
+    else
+        ok "Salida preferente por IPv4: $(get_ip)"
+    fi
+}
+
+# Activa/desactiva la linea que se muestra antes del banner SSH
+proxy_toggle_sshbanner() {
+    local env="$BASE_DIR/wsproxy.env"
+    if grep -q '^WSPROXY_SSH_BANNER=.\+' "$env" 2>/dev/null; then
+        sed -i 's|^WSPROXY_SSH_BANNER=.*|WSPROXY_SSH_BANNER=|' "$env"
+        ok "Banner SSH desactivado"
+    else
+        sed -i '/^WSPROXY_SSH_BANNER=/d' "$env" 2>/dev/null
+        echo "WSPROXY_SSH_BANNER=MSY_VPN_SCRIPT" >> "$env"
+        ok "Banner SSH activado"
+    fi
+    svc_restart msyvpn-wsproxy
+}
+
 proxy_status() {
     echo "Puertos plano : $(_plain_ports)"
     echo "Puertos TLS   : $(_tls_ports)"
+    if prefer_ipv6; then echo "Salida        : IPv6 ($(get_ip6))"
+    else echo "Salida        : IPv4 ($(get_ip))"; fi
     svc_active haproxy        && echo "HAProxy       : activo" || echo "HAProxy       : inactivo"
     svc_active msyvpn-wsproxy && echo "wsproxy       : activo" || echo "wsproxy       : inactivo"
     svc_active msyvpn-badvpn  && echo "BadVPN UDP    : activo" || echo "BadVPN UDP    : inactivo"
@@ -119,14 +158,20 @@ proxy_menu() {
         echo "  1) Agregar puerto PLANO (sin TLS)"
         echo "  2) Agregar puerto TLS (SSL)"
         echo "  3) Eliminar puerto"
-        echo "  4) Reiniciar proxy"
+        echo "  4) Salida a internet por IPv6 (geolocalizacion)"
+        echo "  5) Salida a internet por IPv4"
+        echo "  6) Activar/desactivar banner SSH"
+        echo "  7) Reiniciar proxy"
         echo "  0) Volver"
         line
         case "$(ask 'Opcion: ')" in
             1) proxy_add_port plain "$(ask 'Puerto plano: ')"; pause ;;
             2) proxy_add_port tls   "$(ask 'Puerto TLS: ')";   pause ;;
             3) proxy_del_port "$(ask 'Puerto a eliminar: ')";  pause ;;
-            4) proxy_write_config; svc_restart msyvpn-wsproxy; ok "Reiniciado"; pause ;;
+            4) proxy_set_ipvpref 6; pause ;;
+            5) proxy_set_ipvpref 4; pause ;;
+            6) proxy_toggle_sshbanner; pause ;;
+            7) proxy_write_config; svc_restart msyvpn-wsproxy; ok "Reiniciado"; pause ;;
             0) return ;;
         esac
     done

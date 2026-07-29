@@ -46,13 +46,23 @@ fetch_bin badvpn-udpgw /usr/bin/badvpn-udpgw || err "badvpn no disponible para $
 # Guardar IP publica
 get_ip > "$BASE_DIR/ip"
 
+# Salida a internet: si la VPS tiene IPv6 se prefiere (geolocalizacion
+# correcta). Se puede cambiar luego en: menu -> Proxy/SSL
+if [[ ! -f "$IPV6_PREF_FILE" ]]; then
+    if has_ipv6; then
+        net_apply_pref 6
+        echo "    Salida preferente: IPv6 ($(get_ip6))"
+    else
+        net_apply_pref 4
+    fi
+fi
+
 # --- 3. Afinar OpenSSH (buen ping) ----------------------------------
 echo "[3/9] Afinando OpenSSH..."
 grep -qx '/bin/false' /etc/shells 2>/dev/null || echo '/bin/false' >> /etc/shells
 grep -qx '/usr/sbin/nologin' /etc/shells 2>/dev/null || echo '/usr/sbin/nologin' >> /etc/shells
-SSH_TUNE='UseDNS no
+SSH_BASE='UseDNS no
 Compression no
-DebianBanner no
 TCPKeepAlive yes
 ClientAliveInterval 30
 ClientAliveCountMax 3
@@ -60,14 +70,64 @@ IPQoS lowdelay throughput
 AllowTcpForwarding yes
 GatewayPorts yes
 PubkeyAuthentication yes
-MaxStartups 100:30:1000
-MaxSessions 20'
-if [[ -d /etc/ssh/sshd_config.d ]]; then
-    # Drop-in: no toca sshd_config ni rompe bloques Match (Ubuntu 22+)
-    printf '%s\n' "$SSH_TUNE" > /etc/ssh/sshd_config.d/00-msyvpn.conf
-else
+PasswordAuthentication yes
+MaxStartups 200:30:2000
+MaxSessions 50'
+
+# Compatibilidad con apps VPN y claves RSA antiguas: OpenSSH 8.8+
+# desactiva las firmas ssh-rsa (SHA-1) y eso rompe la clave maestra y
+# muchos clientes. El nombre de la directiva cambio en OpenSSH 8.5, por
+# eso se prueban dos variantes y se valida antes de aplicar.
+SSH_LEGACY_NEW='DebianBanner no
+PubkeyAcceptedAlgorithms +ssh-rsa,rsa-sha2-256,rsa-sha2-512
+CASignatureAlgorithms +ssh-rsa
+HostKeyAlgorithms +ssh-rsa
+KexAlgorithms +diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1,diffie-hellman-group1-sha1
+Ciphers +aes128-cbc,aes256-cbc,3des-cbc
+MACs +hmac-sha1,hmac-sha1-96'
+
+SSH_LEGACY_OLD='PubkeyAcceptedKeyTypes +ssh-rsa
+HostKeyAlgorithms +ssh-rsa
+KexAlgorithms +diffie-hellman-group14-sha1,diffie-hellman-group1-sha1
+Ciphers +aes128-cbc,aes256-cbc,3des-cbc
+MACs +hmac-sha1'
+
+_ssh_write() {   # $1 = contenido completo
+    if [[ -d /etc/ssh/sshd_config.d ]] && \
+       grep -qE '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d' /etc/ssh/sshd_config 2>/dev/null; then
+        printf '%s\n' "$1" > /etc/ssh/sshd_config.d/00-msyvpn.conf
+    else
+        sed -i '/# MSYVPN-BEGIN/,/# MSYVPN-END/d' /etc/ssh/sshd_config 2>/dev/null
+        printf '# MSYVPN-BEGIN\n%s\n# MSYVPN-END\n' "$1" >> /etc/ssh/sshd_config
+    fi
+}
+_ssh_clear() {
+    rm -f /etc/ssh/sshd_config.d/00-msyvpn.conf 2>/dev/null
     sed -i '/# MSYVPN-BEGIN/,/# MSYVPN-END/d' /etc/ssh/sshd_config 2>/dev/null
-    printf '# MSYVPN-BEGIN\n%s\n# MSYVPN-END\n' "$SSH_TUNE" >> /etc/ssh/sshd_config
+}
+
+SSHD_BIN=$(command -v sshd || echo /usr/sbin/sshd)
+_sshd_ok() { [[ -x "$SSHD_BIN" ]] && "$SSHD_BIN" -t 2>/dev/null; }
+
+# Se valida con "sshd -t" y se retrocede si la config no sirve, para no
+# dejar nunca el servidor SSH sin arrancar (quedarias fuera de la VPS).
+_ssh_clear
+if [[ ! -x "$SSHD_BIN" ]]; then
+    # Sin binario para validar: solo directivas estandar, seguras en
+    # cualquier version.
+    _ssh_write "$SSH_BASE"
+    echo "    SSH: ajustes basicos (sshd no encontrado para validar)"
+elif _ssh_write "$SSH_BASE
+$SSH_LEGACY_NEW" && _sshd_ok; then
+    echo "    SSH: compatibilidad RSA activada (formato nuevo)"
+elif _ssh_write "$SSH_BASE
+$SSH_LEGACY_OLD" && _sshd_ok; then
+    echo "    SSH: compatibilidad RSA activada (formato antiguo)"
+elif _ssh_write "$SSH_BASE" && _sshd_ok; then
+    echo "    SSH: ajustes basicos (sin bloque de compatibilidad)"
+else
+    _ssh_clear
+    echo "    SSH: se conservo la configuracion original (no se pudo validar)"
 fi
 systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null
 
@@ -87,6 +147,9 @@ net.core.somaxconn=8192
 net.core.netdev_max_backlog=5000
 net.ipv4.tcp_max_syn_backlog=8192
 net.ipv4.ip_forward=1
+net.ipv6.conf.all.disable_ipv6=0
+net.ipv6.conf.default.disable_ipv6=0
+net.ipv6.conf.all.forwarding=1
 net.core.rmem_max=8388608
 net.core.wmem_max=8388608
 net.ipv4.tcp_rmem=4096 87380 8388608

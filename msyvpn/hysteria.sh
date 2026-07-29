@@ -57,6 +57,7 @@ hy_write_v1() {
   "disable_udp": false,
   "insecure": true,
   "obfs": "$(hy_obfs 1)",
+  "resolve_preference": "$(prefer_ipv6 && echo 64 || echo 46)",
   "auth": { "mode": "passwords", "config": [$arr] }
 }
 JSON
@@ -98,6 +99,11 @@ masquerade:
 bandwidth:
   up: 1 gbps
   down: 1 gbps
+outbounds:
+  - name: salida
+    type: direct
+    direct:
+      mode: $(prefer_ipv6 && echo 64 || echo 46)
 YAML
 }
 
