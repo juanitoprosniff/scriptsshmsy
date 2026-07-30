@@ -35,14 +35,26 @@ msy_update() {
 
     echo ""
     info "Descargando version nueva..."
-    local m fails=0
-    for m in $MSY_MODULES; do
+    # El instalador nuevo es la lista autoritativa de modulos. Se baja
+    # primero y de el se lee que archivos pedir, asi un modulo que yo
+    # elimine del repo nunca vuelve a romper la actualizacion.
+    if ! wget -q --timeout=30 "$REPO_RAW/install.sh" -O "$tmp/install.sh" \
+         || [[ ! -s "$tmp/install.sh" ]]; then
+        err "No se pudo descargar el instalador — se cancela."
+        info "No se toco nada de la instalacion actual."
+        rm -rf "$tmp"; return 1
+    fi
+    local mods m fails=0
+    mods=$(grep -m1 '^MODS=' "$tmp/install.sh" | sed 's/^MODS="//; s/"$//')
+    [[ -z "$mods" ]] && mods="$MSY_MODULES"     # respaldo por si cambia el formato
+    for m in $mods; do
+        [[ "$m" == install.sh ]] && continue    # ya descargado
         if ! wget -q --timeout=30 "$REPO_RAW/$m" -O "$tmp/$m"; then
             err "No se pudo descargar $m"; fails=$((fails+1))
         fi
     done
     # Verificar que los archivos clave llegaron completos
-    if [[ $fails -gt 0 || ! -s "$tmp/install.sh" || ! -s "$tmp/wsproxy.py" ]]; then
+    if [[ $fails -gt 0 || ! -s "$tmp/wsproxy.py" || ! -s "$tmp/menu" ]]; then
         err "Descarga incompleta — se cancela la actualizacion."
         info "No se toco nada de la instalacion actual."
         rm -rf "$tmp"; return 1
