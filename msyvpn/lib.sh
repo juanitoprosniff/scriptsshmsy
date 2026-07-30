@@ -74,49 +74,22 @@ get_ip() {
     echo "${ip:-0.0.0.0}"
 }
 
-# ---------------------------------------------------------------
-# Salida a internet: IPv4 o IPv6 (afecta la geolocalizacion)
-# ---------------------------------------------------------------
-IPV6_PREF_FILE="$BASE_DIR/prefer_ipv6"
-
-has_ipv6() { ip -6 addr show scope global 2>/dev/null | grep -q 'inet6'; }
-get_ip6()  { ip -6 addr show scope global 2>/dev/null | awk '/inet6/{print $2}' | cut -d/ -f1 | head -1; }
-prefer_ipv6() { [[ "$(cat "$IPV6_PREF_FILE" 2>/dev/null)" == "1" ]]; }
-
-# Ajusta getaddrinfo (/etc/gai.conf): decide si las conexiones salientes
-# usan IPv6 o IPv4 cuando el destino tiene ambos. Afecta a SSH, Hysteria
-# y a todo lo que resuelva nombres en el sistema.
-net_apply_pref() {
-    local pref="$1"      # 6 = preferir IPv6, 4 = preferir IPv4
-    touch /etc/gai.conf 2>/dev/null
-    sed -i '/# MSYVPN-BEGIN/,/# MSYVPN-END/d' /etc/gai.conf 2>/dev/null
-    if [[ "$pref" == 6 ]]; then
-        cat >> /etc/gai.conf <<'EOF'
-# MSYVPN-BEGIN
-label      ::1/128       0
-label      ::/0          1
-label      2002::/16     2
-label      ::/96         3
-label      ::ffff:0:0/96 4
-precedence ::1/128       50
-precedence ::/0          40
-precedence 2002::/16     30
-precedence ::/96         20
-precedence ::ffff:0:0/96 10
-# MSYVPN-END
-EOF
-        echo 1 > "$IPV6_PREF_FILE"
-    else
-        cat >> /etc/gai.conf <<'EOF'
-# MSYVPN-BEGIN
-precedence ::ffff:0:0/96 100
-# MSYVPN-END
-EOF
-        echo 0 > "$IPV6_PREF_FILE"
+# Restaura el orden normal de IPv4/IPv6 del sistema (sin forzar nada)
+net_reset_pref() {
+    [[ -f /etc/gai.conf ]] && sed -i '/# MSYVPN-BEGIN/,/# MSYVPN-END/d' /etc/gai.conf
+    rm -f "$BASE_DIR/prefer_ipv6" "$BASE_DIR/data/v6exit" 2>/dev/null
+    # Quitar el desvio transparente de versiones anteriores
+    if iptables -t nat -L MSYVPN_V6 >/dev/null 2>&1; then
+        local r n=0
+        while :; do
+            r=$(iptables-save -t nat 2>/dev/null | grep -m1 -- '-A OUTPUT .*-j MSYVPN_V6' | sed 's/^-A //')
+            [[ -z "$r" ]] && break
+            iptables -t nat -D $r 2>/dev/null || break
+            n=$((n+1)); [[ $n -ge 100 ]] && break
+        done
+        iptables -t nat -F MSYVPN_V6 2>/dev/null
+        iptables -t nat -X MSYVPN_V6 2>/dev/null
     fi
-    # Asegurar que IPv6 no este desactivado por sysctl
-    sysctl -w net.ipv6.conf.all.disable_ipv6=0    >/dev/null 2>&1
-    sysctl -w net.ipv6.conf.default.disable_ipv6=0 >/dev/null 2>&1
 }
 
 # Instalar paquetes solo si faltan (idempotente)

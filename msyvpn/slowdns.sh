@@ -57,6 +57,8 @@ After=network.target
 [Service]
 ExecStartPre=$SD_NAT
 ExecStart=$SD_BIN -udp :5300 -privkey-file $SD_KEY $ns 127.0.0.1:$port
+StandardOutput=null
+StandardError=null
 Restart=always
 RestartSec=3
 

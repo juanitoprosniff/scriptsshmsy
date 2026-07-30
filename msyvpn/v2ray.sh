@@ -3,15 +3,12 @@
 # VLESS-WS es automatico. Opcionales: VMess, Trojan, Shadowsocks, Reality, xhttp.
 # WS/xhttp pasan por wsproxy + HAProxy(TLS). SS y Reality usan su propio puerto.
 [[ -n "$BASE_DIR" ]] || source /etc/msyvpn/lib.sh
-[[ -f /etc/msyvpn/exitvpn.sh ]] && source /etc/msyvpn/exitvpn.sh
 
 XR_CFG="/usr/local/etc/xray/config.json"
 XR_DB="$DATA_DIR/xray.db"          # uuid|alias
 XR_UUID="$DATA_DIR/xray.uuid"      # uuid por defecto persistente
 XR_ON="$DATA_DIR/xray.on"          # protocolos activos (vless siempre)
 XR_SS="$DATA_DIR/xray.sspass"
-XR_V6X="$DATA_DIR/v6exit"          # salida IPv6 transparente activada
-V2_V6X_PORT=12346                  # puerto local del proxy transparente
 XR_RPORT="$DATA_DIR/xray.rport"
 XR_RKEYS="$DATA_DIR/xray.reality"  # privkey|pubkey|shortid
 
@@ -67,11 +64,6 @@ v2_rebuild() {
     if xr_is_on xhttp; then
         inb+=$(printf ',{"listen":"127.0.0.1","port":%s,"protocol":"vless","settings":{"clients":[%s],"decryption":"none"},"streamSettings":{"network":"xhttp","xhttpSettings":{"path":"%s"}}}' "$V2_XH_PORT" "$vless" "$V2_XH_PATH")
     fi
-    # Proxy transparente para dar salida IPv6 a SSH/UDP: lee el dominio
-    # del SNI (sniffing) y lo resuelve por IPv6, igual que hace VLESS.
-    if [[ "$(cat "$XR_V6X" 2>/dev/null)" == "1" ]]; then
-        inb+=$(printf ',{"listen":"127.0.0.1","port":%s,"protocol":"dokodemo-door","settings":{"network":"tcp","followRedirect":true},"sniffing":{"enabled":true,"destOverride":["http","tls"]}}' "$V2_V6X_PORT")
-    fi
     if xr_is_on ss; then
         local sp; sp=$(cat "$XR_SS" 2>/dev/null || { openssl rand -hex 8 | tee "$XR_SS"; })
         inb+=$(printf ',{"listen":"0.0.0.0","port":%s,"protocol":"shadowsocks","settings":{"method":"aes-128-gcm","password":"%s","network":"tcp,udp"}}' "$V2_SS_PORT" "$sp")
@@ -91,25 +83,10 @@ v2_rebuild() {
 
     # El archivo de prueba DEBE terminar en .json (Xray detecta el formato
     # por la extension). Se prueba en /tmp para no ensuciar el confdir.
-    # domainStrategy decide por que IP sale el trafico (geolocalizacion).
-    # UseIPv6v4 = IPv6 primero, IPv4 solo si el destino no tiene IPv6.
-    local dstr="UseIPv4"
-    prefer_ipv6 && dstr="UseIPv6v4"
-    local direct out routing=""
-    direct=$(printf '{"tag":"direct","protocol":"freedom","settings":{"domainStrategy":"%s"}}' "$dstr")
-    # Salida remota (doble VPN): si esta activa va primero, y todo el
-    # trafico se enruta por ella salvo las redes privadas.
-    local exj=""
-    declare -F ex_outbound_json >/dev/null 2>&1 && exj=$(ex_outbound_json 2>/dev/null)
-    if [[ -n "$exj" ]]; then
-        out="$exj,$direct"
-        routing=',"routing":{"rules":[{"type":"field","ip":["geoip:private"],"outboundTag":"direct"}]}'
-    else
-        out="$direct"
-    fi
+    local dstr="UseIP"   # comportamiento normal del sistema
     local tmp="/tmp/xray_msy_$$.json"
-    printf '{"log":{"loglevel":"none"},"inbounds":[%s],"outbounds":[%s]%s}' \
-        "$inb" "$out" "$routing" > "$tmp"
+    printf '{"log":{"loglevel":"none"},"inbounds":[%s],"outbounds":[{"protocol":"freedom","settings":{"domainStrategy":"%s"}}]}' \
+        "$inb" "$dstr" > "$tmp"
 
     if xr_installed; then
         if ! ( "$(xr_bin)" test -c "$tmp" >/tmp/xr.log 2>&1 || "$(xr_bin)" run -test -c "$tmp" >/tmp/xr.log 2>&1 ); then

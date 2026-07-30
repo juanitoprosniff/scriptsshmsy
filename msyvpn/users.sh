@@ -65,8 +65,6 @@ u_create() {
     fi
     # Integracion Hysteria
     hy_add_user
-    # Reenganchar la salida IPv6 si esta activa (nuevo UID)
-    declare -F v6exit_refresh >/dev/null 2>&1 && v6exit_refresh
     [[ -f /etc/hysteria/config.json ]] && echo "Hysteria : $name:$pass  (obfs $HY_OBFS, puerto $HY_PORT)"
 }
 
@@ -80,7 +78,6 @@ u_remove() {
     sed -i "/|$name$/d" "$XR_DB" 2>/dev/null
     v2_installed && { v2_rebuild && svc_restart xray; }
     hy_add_user
-    declare -F v6exit_refresh >/dev/null 2>&1 && v6exit_refresh
     ok "Usuario $name eliminado"
 }
 

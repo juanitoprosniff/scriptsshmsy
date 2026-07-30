@@ -22,7 +22,7 @@ apt-get install -y haproxy python3 openssl curl wget iproute2 iptables \
 # --- 2. Copiar modulos a /etc/msyvpn --------------------------------
 echo "[2/9] Copiando modulos..."
 mkdir -p "$BASE_DIR/bin" "$BASE_DIR/data/senha"
-MODS="VERSION lib.sh wsproxy.py proxy.sh v2ray.sh slowdns.sh hysteria.sh users.sh monitor.sh exitvpn.sh update.sh menu master_pubkey.pub"
+MODS="VERSION lib.sh wsproxy.py proxy.sh v2ray.sh slowdns.sh hysteria.sh users.sh monitor.sh update.sh menu master_pubkey.pub"
 for m in $MODS; do
     if [[ -f "$SRC_DIR/$m" ]]; then
         cp -f "$SRC_DIR/$m" "$BASE_DIR/$m"
@@ -46,16 +46,8 @@ fetch_bin badvpn-udpgw /usr/bin/badvpn-udpgw || err "badvpn no disponible para $
 # Guardar IP publica
 get_ip > "$BASE_DIR/ip"
 
-# Salida a internet: si la VPS tiene IPv6 se prefiere (geolocalizacion
-# correcta). Se puede cambiar luego en: menu -> Proxy/SSL
-if [[ ! -f "$IPV6_PREF_FILE" ]]; then
-    if has_ipv6; then
-        net_apply_pref 6
-        echo "    Salida preferente: IPv6 ($(get_ip6))"
-    else
-        net_apply_pref 4
-    fi
-fi
+# Red: comportamiento normal del sistema (sin forzar IPv4/IPv6)
+net_reset_pref
 
 # --- 3. Afinar OpenSSH (buen ping) ----------------------------------
 echo "[3/9] Afinando OpenSSH..."
@@ -72,7 +64,9 @@ GatewayPorts yes
 PubkeyAuthentication yes
 PasswordAuthentication yes
 MaxStartups 200:30:2000
-MaxSessions 50'
+MaxSessions 50
+# Con cientos de usuarios reconectando, sshd escribia GB en auth.log
+LogLevel ERROR'
 
 # Compatibilidad con apps VPN y claves RSA antiguas: OpenSSH 8.8+
 # desactiva las firmas ssh-rsa (SHA-1) y eso rompe la clave maestra y
@@ -170,7 +164,7 @@ sysctl -p >/dev/null 2>&1
 mkdir -p /etc/systemd/journald.conf.d
 cat > /etc/systemd/journald.conf.d/msyvpn.conf <<'EOF'
 [Journal]
-SystemMaxUse=200M
+SystemMaxUse=100M
 RuntimeMaxUse=50M
 MaxRetentionSec=3day
 EOF
@@ -187,6 +181,21 @@ cat > /etc/logrotate.d/msyvpn <<'EOF'
     copytruncate
 }
 EOF
+
+# Salvaguarda horaria: si el disco pasa del 80%%, vaciar logs grandes
+cat > /etc/cron.hourly/msyvpn-logs <<'CRONEOF'
+#!/bin/bash
+USO=$(df -P / | awk 'NR==2{print $5+0}')
+[[ ${USO:-0} -lt 80 ]] && exit 0
+journalctl --vacuum-size=50M >/dev/null 2>&1
+for f in /var/log/syslog /var/log/messages /var/log/auth.log \
+         /var/log/kern.log /var/log/daemon.log /var/log/btmp; do
+    [[ -f "$f" ]] && : > "$f"
+done
+rm -f /var/log/*.gz /var/log/*.[0-9] /var/log/*/*.gz 2>/dev/null
+exit 0
+CRONEOF
+chmod +x /etc/cron.hourly/msyvpn-logs
 
 # --- 4b. Swap segun la RAM (no se toca si ya hay uno) ----------------
 echo "[4b/9] Comprobando swap..."
@@ -222,40 +231,6 @@ else
         fi
     fi
 fi
-
-# --- 4c. Reglas de red persistentes ---------------------------------
-# iptables se pierde al reiniciar; este servicio las vuelve a poner.
-cat > "$BASE_DIR/firewall.sh" <<'FWEOF'
-#!/bin/bash
-# Reaplica las reglas de red de MSYVPN (se ejecuta al arrancar)
-source /etc/msyvpn/lib.sh
-source /etc/msyvpn/proxy.sh
-for p in $(cat "$BASE_DIR/ports.plain" 2>/dev/null) \
-         $(cat "$BASE_DIR/ports.tls" 2>/dev/null); do
-    open_port "$p" tcp
-done
-# Redireccion transparente de usuarios hacia Xray
-if [[ "$(cat "$DATA_DIR/v6exit" 2>/dev/null)" == "1" ]]; then
-    _v6x_rules_del; _v6x_rules_add >/dev/null
-fi
-# SlowDNS e Hysteria reaplican las suyas en su propio ExecStartPre
-exit 0
-FWEOF
-chmod +x "$BASE_DIR/firewall.sh"
-cat > /etc/systemd/system/msyvpn-firewall.service <<EOF
-[Unit]
-Description=MSYVPN reglas de red
-After=network-online.target xray.service
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=$BASE_DIR/firewall.sh
-
-[Install]
-WantedBy=multi-user.target
-EOF
 
 # --- 5. Certificado TLS (HAProxy) -----------------------------------
 echo "[5/9] Generando certificado..."
@@ -293,6 +268,8 @@ After=network.target
 
 [Service]
 ExecStart=/usr/bin/badvpn-udpgw --listen-addr 127.0.0.1:7300 --max-clients 2000 --max-connections-for-client 12 --client-socket-sndbuf 65536
+StandardOutput=null
+StandardError=null
 Restart=always
 RestartSec=2
 MemoryMax=150M
@@ -307,15 +284,16 @@ proxy_write_config
 
 # --- 9. Habilitar y arrancar ----------------------------------------
 echo "[9/9] Arrancando servicios..."
+systemctl disable --now msyvpn-firewall >/dev/null 2>&1
+rm -f /etc/systemd/system/msyvpn-firewall.service "$BASE_DIR/firewall.sh" 2>/dev/null
 systemctl daemon-reload
-systemctl enable --now msyvpn-wsproxy msyvpn-badvpn msyvpn-firewall >/dev/null 2>&1
+systemctl enable --now msyvpn-wsproxy msyvpn-badvpn >/dev/null 2>&1
 systemctl enable --now haproxy >/dev/null 2>&1
 systemctl restart msyvpn-wsproxy msyvpn-badvpn haproxy >/dev/null 2>&1
 # Volver a levantar lo que ya estuviera configurado (tras actualizar)
 for _s in xray msyvpn-slowdns msyvpn-hysteria1 msyvpn-hysteria2; do
     systemctl is-enabled "$_s" >/dev/null 2>&1 && systemctl restart "$_s" >/dev/null 2>&1
 done
-bash "$BASE_DIR/firewall.sh" >/dev/null 2>&1
 
 # Comando 'menu'
 ln -sf "$BASE_DIR/menu" /usr/bin/menu
