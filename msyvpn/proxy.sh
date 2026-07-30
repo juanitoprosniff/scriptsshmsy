@@ -186,27 +186,43 @@ _v6x_rules_add() {
     echo "$n"
 }
 
-v6exit_on() {
-    if ! has_ipv6; then err "Esta VPS no tiene IPv6 global"; return 1; fi
+# Enciende el desvio transparente: el trafico TCP de las cuentas VPN
+# pasa por Xray. Sirve tanto para salir por IPv6 como para salir por un
+# nodo remoto (exitvpn). No requiere IPv6.
+xredirect_on() {
     if [[ -z "$(command -v xray)" ]] && [[ ! -x /usr/local/bin/xray ]]; then
         err "Requiere Xray instalado (menu -> V2Ray -> Instalar)"; return 1
     fi
-    prefer_ipv6 || net_apply_pref 6
     echo 1 > "$XR_V6X"
     if ! v2_rebuild; then
         echo 0 > "$XR_V6X"; err "No se pudo generar la config de Xray"; return 1
     fi
     svc_restart xray; sleep 2
-    if ! ss -tlnH 2>/dev/null | grep -q "127.0.0.1:$V6X_PORT"; then
+    # Comprobar de verdad que Xray abrio el puerto del proxy transparente
+    local i up=0
+    for i in 1 2 3 4 5; do
+        if ss -tlnH 2>/dev/null | grep -q ":$V6X_PORT" || \
+           (exec 3<>/dev/tcp/127.0.0.1/$V6X_PORT) 2>/dev/null; then up=1; break; fi
+        sleep 1
+    done
+    if [[ $up -eq 0 ]]; then
         echo 0 > "$XR_V6X"; v2_rebuild; svc_restart xray
         err "Xray no abrio el puerto $V6X_PORT — no se aplicaron reglas"
+        info "Mira el error con: journalctl -u xray -n 20"
         return 1
     fi
     local n; n=$(_v6x_rules_add)
-    ok "Salida IPv6 activada para $n cuentas (trafico TCP)"
+    ok "Desvio por Xray activo para $n cuentas (trafico TCP)"
     info "OJO: anade un salto por Xray a TODO el trafico TCP de SSH."
-    info "Con muchos usuarios sube el CPU; si se satura, desactivala."
-    info "Las apps veran Austria en los sitios con IPv6."
+    info "Con muchos usuarios sube el CPU; si se satura, desactivalo."
+    return 0
+}
+
+v6exit_on() {
+    if ! has_ipv6; then err "Esta VPS no tiene IPv6 global"; return 1; fi
+    prefer_ipv6 || net_apply_pref 6
+    xredirect_on || return 1
+    info "Las apps veran la geo de tu IPv6 en los sitios con IPv6."
     info "UDP y destinos solo-IPv4 seguiran saliendo por IPv4."
 }
 
@@ -214,7 +230,7 @@ v6exit_off() {
     _v6x_rules_del
     echo 0 > "$XR_V6X"
     if declare -F v2_rebuild >/dev/null 2>&1; then v2_rebuild && svc_restart xray; fi
-    ok "Salida IPv6 transparente desactivada"
+    ok "Desvio transparente desactivado"
 }
 
 # Rehace los enganches al crear/borrar cuentas

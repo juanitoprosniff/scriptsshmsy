@@ -147,12 +147,21 @@ hy_install() {
     else
         exec="$bin server -c $HY_DIR/config.yaml"
     fi
+    # Script que reaplica el port-hopping (iptables se pierde al reiniciar)
+    cat > "$HY_DIR/hop$v.sh" <<EOF
+#!/bin/bash
+source /etc/msyvpn/lib.sh
+source /etc/msyvpn/hysteria.sh
+hy_hopping $v
+EOF
+    chmod +x "$HY_DIR/hop$v.sh"
     cat > "/etc/systemd/system/$(hy_svc "$v").service" <<EOF
 [Unit]
 Description=MSYVPN Hysteria v$v UDP
 After=network.target
 
 [Service]
+ExecStartPre=$HY_DIR/hop$v.sh
 ExecStart=$exec
 Restart=always
 RestartSec=3
