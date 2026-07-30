@@ -14,6 +14,8 @@ hy_obfs() { local v; v=$(cat "$HY_DIR/obfs$1" 2>/dev/null); echo "${v:-msyvpn}";
 hy_hop()  { [[ "$1" == 1 ]] && echo "20000:40000" || echo "40001:60000"; }
 hy_svc()  { echo "msyvpn-hysteria$1"; }
 hy_bin()  { echo "/usr/local/bin/hysteria$1"; }
+# Puerto local de metricas (v1 usa prometheus, v2 trafficStats)
+hy_mport() { [[ "$1" == 1 ]] && echo 27997 || echo 27998; }
 
 hy_installed() { [[ -x "$(hy_bin "$1")" ]]; }
 
@@ -57,7 +59,7 @@ hy_write_v1() {
   "disable_udp": false,
   "insecure": true,
   "obfs": "$(hy_obfs 1)",
-  "resolve_preference": "$(prefer_ipv6 && echo 64 || echo 46)",
+  "prometheus_listen": "127.0.0.1:$(hy_mport 1)",
   "auth": { "mode": "passwords", "config": [$arr] }
 }
 JSON
@@ -99,11 +101,6 @@ masquerade:
 bandwidth:
   up: 1 gbps
   down: 1 gbps
-outbounds:
-  - name: salida
-    type: direct
-    direct:
-      mode: $(prefer_ipv6 && echo 64 || echo 46)
 YAML
 }
 
@@ -139,6 +136,7 @@ hy_install() {
 
     [[ -f "$HY_DIR/port$v" ]] || hy_port "$v" > "$HY_DIR/port$v"
     [[ -f "$HY_DIR/obfs$v" ]] || echo msyvpn > "$HY_DIR/obfs$v"
+    hy_mport "$v" > "$HY_DIR/mport$v"
     hy_cert
     [[ "$v" == 1 ]] && hy_write_v1 || hy_write_v2
 
@@ -163,6 +161,8 @@ After=network.target
 [Service]
 ExecStartPre=$HY_DIR/hop$v.sh
 ExecStart=$exec
+StandardOutput=null
+StandardError=null
 Restart=always
 RestartSec=3
 MemoryMax=250M

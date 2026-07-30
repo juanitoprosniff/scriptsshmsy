@@ -4,7 +4,6 @@ source /etc/msyvpn/lib.sh
 source /etc/msyvpn/proxy.sh
 source /etc/msyvpn/users.sh      # arrastra v2ray.sh y hysteria.sh
 source /etc/msyvpn/slowdns.sh
-source /etc/msyvpn/exitvpn.sh
 source /etc/msyvpn/monitor.sh
 source /etc/msyvpn/update.sh
 
@@ -16,6 +15,8 @@ estado() {
     echo "IP        : $(get_ip)"
     echo "Sistema   : Ubuntu/Debian $(os_ver)  ($(arch))"
     echo "RAM       : $(free -m | awk '/Mem:/{print $3"/"$2" MB"}')"
+    echo "Swap      : $(mon_swap)"
+    echo "Disco     : $(df -h / | awk 'NR==2{print $3"/"$2"  ("$5" usado)"}')"
     echo "Carga CPU : $(uptime | awk -F'load average:' '{print $2}')"
     line
     proxy_status
@@ -39,10 +40,9 @@ while true; do
     echo "  3) V2Ray         (VLESS/VMess/Trojan)"
     echo "  4) SlowDNS       (tunel DNS)"
     echo "  5) UDP Hysteria  (v1 y v2)"
-    echo "  6) Salida remota (doble VPN)"
-    echo "  7) Monitor y velocidad"
-    echo "  8) Estado del sistema"
-    echo "  9) Mantenimiento (actualizar / disco)"
+    echo "  6) Monitor y velocidad"
+    echo "  7) Estado del sistema"
+    echo "  8) Mantenimiento (actualizar / disco)"
     echo "  0) Salir"
     line
     case "$(ask 'Opcion: ')" in
@@ -51,10 +51,9 @@ while true; do
         3) v2_menu ;;
         4) sd_menu ;;
         5) hy_menu ;;
-        6) ex_menu ;;
-        7) mon_menu ;;
-        8) estado; pause ;;
-        9) upd_menu ;;
+        6) mon_menu ;;
+        7) estado; pause ;;
+        8) upd_menu ;;
         0) clear; exit 0 ;;
     esac
 done

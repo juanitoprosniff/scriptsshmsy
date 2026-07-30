@@ -47,24 +47,40 @@ mon_v2ray_conns() {
     [[ -n "$n" ]] && echo "$n" || echo "-"
 }
 
-# --- UDP Hysteria ---------------------------------------------------
-# v2 expone /online (exacto). v1 no tiene API: se usa conntrack pero
-# solo entradas ASSURED (trafico en ambos sentidos), asi no cuentan los
-# paquetes sueltos de escaneos que caian en el rango de port-hopping.
+# --- UDP Hysteria (v1 + v2) -----------------------------------------
+# v2 expone trafficStats (/online). v1 expone metricas Prometheus con
+# hysteria_active_conns por usuario. Se suman las dos versiones.
 mon_udp_v2() {
-    local sec port
-    sec=$(cat /etc/hysteria/apisecret 2>/dev/null) || return 1
-    port=$(cat /etc/hysteria/apiport 2>/dev/null) || return 1
+    local sec port j
+    sec=$(cat /etc/hysteria/apisecret 2>/dev/null); port=$(cat /etc/hysteria/apiport 2>/dev/null)
     [[ -z "$sec" || -z "$port" ]] && return 1
-    local j; j=$(curl -s --max-time 3 -H "Authorization: $sec" \
+    j=$(curl -s --max-time 3 -H "Authorization: $sec" \
         "http://127.0.0.1:$port/online" 2>/dev/null) || return 1
-    [[ -z "$j" || "$j" == "{}" ]] && { echo 0; return 0; }
+    [[ -z "$j" ]] && return 1
+    [[ "$j" == "{}" ]] && { echo 0; return 0; }
     echo "$j" | grep -o ':[0-9]*' | grep -o '[0-9]*' | awk '{s+=$1} END{print s+0}'
 }
 
+# v1: cuenta usuarios distintos con conexiones activas en las metricas
+mon_udp_v1() {
+    local port m
+    port=$(cat /etc/hysteria/mport1 2>/dev/null || echo 27997)
+    m=$(curl -s --max-time 3 "http://127.0.0.1:$port/metrics" 2>/dev/null) || return 1
+    [[ -z "$m" ]] && return 1
+    echo "$m" | awk '
+        /^hysteria_active_conns\{/ && $NF+0 > 0 {
+            if (match($0, /auth="[^"]*"/))
+                seen[substr($0, RSTART+6, RLENGTH-7)] = 1
+        }
+        END { n=0; for (i in seen) n++; print n }'
+}
+
 mon_udp() {
-    local n
-    n=$(mon_udp_v2) && [[ -n "$n" ]] && { echo "$n"; return; }
+    local n1 n2 tot=0 got=0
+    n1=$(mon_udp_v1) && [[ -n "$n1" ]] && { tot=$((tot+n1)); got=1; }
+    n2=$(mon_udp_v2) && [[ -n "$n2" ]] && { tot=$((tot+n2)); got=1; }
+    [[ $got -eq 1 ]] && { echo "$tot"; return; }
+    # Respaldo: conntrack (aproximado por IPs unicas)
     command -v conntrack >/dev/null 2>&1 || { echo "-"; return; }
     local p1 p2 me
     p1=$(cat /etc/hysteria/port1 2>/dev/null || echo 36712)
@@ -80,6 +96,22 @@ mon_udp() {
         END { n=0; for (i in seen) n++; print n }'
 }
 
+# Desglose por version para el panel
+mon_udp_detalle() {
+    local a b
+    a=$(mon_udp_v1); b=$(mon_udp_v2)
+    printf 'v1: %s   v2: %s' "${a:-n/d}" "${b:-n/d}"
+}
+
+# Uso de memoria y swap
+mon_swap() {
+    if [[ "$(swapon --show --noheadings 2>/dev/null | wc -l)" -eq 0 ]]; then
+        echo "sin swap"
+    else
+        free -m | awk '/Swap:/{printf "%s MB usados de %s MB", $3, $2}'
+    fi
+}
+
 mon_show() {
     local s v u tot
     s=$(mon_ssh); v=$(mon_v2ray); u=$(mon_udp)
@@ -88,7 +120,7 @@ mon_show() {
     title "MONITOR DE CONEXIONES"
     printf '  Usuarios SSH online    : %s\n' "$s"
     printf '  Usuarios V2Ray online  : %s\n' "$v"
-    printf '  Usuarios UDP online    : %s\n' "$u"
+    printf '  Usuarios UDP online    : %s   (%s)\n' "$u" "$(mon_udp_detalle)"
     line
     printf '  TOTAL ONLINE           : %s\n' "$tot"
     line
@@ -102,6 +134,9 @@ mon_show() {
     else
         echo "    (sin sesiones activas)"
     fi
+    line
+    printf '  RAM  : %s\n' "$(free -m | awk '/Mem:/{printf "%s/%s MB", $3, $2}')"
+    printf '  Swap : %s\n' "$(mon_swap)"
     line
     echo "  SSH incluye SSL, WebSocket y SlowDNS."
     echo "  V2Ray cuenta usuarios (IPs), no conexiones: $(mon_v2ray_conns) conexiones abiertas."
@@ -201,9 +236,6 @@ _geo_of() {
 
 geo_check() {
     clear; title "GEOLOCALIZACION DE SALIDA"
-    prefer_ipv6 && echo "  Preferencia configurada : IPv6" \
-                || echo "  Preferencia configurada : IPv4"
-    line
     echo "  Saliendo por IPv4:"
     echo "    $(_geo_of -4)"
     echo ""

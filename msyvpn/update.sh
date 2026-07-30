@@ -5,7 +5,7 @@
 [[ -n "$BASE_DIR" ]] || source /etc/msyvpn/lib.sh
 
 MSY_SERVICES="msyvpn-wsproxy msyvpn-badvpn msyvpn-hysteria1 msyvpn-hysteria2 msyvpn-slowdns haproxy xray"
-MSY_MODULES="VERSION lib.sh wsproxy.py proxy.sh v2ray.sh slowdns.sh hysteria.sh users.sh monitor.sh exitvpn.sh update.sh menu install.sh master_pubkey.pub"
+MSY_MODULES="VERSION lib.sh wsproxy.py proxy.sh v2ray.sh slowdns.sh hysteria.sh users.sh monitor.sh update.sh menu install.sh master_pubkey.pub"
 
 msy_stop_all() {
     local s
@@ -72,8 +72,6 @@ msy_update() {
     echo ""
     info "Reactivando servicios..."
     msy_start_all
-    # Reaplicar reglas de red (iptables no sobrevive a reinicios)
-    [[ -x "$BASE_DIR/firewall.sh" ]] && bash "$BASE_DIR/firewall.sh" >/dev/null 2>&1
     local s
     for s in xray msyvpn-slowdns msyvpn-hysteria1 msyvpn-hysteria2; do
         systemctl is-enabled "$s" >/dev/null 2>&1 && \
