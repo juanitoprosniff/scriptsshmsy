@@ -48,8 +48,19 @@ MAX_CONNS = 8000            # tope de conexiones simultaneas
 HEADER_WAIT = 8             # segundos para leer la primera peticion
 
 ROUTES_PATH = "/etc/msyvpn/routes.conf"
-STATS_PATH = "/etc/msyvpn/data/stats.json"
+STATS_DIR = "/etc/msyvpn/data"
 STATS_EVERY = 5             # segundos entre escrituras del archivo de stats
+
+# Un proceso Python usa un solo nucleo. Con cientos de usuarios eso satura
+# ese nucleo, asi que se levantan varios procesos que comparten el puerto
+# con SO_REUSEPORT y el kernel reparte las conexiones entre ellos.
+try:
+    WORKERS = int(os.environ.get("WSPROXY_WORKERS", "0"))
+except ValueError:
+    WORKERS = 0
+if WORKERS <= 0:
+    WORKERS = min(os.cpu_count() or 1, 8)
+_WORKER_ID = 0
 
 _routes = []                # lista de (path, host, port)
 _routes_mtime = 0
@@ -270,34 +281,38 @@ async def handle(cr, cw):
 
 
 async def stats_writer():
-    """Guarda el conteo real (IPs unicas y conexiones) para el menu."""
-    tmp = STATS_PATH + ".tmp"
+    """Escribe las IPs vivas de este worker: '<categoria> <ip> <conns>'.
+
+    Cada worker usa su propio archivo; el menu junta todos y cuenta las
+    IPs unicas, asi el total es correcto aunque haya varios procesos.
+    """
+    path = os.path.join(STATS_DIR, "stats.%d" % _WORKER_ID)
+    tmp = path + ".tmp"
     while True:
         await asyncio.sleep(STATS_EVERY)
         try:
-            data = {}
+            lines = []
             for cat, d in _live.items():
-                data[cat + "_ips"] = len(d)
-                data[cat + "_conns"] = sum(d.values())
-            os.makedirs(os.path.dirname(STATS_PATH), exist_ok=True)
+                for ip, n in d.items():
+                    lines.append("%s %s %d" % (cat, ip, n))
+            os.makedirs(STATS_DIR, exist_ok=True)
             with open(tmp, "w") as f:
-                f.write("{%s}" % ", ".join(
-                    '"%s": %d' % (k, v) for k, v in sorted(data.items())))
-            os.rename(tmp, STATS_PATH)
+                f.write("\n".join(lines) + ("\n" if lines else ""))
+            os.rename(tmp, path)
         except Exception:
             pass
 
 
-def run():
+def serve():
     # Patron portable (Python 3.6 -> 3.13): sin asyncio.run ni serve_forever
     global _sem
-    loop = asyncio.get_event_loop()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     _sem = asyncio.Semaphore(MAX_CONNS)
     load_routes()
-    loop.create_task(stats_writer()) if hasattr(loop, "create_task") else None
-    server = loop.run_until_complete(
-        asyncio.start_server(handle, "127.0.0.1", LISTEN_PORT))
-    print("wsproxy async en 127.0.0.1:%d -> %s" % (LISTEN_PORT, DEFAULT_SSH))
+    loop.create_task(stats_writer())
+    server = loop.run_until_complete(asyncio.start_server(
+        handle, "127.0.0.1", LISTEN_PORT, reuse_port=True))
     try:
         loop.run_forever()
     except KeyboardInterrupt:
@@ -306,6 +321,40 @@ def run():
         server.close()
         loop.run_until_complete(server.wait_closed())
         loop.close()
+
+
+def run():
+    global _WORKER_ID
+    # Limpiar stats de ejecuciones anteriores
+    try:
+        for f in os.listdir(STATS_DIR):
+            if f.startswith("stats."):
+                os.remove(os.path.join(STATS_DIR, f))
+    except Exception:
+        pass
+    print("wsproxy async en 127.0.0.1:%d -> %s (%d procesos)"
+          % (LISTEN_PORT, DEFAULT_SSH, WORKERS))
+    children = []
+    for i in range(1, WORKERS):
+        try:
+            pid = os.fork()
+        except Exception:
+            break
+        if pid == 0:                 # proceso hijo
+            _WORKER_ID = i
+            try:
+                serve()
+            finally:
+                os._exit(0)
+        children.append(pid)
+    try:
+        serve()                      # el padre tambien atiende
+    finally:
+        for pid in children:
+            try:
+                os.kill(pid, 15)
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

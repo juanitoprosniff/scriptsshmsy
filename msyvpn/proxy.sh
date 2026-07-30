@@ -25,15 +25,20 @@ proxy_write_config() {
     proxy_gen_cert
     [[ -f "$PLAIN_FILE" ]] || echo "$DEF_PLAIN" > "$PLAIN_FILE"
     [[ -f "$TLS_FILE"   ]] || echo "$DEF_TLS"   > "$TLS_FILE"
+    local nthr; nthr=$(nproc 2>/dev/null || echo 2)
     {
-        cat <<'EOF'
+        cat <<EOF
 global
-    maxconn 20000
-    log /dev/log local0
+    maxconn 60000
+    # nbthread: reparte el trabajo entre todos los nucleos
+    nbthread $nthr
     tune.ssl.default-dh-param 2048
+    # SIN 'log': en modo TCP HAProxy escribe una linea por conexion.
+    # Con cientos de usuarios eso llenaba el disco en horas.
 
 defaults
     mode tcp
+    no log
     option dontlognull
     timeout connect 5s
     timeout client  1h
@@ -199,6 +204,8 @@ v6exit_on() {
     fi
     local n; n=$(_v6x_rules_add)
     ok "Salida IPv6 activada para $n cuentas (trafico TCP)"
+    info "OJO: anade un salto por Xray a TODO el trafico TCP de SSH."
+    info "Con muchos usuarios sube el CPU; si se satura, desactivala."
     info "Las apps veran Austria en los sitios con IPv6."
     info "UDP y destinos solo-IPv4 seguiran saliendo por IPv4."
 }

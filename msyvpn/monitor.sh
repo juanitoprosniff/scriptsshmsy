@@ -4,14 +4,23 @@
 [[ -n "$BASE_DIR" ]] || source /etc/msyvpn/lib.sh
 
 XR_PORTS="10086|10087|10088|10089|8388"
-STATS_FILE="$DATA_DIR/stats.json"
-
-# Lee un contador del archivo de stats del wsproxy (IPs reales unicas)
+# El wsproxy corre en varios procesos y cada uno escribe su archivo
+# "stats.N" con lineas "<categoria> <ip> <conexiones>". Se juntan todos
+# y se cuentan IPs unicas, para no duplicar entre procesos.
+_stats_cat() {
+    find "$DATA_DIR" -maxdepth 1 -name 'stats.[0-9]*' -mmin -1 2>/dev/null \
+        | while read -r f; do cat "$f" 2>/dev/null; done
+}
+# _stat <categoria> <ips|conns>
 _stat() {
-    [[ -s "$STATS_FILE" ]] || return 1
-    # El archivo se reescribe cada 5s; si esta viejo, el proxy no corre
-    [[ -n "$(find "$STATS_FILE" -mmin -1 2>/dev/null)" ]] || return 1
-    grep -o "\"$1\": *[0-9]*" "$STATS_FILE" 2>/dev/null | grep -o '[0-9]*$' | head -1
+    local out
+    if [[ "$2" == ips ]]; then
+        out=$(_stats_cat | awk -v c="$1" '$1==c{print $2}' | sort -u | wc -l)
+    else
+        out=$(_stats_cat | awk -v c="$1" '$1==c{s+=$3} END{print s+0}')
+    fi
+    [[ -z "$(_stats_cat)" ]] && return 1
+    echo "$out"
 }
 
 # --- SSH (incluye SSL/WebSocket/SlowDNS: todos terminan en sshd) -----
@@ -28,13 +37,13 @@ mon_ssh() { mon_ssh_list | awk '{s+=$2} END{print s+0}'; }
 # Un cliente abre muchas conexiones a la vez, por eso contar conexiones
 # daba 20-25 con un solo usuario.
 mon_v2ray() {
-    local n; n=$(_stat v2ray_ips)
+    local n; n=$(_stat v2ray ips)
     if [[ -n "$n" ]]; then echo "$n"; return; fi
     # Respaldo: conexiones a los inbounds (aproximado)
     ss -tanH 2>/dev/null | awk '$1=="ESTAB"{print $4}' | grep -cE ":($XR_PORTS)\$"
 }
 mon_v2ray_conns() {
-    local n; n=$(_stat v2ray_conns)
+    local n; n=$(_stat v2ray conns)
     [[ -n "$n" ]] && echo "$n" || echo "-"
 }
 
