@@ -3,6 +3,7 @@
 # VLESS-WS es automatico. Opcionales: VMess, Trojan, Shadowsocks, Reality, xhttp.
 # WS/xhttp pasan por wsproxy + HAProxy(TLS). SS y Reality usan su propio puerto.
 [[ -n "$BASE_DIR" ]] || source /etc/msyvpn/lib.sh
+[[ -f /etc/msyvpn/exitvpn.sh ]] && source /etc/msyvpn/exitvpn.sh
 
 XR_CFG="/usr/local/etc/xray/config.json"
 XR_DB="$DATA_DIR/xray.db"          # uuid|alias
@@ -94,9 +95,21 @@ v2_rebuild() {
     # UseIPv6v4 = IPv6 primero, IPv4 solo si el destino no tiene IPv6.
     local dstr="UseIPv4"
     prefer_ipv6 && dstr="UseIPv6v4"
+    local direct out routing=""
+    direct=$(printf '{"tag":"direct","protocol":"freedom","settings":{"domainStrategy":"%s"}}' "$dstr")
+    # Salida remota (doble VPN): si esta activa va primero, y todo el
+    # trafico se enruta por ella salvo las redes privadas.
+    local exj=""
+    declare -F ex_outbound_json >/dev/null 2>&1 && exj=$(ex_outbound_json 2>/dev/null)
+    if [[ -n "$exj" ]]; then
+        out="$exj,$direct"
+        routing=',"routing":{"rules":[{"type":"field","ip":["geoip:private"],"outboundTag":"direct"}]}'
+    else
+        out="$direct"
+    fi
     local tmp="/tmp/xray_msy_$$.json"
-    printf '{"log":{"loglevel":"warning"},"inbounds":[%s],"outbounds":[{"protocol":"freedom","settings":{"domainStrategy":"%s"}}]}' \
-        "$inb" "$dstr" > "$tmp"
+    printf '{"log":{"loglevel":"none"},"inbounds":[%s],"outbounds":[%s]%s}' \
+        "$inb" "$out" "$routing" > "$tmp"
 
     if xr_installed; then
         if ! ( "$(xr_bin)" test -c "$tmp" >/tmp/xr.log 2>&1 || "$(xr_bin)" run -test -c "$tmp" >/tmp/xr.log 2>&1 ); then

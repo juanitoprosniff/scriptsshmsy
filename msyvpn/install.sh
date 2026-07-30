@@ -22,7 +22,7 @@ apt-get install -y haproxy python3 openssl curl wget iproute2 iptables \
 # --- 2. Copiar modulos a /etc/msyvpn --------------------------------
 echo "[2/9] Copiando modulos..."
 mkdir -p "$BASE_DIR/bin" "$BASE_DIR/data/senha"
-MODS="VERSION lib.sh wsproxy.py proxy.sh v2ray.sh slowdns.sh hysteria.sh users.sh monitor.sh update.sh menu master_pubkey.pub"
+MODS="VERSION lib.sh wsproxy.py proxy.sh v2ray.sh slowdns.sh hysteria.sh users.sh monitor.sh exitvpn.sh update.sh menu master_pubkey.pub"
 for m in $MODS; do
     if [[ -f "$SRC_DIR/$m" ]]; then
         cp -f "$SRC_DIR/$m" "$BASE_DIR/$m"
@@ -154,9 +154,39 @@ net.core.rmem_max=8388608
 net.core.wmem_max=8388608
 net.ipv4.tcp_rmem=4096 87380 8388608
 net.ipv4.tcp_wmem=4096 65536 8388608
+fs.file-max=1000000
+# Conntrack: con cientos de usuarios la tabla se llena y dispara el CPU.
+# Se amplia y se acortan los tiempos de espera (por defecto TCP son 5 dias).
+net.netfilter.nf_conntrack_max=524288
+net.netfilter.nf_conntrack_tcp_timeout_established=1800
+net.netfilter.nf_conntrack_udp_timeout=30
+net.netfilter.nf_conntrack_udp_timeout_stream=120
 # MSYVPN-END
 EOF
+modprobe nf_conntrack 2>/dev/null
 sysctl -p >/dev/null 2>&1
+
+# --- Limitar logs: con cientos de usuarios llenaban el disco ---------
+mkdir -p /etc/systemd/journald.conf.d
+cat > /etc/systemd/journald.conf.d/msyvpn.conf <<'EOF'
+[Journal]
+SystemMaxUse=200M
+RuntimeMaxUse=50M
+MaxRetentionSec=3day
+EOF
+systemctl restart systemd-journald 2>/dev/null
+cat > /etc/logrotate.d/msyvpn <<'EOF'
+/var/log/syslog /var/log/messages /var/log/haproxy.log /var/log/auth.log {
+    daily
+    rotate 3
+    maxsize 100M
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+}
+EOF
 
 # --- 5. Certificado TLS (HAProxy) -----------------------------------
 echo "[5/9] Generando certificado..."
