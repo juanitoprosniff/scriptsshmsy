@@ -131,6 +131,18 @@ svc_restart() { systemctl restart "$1" 2>/dev/null; }
 # ---------------------------------------------------------------
 # Interfaz minima (sin colores)
 # ---------------------------------------------------------------
+# Colores minimos (solo para resaltar estados y numeros)
+C_G=$'\033[1;32m'   # verde
+C_R=$'\033[1;31m'   # rojo
+C_Y=$'\033[1;33m'   # amarillo
+C_C=$'\033[1;36m'   # cyan
+C_0=$'\033[0m'      # reset
+g() { printf '%s%s%s' "$C_G" "$1" "$C_0"; }   # verde
+r() { printf '%s%s%s' "$C_R" "$1" "$C_0"; }   # rojo
+num() { printf '%s%s%s' "$C_C" "$1" "$C_0"; } # numero resaltado
+# Devuelve "activo"/"inactivo" coloreado (acepta varios nombres de servicio)
+svc_txt() { local s; for s in "$@"; do svc_active "$s" && { g "activo"; return; }; done; r "inactivo"; }
+
 line()  { printf '%s\n' "------------------------------------------------"; }
 title() { line; printf '  %s\n' "$1"; line; }
 pause() { printf '\n'; read -rp "Enter para continuar..." _; }

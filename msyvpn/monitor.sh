@@ -48,46 +48,16 @@ mon_v2ray_conns() {
 }
 
 # --- UDP Hysteria (v1 + v2) -----------------------------------------
-# v2 expone trafficStats (/online). v1 expone metricas Prometheus con
-# hysteria_active_conns por usuario. Se suman las dos versiones.
-mon_udp_v2() {
-    local sec port j
-    sec=$(cat /etc/hysteria/apisecret 2>/dev/null); port=$(cat /etc/hysteria/apiport 2>/dev/null)
-    [[ -z "$sec" || -z "$port" ]] && return 1
-    j=$(curl -s --max-time 3 -H "Authorization: $sec" \
-        "http://127.0.0.1:$port/online" 2>/dev/null) || return 1
-    [[ -z "$j" ]] && return 1
-    [[ "$j" == "{}" ]] && { echo 0; return 0; }
-    echo "$j" | grep -o ':[0-9]*' | grep -o '[0-9]*' | awk '{s+=$1} END{print s+0}'
-}
+# Cada version se cuenta por separado y con su propio respaldo, para que
+# si a una le falla su API la otra siga apareciendo (antes, si v2
+# respondia, v1 nunca llegaba al metodo alternativo).
 
-# v1: cuenta usuarios distintos con conexiones activas en las metricas
-mon_udp_v1() {
-    local port m
-    port=$(cat /etc/hysteria/mport1 2>/dev/null || echo 27997)
-    m=$(curl -s --max-time 3 "http://127.0.0.1:$port/metrics" 2>/dev/null) || return 1
-    [[ -z "$m" ]] && return 1
-    echo "$m" | awk '
-        /^hysteria_active_conns\{/ && $NF+0 > 0 {
-            if (match($0, /auth="[^"]*"/))
-                seen[substr($0, RSTART+6, RLENGTH-7)] = 1
-        }
-        END { n=0; for (i in seen) n++; print n }'
-}
-
-mon_udp() {
-    local n1 n2 tot=0 got=0
-    n1=$(mon_udp_v1) && [[ -n "$n1" ]] && { tot=$((tot+n1)); got=1; }
-    n2=$(mon_udp_v2) && [[ -n "$n2" ]] && { tot=$((tot+n2)); got=1; }
-    [[ $got -eq 1 ]] && { echo "$tot"; return; }
-    # Respaldo: conntrack (aproximado por IPs unicas)
-    command -v conntrack >/dev/null 2>&1 || { echo "-"; return; }
-    local p1 p2 me
-    p1=$(cat /etc/hysteria/port1 2>/dev/null || echo 36712)
-    p2=$(cat /etc/hysteria/port2 2>/dev/null || echo 36713)
-    me=$(get_ip)
-    conntrack -L -p udp 2>/dev/null | awk -v re="($p1|$p2)" -v me="$me" '
-        /ASSURED/ && ($0 ~ ("sport="re) || $0 ~ ("dport="re)) {
+# Cuenta IPs unicas de clientes en conntrack para un puerto UDP dado.
+_udp_conntrack() {
+    local port="$1" me; me=$(get_ip)
+    command -v conntrack >/dev/null 2>&1 || { echo ""; return 1; }
+    conntrack -L -p udp 2>/dev/null | awk -v p="$port" -v me="$me" '
+        ($0 ~ ("sport="p) || $0 ~ ("dport="p)) && /ASSURED/ {
             if (match($0, /src=[0-9.]+/)) {
                 ip = substr($0, RSTART+4, RLENGTH-4)
                 if (ip != me && ip !~ /^127\./) seen[ip]=1
@@ -96,11 +66,56 @@ mon_udp() {
         END { n=0; for (i in seen) n++; print n }'
 }
 
+# v2: API trafficStats /online (exacto). Respaldo: conntrack de su puerto.
+mon_udp_v2() {
+    svc_active msyvpn-hysteria2 || { echo "-"; return 1; }
+    local sec port j
+    sec=$(cat /etc/hysteria/apisecret 2>/dev/null); port=$(cat /etc/hysteria/apiport 2>/dev/null)
+    if [[ -n "$sec" && -n "$port" ]]; then
+        j=$(curl -s --max-time 3 -H "Authorization: $sec" \
+            "http://127.0.0.1:$port/online" 2>/dev/null)
+        if [[ -n "$j" ]]; then
+            [[ "$j" == "{}" ]] && { echo 0; return 0; }
+            echo "$j" | grep -o ':[0-9]*' | grep -o '[0-9]*' | awk '{s+=$1} END{print s+0}'
+            return 0
+        fi
+    fi
+    _udp_conntrack "$(cat /etc/hysteria/port2 2>/dev/null || echo 36713)"
+}
+
+# v1: metricas Prometheus (usuarios con conexiones activas). Respaldo:
+# conntrack de su puerto, que es lo que hace que SIEMPRE aparezca aunque
+# el binario v1.3.5 no exponga /metrics.
+mon_udp_v1() {
+    svc_active msyvpn-hysteria1 || { echo "-"; return 1; }
+    local port m n
+    port=$(cat /etc/hysteria/mport1 2>/dev/null || echo 27997)
+    m=$(curl -s --max-time 2 "http://127.0.0.1:$port/metrics" 2>/dev/null)
+    if [[ -n "$m" ]] && echo "$m" | grep -q 'hysteria_active_conns'; then
+        echo "$m" | awk '
+            /^hysteria_active_conns\{/ && $NF+0 > 0 {
+                if (match($0, /auth="[^"]*"/))
+                    seen[substr($0, RSTART+6, RLENGTH-7)] = 1
+            }
+            END { n=0; for (i in seen) n++; print n }'
+        return 0
+    fi
+    _udp_conntrack "$(cat /etc/hysteria/port1 2>/dev/null || echo 36712)"
+}
+
+mon_udp() {
+    local n1 n2 tot=0
+    n1=$(mon_udp_v1); n2=$(mon_udp_v2)
+    [[ "$n1" =~ ^[0-9]+$ ]] && tot=$((tot+n1))
+    [[ "$n2" =~ ^[0-9]+$ ]] && tot=$((tot+n2))
+    echo "$tot"
+}
+
 # Desglose por version para el panel
 mon_udp_detalle() {
     local a b
     a=$(mon_udp_v1); b=$(mon_udp_v2)
-    printf 'v1: %s   v2: %s' "${a:-n/d}" "${b:-n/d}"
+    printf 'v1: %s   v2: %s' "${a:--}" "${b:--}"
 }
 
 # Uso de memoria y swap
@@ -108,8 +123,51 @@ mon_swap() {
     if [[ "$(swapon --show --noheadings 2>/dev/null | wc -l)" -eq 0 ]]; then
         echo "sin swap"
     else
-        free -m | awk '/Swap:/{printf "%s MB usados de %s MB", $3, $2}'
+        free -m | awk -v c="$C_C" -v z="$C_0" \
+            '/Swap:/{printf "%s%s%s MB usados de %s%s%s MB", c,$3,z, c,$2,z}'
     fi
+}
+
+# RAM detallada: total / usado / cache / disponible
+mon_ram() {
+    free -m | awk -v c="$C_C" -v z="$C_0" '/Mem:/{
+        total=$2; used=$3; free=$4; cache=$6; avail=$7
+        printf "%s%s%s MB total  ·  usando %s%s%s MB  ·  cache %s%s%s MB  ·  libre %s%s%s MB",
+               c,total,z, c,used,z, c,cache,z, c,(avail?avail:free),z
+    }'
+}
+
+# CPU: velocidad y % de uso por nucleo (muestreo de ~0.7s)
+mon_cpu() {
+    local mhz
+    mhz=$(awk -F: '/cpu MHz/{printf "%d", $2; exit}' /proc/cpuinfo 2>/dev/null)
+    [[ -z "$mhz" || "$mhz" == 0 ]] && \
+        mhz=$(( $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq 2>/dev/null || echo 0) / 1000 ))
+    local ncpu; ncpu=$(nproc 2>/dev/null || echo 1)
+    printf 'Nucleos: %s%s%s   Velocidad: %s%s MHz%s\n' "$C_C" "$ncpu" "$C_0" "$C_C" "${mhz:-?}" "$C_0"
+    # Dos lecturas de /proc/stat; se comparan por nombre de nucleo, no por
+    # posicion (la linea tiene numero variable de columnas segun el kernel).
+    local fa="/tmp/.msycpu.a.$$" fb="/tmp/.msycpu.b.$$"
+    grep '^cpu[0-9]' /proc/stat > "$fa"
+    sleep 0.7
+    grep '^cpu[0-9]' /proc/stat > "$fb"
+    awk -v g="$C_G" -v y="$C_Y" -v r="$C_R" -v z="$C_0" '
+    FNR==NR {
+        tot=0; for (i=2;i<=NF;i++) tot+=$i
+        totA[$1]=tot; idleA[$1]=$5+$6      # idle + iowait
+        next
+    }
+    {
+        tot=0; for (i=2;i<=NF;i++) tot+=$i
+        dt=tot-totA[$1]; di=($5+$6)-idleA[$1]
+        pct=(dt>0)? (100*(dt-di)/dt) : 0
+        if (pct<0) pct=0; if (pct>100) pct=100
+        col=(pct>=80)? r : (pct>=50)? y : g
+        printf "  %-5s %s%5.1f%%%s ", $1, col, pct, z
+        if (++n%4==0) printf "\n"
+    }
+    END { if (n%4!=0) printf "\n" }' "$fa" "$fb"
+    rm -f "$fa" "$fb"
 }
 
 mon_show() {

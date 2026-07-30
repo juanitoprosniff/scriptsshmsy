@@ -164,6 +164,101 @@ msy_clean_disk() {
     ok "Limpieza terminada"
 }
 
+# ---------------------------------------------------------------------
+# BACKUP / RESTORE de usuarios y configuraciones
+# ---------------------------------------------------------------------
+# Guarda: cuentas SSH (usuario, contrasena, limite, expiracion), UUIDs y
+# protocolos de V2Ray, obfs/puertos de Hysteria, claves SlowDNS, clave
+# maestra y certificado. Sirve para migrar a otra VPS o restaurar.
+msy_backup() {
+    clear; title "BACKUP DE MSYVPN"
+    local tmp="/tmp/msybk.$$"; rm -rf "$tmp"; mkdir -p "$tmp"
+
+    # Exportar cuentas del sistema: usuario|contrasena|limite|dias_exp
+    local u pass lim exp
+    : > "$tmp/users.export"
+    while read -r u lim; do
+        [[ -z "$u" ]] && continue
+        id "$u" >/dev/null 2>&1 || continue
+        pass=$(cat "$SENHA_DIR/$u" 2>/dev/null)
+        exp=$(getent shadow "$u" 2>/dev/null | cut -d: -f8)
+        echo "$u|$pass|${lim:-1}|$exp" >> "$tmp/users.export"
+    done < <(cat "$USERS_DB" 2>/dev/null)
+
+    # Copiar datos y configs (lo que exista)
+    mkdir -p "$tmp/etc"
+    cp -a "$DATA_DIR"                "$tmp/etc/data"        2>/dev/null
+    cp -a "$MASTER_PUBKEY"           "$tmp/etc/"            2>/dev/null
+    cp -a "$CERT_PEM"                "$tmp/etc/"            2>/dev/null
+    cp -a /etc/hysteria              "$tmp/etc/hysteria"    2>/dev/null
+    cp -a /etc/slowdns/server.key /etc/slowdns/server.pub /etc/slowdns/ns \
+                                     "$tmp/etc/"            2>/dev/null
+
+    local out="/root/msyvpn-backup-$(date +%Y%m%d-%H%M).tar.gz"
+    tar czf "$out" -C "$tmp" . 2>/dev/null
+    rm -rf "$tmp"
+    if [[ -s "$out" ]]; then
+        ok "Backup creado: $out"
+        info "Cuentas: $(wc -l < "$USERS_DB" 2>/dev/null || echo 0)   Tamano: $(du -h "$out" | cut -f1)"
+        info "Descargalo con:  scp root@$(get_ip):$out ."
+    else
+        err "No se pudo crear el backup"
+    fi
+}
+
+msy_restore() {
+    clear; title "RESTAURAR BACKUP"
+    echo "  Archivos .tar.gz encontrados en /root:"
+    local f i=0; declare -a arr
+    while read -r f; do
+        [[ -z "$f" ]] && continue
+        i=$((i+1)); arr[$i]="$f"
+        printf "  [%d] %s  (%s)\n" "$i" "$(basename "$f")" "$(du -h "$f" | cut -f1)"
+    done < <(ls -1t /root/msyvpn-backup-*.tar.gz 2>/dev/null)
+    [[ $i -eq 0 ]] && { err "No hay backups en /root"; info "Sube tu .tar.gz a /root y vuelve a entrar."; return; }
+    local n; n=$(ask 'Numero a restaurar (0 cancela): ')
+    [[ "$n" =~ ^[0-9]+$ ]] && [[ $n -ge 1 && $n -le $i ]] || return
+    local bk="${arr[$n]}"
+
+    local tmp="/tmp/msyrs.$$"; rm -rf "$tmp"; mkdir -p "$tmp"
+    tar xzf "$bk" -C "$tmp" 2>/dev/null || { err "Backup corrupto"; rm -rf "$tmp"; return; }
+
+    # Restaurar datos y configs
+    [[ -d "$tmp/etc/data" ]]     && cp -a "$tmp/etc/data/."   "$DATA_DIR/" 2>/dev/null
+    [[ -f "$tmp/etc/master_pubkey.pub" ]] && cp -a "$tmp/etc/master_pubkey.pub" "$MASTER_PUBKEY" 2>/dev/null
+    [[ -f "$tmp/etc/cert.pem" ]] && cp -a "$tmp/etc/cert.pem" "$CERT_PEM" 2>/dev/null
+    [[ -d "$tmp/etc/hysteria" ]] && { mkdir -p /etc/hysteria; cp -a "$tmp/etc/hysteria/." /etc/hysteria/ 2>/dev/null; }
+    mkdir -p /etc/slowdns
+    for f in server.key server.pub ns; do
+        [[ -f "$tmp/etc/$f" ]] && cp -a "$tmp/etc/$f" /etc/slowdns/ 2>/dev/null
+    done
+
+    # Recrear las cuentas del sistema que falten
+    local u pass lim exp cnt=0
+    while IFS='|' read -r u pass lim exp; do
+        [[ -z "$u" ]] && continue
+        if ! id "$u" >/dev/null 2>&1; then
+            if [[ -n "$exp" ]]; then
+                useradd -e "$(date -d "@$((exp*86400))" +%Y-%m-%d 2>/dev/null)" -m -s /bin/false "$u" >/dev/null 2>&1
+            else
+                useradd -m -s /bin/false "$u" >/dev/null 2>&1
+            fi
+            [[ -n "$pass" ]] && echo "$u:$pass" | chpasswd 2>/dev/null
+            echo "$pass" > "$SENHA_DIR/$u"
+            declare -F u_install_authkey >/dev/null 2>&1 && u_install_authkey "$u"
+            cnt=$((cnt+1))
+        fi
+    done < "$tmp/users.export"
+    rm -rf "$tmp"
+
+    # Reconstruir configs y reiniciar
+    declare -F v2_rebuild >/dev/null 2>&1 && command -v xray >/dev/null 2>&1 && { v2_rebuild; svc_restart xray; }
+    declare -F hy_add_user >/dev/null 2>&1 && hy_add_user
+    svc_restart msyvpn-slowdns 2>/dev/null
+    ok "Restauracion completa: $cnt cuentas recreadas"
+    info "Total de cuentas ahora: $(wc -l < "$USERS_DB" 2>/dev/null || echo 0)"
+}
+
 upd_menu() {
     while true; do
         clear
@@ -171,16 +266,20 @@ upd_menu() {
         echo "  Disco: $(df -h / | awk 'NR==2{print $4" libres de "$2" ("$5" usado)"}')"
         line
         echo "  1) Actualizar script a la ultima version"
-        echo "  2) Liberar espacio en disco (logs)"
-        echo "  3) Reiniciar todos los servicios"
-        echo "  4) Desinstalar MSYVPN"
+        echo "  2) Backup (usuarios + configuraciones)"
+        echo "  3) Restaurar backup"
+        echo "  4) Liberar espacio en disco (logs)"
+        echo "  5) Reiniciar todos los servicios"
+        echo "  6) Desinstalar MSYVPN"
         echo "  0) Volver"
         line
         case "$(ask 'Opcion: ')" in
             1) msy_update; pause ;;
-            2) msy_clean_disk; pause ;;
-            3) msy_stop_all; msy_start_all; pause ;;
-            4) msy_uninstall; pause ;;
+            2) msy_backup; pause ;;
+            3) msy_restore; pause ;;
+            4) msy_clean_disk; pause ;;
+            5) msy_stop_all; msy_start_all; pause ;;
+            6) msy_uninstall; pause ;;
             0) return ;;
         esac
     done

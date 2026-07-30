@@ -300,13 +300,42 @@ ln -sf "$BASE_DIR/menu" /usr/bin/menu
 chmod +x /usr/bin/menu
 touch /usr/lib/msyvpn
 
-# --- Auto-activar Hysteria v1 y v2 (UDP) ----------------------------
-echo "[+] Activando Hysteria UDP (v1 y v2)..."
+# Mostrar el estado del sistema al entrar a la VPS (solo login interactivo)
+cat > /etc/profile.d/msyvpn.sh <<'PROFEOF'
+# MSYVPN: estado del sistema al iniciar sesion
+case "$-" in *i*)
+    if [[ -x /usr/bin/menu && -t 1 ]]; then
+        /usr/bin/menu estado 2>/dev/null
+        echo "Escribe 'menu' para administrar."
+    fi
+;; esac
+PROFEOF
+chmod +x /etc/profile.d/msyvpn.sh
+
+# --- Hysteria UDP (v1 y v2) -----------------------------------------
 source "$BASE_DIR/hysteria.sh"
-hy_install 1 >/dev/null 2>&1 && echo "    Hysteria v1 activo en UDP :$(hy_port 1)" \
-    || echo "    (Hysteria v1 se puede activar luego desde el menu)"
-hy_install 2 >/dev/null 2>&1 && echo "    Hysteria v2 activo en UDP :$(hy_port 2)" \
-    || echo "    (Hysteria v2 se puede activar luego desde el menu)"
+if [[ -n "$MSYVPN_UPDATE" ]]; then
+    # Actualizacion: regenerar SOLO lo que el usuario ya tenia instalado
+    # (asi toma los logs mudos y las metricas sin forzar versiones nuevas)
+    echo "[+] Regenerando Hysteria instalado..."
+    hy_installed 1 && hy_install 1 >/dev/null 2>&1
+    hy_installed 2 && hy_install 2 >/dev/null 2>&1
+else
+    echo "[+] Activando Hysteria UDP (v1 y v2)..."
+    hy_install 1 >/dev/null 2>&1 && echo "    Hysteria v1 activo en UDP :$(hy_port 1)" \
+        || echo "    (Hysteria v1 se puede activar luego desde el menu)"
+    hy_install 2 >/dev/null 2>&1 && echo "    Hysteria v2 activo en UDP :$(hy_port 2)" \
+        || echo "    (Hysteria v2 se puede activar luego desde el menu)"
+fi
+
+# Asegurar logs mudos en servicios ya existentes (units de versiones viejas)
+for _u in msyvpn-slowdns; do
+    _f=/etc/systemd/system/$_u.service
+    [[ -f "$_f" ]] || continue
+    grep -q 'StandardOutput=null' "$_f" || \
+        sed -i '/^ExecStart=/a StandardOutput=null\nStandardError=null' "$_f"
+done
+systemctl daemon-reload 2>/dev/null
 
 # En una actualizacion no se vuelve a preguntar nada
 if [[ -z "$MSYVPN_UPDATE" ]]; then
