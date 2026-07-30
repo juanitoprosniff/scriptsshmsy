@@ -188,6 +188,75 @@ cat > /etc/logrotate.d/msyvpn <<'EOF'
 }
 EOF
 
+# --- 4b. Swap segun la RAM (no se toca si ya hay uno) ----------------
+echo "[4b/9] Comprobando swap..."
+if [[ "$(swapon --show --noheadings 2>/dev/null | wc -l)" -gt 0 ]]; then
+    echo "    Ya existe swap activo — no se toca."
+else
+    _ram=$(awk '/MemTotal/{printf "%d", $2/1024}' /proc/meminfo)
+    if   [[ $_ram -le 2048 ]]; then _sw=2G
+    elif [[ $_ram -le 8192 ]]; then _sw=4G
+    else                            _sw=8G
+    fi
+    _avail=$(df -Pm / | awk 'NR==2{print $4}')
+    _need=$(( ${_sw%G} * 1024 + 1024 ))
+    if [[ ${_avail:-0} -lt $_need ]]; then
+        echo "    Espacio insuficiente para swap de $_sw — omitido."
+    else
+        if fallocate -l "$_sw" /swapfile 2>/dev/null || \
+           dd if=/dev/zero of=/swapfile bs=1M count=$(( ${_sw%G} * 1024 )) status=none 2>/dev/null; then
+            chmod 600 /swapfile
+            mkswap /swapfile >/dev/null 2>&1
+            if swapon /swapfile 2>/dev/null; then
+                grep -q '^/swapfile' /etc/fstab 2>/dev/null || \
+                    echo '/swapfile none swap sw 0 0' >> /etc/fstab
+                sysctl -w vm.swappiness=10 >/dev/null 2>&1
+                grep -q '^vm.swappiness' /etc/sysctl.conf 2>/dev/null || \
+                    echo 'vm.swappiness=10' >> /etc/sysctl.conf
+                echo "    Swap de $_sw activado (RAM detectada: ${_ram} MB)"
+            else
+                rm -f /swapfile; echo "    No se pudo activar el swap."
+            fi
+        else
+            rm -f /swapfile; echo "    No se pudo crear el archivo de swap."
+        fi
+    fi
+fi
+
+# --- 4c. Reglas de red persistentes ---------------------------------
+# iptables se pierde al reiniciar; este servicio las vuelve a poner.
+cat > "$BASE_DIR/firewall.sh" <<'FWEOF'
+#!/bin/bash
+# Reaplica las reglas de red de MSYVPN (se ejecuta al arrancar)
+source /etc/msyvpn/lib.sh
+source /etc/msyvpn/proxy.sh
+for p in $(cat "$BASE_DIR/ports.plain" 2>/dev/null) \
+         $(cat "$BASE_DIR/ports.tls" 2>/dev/null); do
+    open_port "$p" tcp
+done
+# Redireccion transparente de usuarios hacia Xray
+if [[ "$(cat "$DATA_DIR/v6exit" 2>/dev/null)" == "1" ]]; then
+    _v6x_rules_del; _v6x_rules_add >/dev/null
+fi
+# SlowDNS e Hysteria reaplican las suyas en su propio ExecStartPre
+exit 0
+FWEOF
+chmod +x "$BASE_DIR/firewall.sh"
+cat > /etc/systemd/system/msyvpn-firewall.service <<EOF
+[Unit]
+Description=MSYVPN reglas de red
+After=network-online.target xray.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=$BASE_DIR/firewall.sh
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 # --- 5. Certificado TLS (HAProxy) -----------------------------------
 echo "[5/9] Generando certificado..."
 source "$BASE_DIR/proxy.sh"
@@ -239,9 +308,14 @@ proxy_write_config
 # --- 9. Habilitar y arrancar ----------------------------------------
 echo "[9/9] Arrancando servicios..."
 systemctl daemon-reload
-systemctl enable --now msyvpn-wsproxy msyvpn-badvpn >/dev/null 2>&1
+systemctl enable --now msyvpn-wsproxy msyvpn-badvpn msyvpn-firewall >/dev/null 2>&1
 systemctl enable --now haproxy >/dev/null 2>&1
 systemctl restart msyvpn-wsproxy msyvpn-badvpn haproxy >/dev/null 2>&1
+# Volver a levantar lo que ya estuviera configurado (tras actualizar)
+for _s in xray msyvpn-slowdns msyvpn-hysteria1 msyvpn-hysteria2; do
+    systemctl is-enabled "$_s" >/dev/null 2>&1 && systemctl restart "$_s" >/dev/null 2>&1
+done
+bash "$BASE_DIR/firewall.sh" >/dev/null 2>&1
 
 # Comando 'menu'
 ln -sf "$BASE_DIR/menu" /usr/bin/menu

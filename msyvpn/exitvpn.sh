@@ -8,6 +8,7 @@
 
 EX_URI="$DATA_DIR/exit.uri"      # URI vless:// del nodo remoto
 EX_ON="$DATA_DIR/exit.on"        # 1 = activo
+: "${XR_CFG:=/usr/local/etc/xray/config.json}"
 
 ex_active() { [[ "$(cat "$EX_ON" 2>/dev/null)" == "1" ]]; }
 
@@ -86,19 +87,47 @@ ex_set() {
 ex_on() {
     [[ -s "$EX_URI" ]] || { err "Primero configura el nodo remoto (opcion 1)"; return 1; }
     xr_installed || { err "Requiere Xray instalado"; return 1; }
+    # Comprobar que la URI se puede convertir en un outbound
+    local j; j=$(ex_active_json_test) || {
+        err "La URI no es valida — revisa que empiece por vless:// y este completa"
+        return 1
+    }
     echo 1 > "$EX_ON"
     if ! v2_rebuild; then
         echo 0 > "$EX_ON"; v2_rebuild; svc_restart xray
         err "Config invalida — revisa la URI. Salida remota NO activada"
         return 1
     fi
+    # Verificar que el outbound "exit" quedo realmente escrito
+    if ! grep -q '"tag":"exit"' "$XR_CFG" 2>/dev/null; then
+        echo 0 > "$EX_ON"; v2_rebuild; svc_restart xray
+        err "El nodo remoto no llego a la config — se revirtio"; return 1
+    fi
     svc_restart xray; sleep 2
     if ! svc_active xray; then
         echo 0 > "$EX_ON"; v2_rebuild; svc_restart xray
-        err "Xray no arranco — se revirtio"; return 1
+        err "Xray no arranco — se revirtio. Ver: journalctl -u xray -n 20"; return 1
     fi
-    ok "Salida remota ACTIVA — el trafico sale por $EXV_HOST"
+    ok "Salida remota ACTIVA — el trafico de Xray sale por $EXV_HOST"
+    line
+    echo "  IMPORTANTE: esto solo cambia la IP del trafico que pasa por"
+    echo "  Xray (V2Ray). Para que SSH/SlowDNS tambien salgan por el nodo"
+    echo "  remoto hay que encender el desvio transparente."
+    line
+    if [[ "$(ask '¿Desviar tambien SSH por el nodo remoto? [s/N]: ')" =~ ^[sS]$ ]]; then
+        declare -F xredirect_on >/dev/null 2>&1 && xredirect_on
+    fi
     info "Comprueba con: Monitor -> Geolocalizacion de salida"
+}
+
+# Devuelve 0 si la URI guardada produce un outbound valido
+ex_active_json_test() {
+    local prev; prev=$(cat "$EX_ON" 2>/dev/null)
+    echo 1 > "$EX_ON"
+    local j; j=$(ex_outbound_json)
+    echo "${prev:-0}" > "$EX_ON"
+    [[ -n "$j" ]] && echo "$j" && return 0
+    return 1
 }
 
 ex_off() {
@@ -115,6 +144,29 @@ ex_status() {
     fi
 }
 
+# Diagnostico: dice exactamente que falta para que cambie la IP
+ex_diag() {
+    line
+    [[ -s "$EX_URI" ]] && ok "Nodo configurado: $(cat "$EX_URI" | cut -c1-45)..." \
+                       || err "Sin nodo configurado (opcion 1)"
+    ex_active && ok "Marcado como activo" || err "Marcado como inactivo (opcion 2)"
+    if grep -q '"tag":"exit"' "$XR_CFG" 2>/dev/null; then
+        ok "El outbound remoto SI esta en la config de Xray"
+    else
+        err "El outbound remoto NO esta en la config de Xray"
+    fi
+    svc_active xray && ok "Xray activo" || err "Xray parado"
+    if [[ "$(cat "$DATA_DIR/v6exit" 2>/dev/null)" == "1" ]]; then
+        ok "Desvio de SSH activo: SSH tambien sale por el nodo remoto"
+    else
+        info "Desvio de SSH apagado: SOLO V2Ray sale por el nodo remoto"
+        info "Actívalo con la opcion 4 si quieres cubrir SSH."
+    fi
+    line
+    info "Prueba real desde la VPS (sale por Xray solo si desvias SSH):"
+    info "  curl -s https://ifconfig.co"
+}
+
 ex_menu() {
     while true; do
         clear
@@ -128,12 +180,18 @@ ex_menu() {
         echo "  1) Configurar nodo remoto (URI vless://)"
         echo "  2) Activar salida remota"
         echo "  3) Desactivar"
+        echo "  4) Desviar TAMBIEN SSH por el nodo remoto"
+        echo "  5) Dejar de desviar SSH"
+        echo "  6) Ver diagnostico"
         echo "  0) Volver"
         line
         case "$(ask 'Opcion: ')" in
             1) ex_set; pause ;;
             2) ex_on;  pause ;;
             3) ex_off; pause ;;
+            4) declare -F xredirect_on  >/dev/null 2>&1 && xredirect_on;  pause ;;
+            5) declare -F v6exit_off    >/dev/null 2>&1 && v6exit_off;    pause ;;
+            6) ex_diag; pause ;;
             0) return ;;
         esac
     done

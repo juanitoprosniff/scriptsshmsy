@@ -67,6 +67,19 @@ msy_update() {
     MSYVPN_UPDATE=1 bash "$tmp/install.sh"
     rm -rf "$tmp"
 
+    # El instalador solo arranca sus propios servicios; hay que volver a
+    # levantar V2Ray, SlowDNS e Hysteria, que se detuvieron mas arriba.
+    echo ""
+    info "Reactivando servicios..."
+    msy_start_all
+    # Reaplicar reglas de red (iptables no sobrevive a reinicios)
+    [[ -x "$BASE_DIR/firewall.sh" ]] && bash "$BASE_DIR/firewall.sh" >/dev/null 2>&1
+    local s
+    for s in xray msyvpn-slowdns msyvpn-hysteria1 msyvpn-hysteria2; do
+        systemctl is-enabled "$s" >/dev/null 2>&1 && \
+            { systemctl restart "$s" >/dev/null 2>&1; info "  $s reiniciado"; }
+    done
+
     echo ""
     line
     ok "ACTUALIZACION COMPLETA"
