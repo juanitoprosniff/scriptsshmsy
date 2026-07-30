@@ -1,5 +1,5 @@
 #!/bin/bash
-# menu - Menu principal MSYVPN (plano, sin colores)
+# menu - Menu principal MSYVPN (plano)
 source /etc/msyvpn/lib.sh
 source /etc/msyvpn/proxy.sh
 source /etc/msyvpn/users.sh      # arrastra v2ray.sh y hysteria.sh
@@ -13,26 +13,35 @@ estado() {
     clear
     title "ESTADO DEL SISTEMA"
     echo "IP        : $(get_ip)"
-    echo "Sistema   : Ubuntu/Debian $(os_ver)  ($(arch))"
-    echo "RAM       : $(free -m | awk '/Mem:/{print $3"/"$2" MB"}')"
-    echo "Swap      : $(mon_swap)"
-    echo "Disco     : $(df -h / | awk 'NR==2{print $3"/"$2"  ("$5" usado)"}')"
-    echo "Carga CPU : $(uptime | awk -F'load average:' '{print $2}')"
+    echo "Sistema   : Ubuntu/Debian $(os_ver)  ($(arch))   MSYVPN $(cat "$BASE_DIR/VERSION" 2>/dev/null)"
+    echo "Uptime    : $(uptime -p 2>/dev/null | sed 's/^up //')"
     line
-    proxy_status
-    svc_active xray              && echo "Xray (V2Ray)  : activo"
-    svc_active msyvpn-slowdns    && echo "SlowDNS       : activo"
-    svc_active msyvpn-hysteria1  && echo "Hysteria v1   : activo"
-    svc_active msyvpn-hysteria2  && echo "Hysteria v2   : activo"
+    mon_cpu
+    echo "RAM  : $(mon_ram)"
+    echo "Swap : $(mon_swap)"
+    echo "Disco: $(df -h / | awk 'NR==2{print $3" de "$2"  ("$5" usado)"}')"
     line
-    echo "Cuentas   : $(wc -l < "$USERS_DB" 2>/dev/null || echo 0)"
-    echo "Online    : SSH $(mon_ssh)  ·  V2Ray $(mon_v2ray)  ·  UDP $(mon_udp)"
+    echo "-- Servicios --"
+    printf '  OpenSSH: %s   HAProxy: %s   wsproxy: %s\n' \
+        "$(svc_txt ssh sshd)" "$(svc_txt haproxy)" "$(svc_txt msyvpn-wsproxy)"
+    printf '  BadVPN: %s   Xray/V2Ray: %s   SlowDNS: %s\n' \
+        "$(svc_txt msyvpn-badvpn)" "$(svc_txt xray)" "$(svc_txt msyvpn-slowdns)"
+    printf '  Hysteria v1: %s   v2: %s\n' \
+        "$(svc_txt msyvpn-hysteria1)" "$(svc_txt msyvpn-hysteria2)"
+    line
+    echo "-- Usuarios online --"
+    printf '  SSH: %s   V2Ray: %s   UDP: %s   (%s)\n' \
+        "$(num "$(mon_ssh)")" "$(num "$(mon_v2ray)")" "$(num "$(mon_udp)")" "$(mon_udp_detalle)"
+    printf '  Cuentas creadas: %s\n' "$(num "$(wc -l < "$USERS_DB" 2>/dev/null || echo 0)")"
     line
 }
 
+# Permite mostrar solo el estado (lo usa el login de la VPS): menu estado
+[[ "$1" == "estado" ]] && { estado; exit 0; }
+
 while true; do
     clear
-    title "MSYVPN $(cat /etc/msyvpn/VERSION 2>/dev/null)  -  PANEL VPN"
+    title "MSYVPN $(cat "$BASE_DIR/VERSION" 2>/dev/null)  -  PANEL VPN"
     echo "IP: $(get_ip)   |   'menu' para volver aqui"
     line
     echo "  1) Usuarios / Cuentas"
@@ -42,7 +51,7 @@ while true; do
     echo "  5) UDP Hysteria  (v1 y v2)"
     echo "  6) Monitor y velocidad"
     echo "  7) Estado del sistema"
-    echo "  8) Mantenimiento (actualizar / disco)"
+    echo "  8) Mantenimiento (actualizar / disco / backup)"
     echo "  0) Salir"
     line
     case "$(ask 'Opcion: ')" in
