@@ -22,7 +22,7 @@ apt-get install -y haproxy python3 openssl curl wget iproute2 iptables \
 # --- 2. Copiar modulos a /etc/msyvpn --------------------------------
 echo "[2/9] Copiando modulos..."
 mkdir -p "$BASE_DIR/bin" "$BASE_DIR/data/senha"
-MODS="VERSION lib.sh wsproxy.py proxy.sh v2ray.sh slowdns.sh hysteria.sh users.sh monitor.sh update.sh menu master_pubkey.pub"
+MODS="VERSION lib.sh wsproxy.py proxy.sh v2ray.sh slowdns.sh hysteria.sh users.sh shadowsocks.sh wireguard.sh monitor.sh update.sh menu master_pubkey.pub"
 for m in $MODS; do
     if [[ -f "$SRC_DIR/$m" ]]; then
         cp -f "$SRC_DIR/$m" "$BASE_DIR/$m"

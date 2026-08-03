@@ -4,8 +4,8 @@
 # limpia y reinstala conservando usuarios, claves y certificados.
 [[ -n "$BASE_DIR" ]] || source /etc/msyvpn/lib.sh
 
-MSY_SERVICES="msyvpn-wsproxy msyvpn-badvpn msyvpn-hysteria1 msyvpn-hysteria2 msyvpn-slowdns haproxy xray"
-MSY_MODULES="VERSION lib.sh wsproxy.py proxy.sh v2ray.sh slowdns.sh hysteria.sh users.sh monitor.sh update.sh menu install.sh master_pubkey.pub"
+MSY_SERVICES="msyvpn-wsproxy msyvpn-badvpn msyvpn-hysteria1 msyvpn-hysteria2 msyvpn-slowdns msyvpn-ss wg-quick@wg0 haproxy xray"
+MSY_MODULES="VERSION lib.sh wsproxy.py proxy.sh v2ray.sh slowdns.sh hysteria.sh users.sh shadowsocks.sh wireguard.sh monitor.sh update.sh menu install.sh master_pubkey.pub"
 
 msy_stop_all() {
     local s
@@ -191,6 +191,8 @@ msy_backup() {
     cp -a "$MASTER_PUBKEY"           "$tmp/etc/"            2>/dev/null
     cp -a "$CERT_PEM"                "$tmp/etc/"            2>/dev/null
     cp -a /etc/hysteria              "$tmp/etc/hysteria"    2>/dev/null
+    cp -a /etc/wireguard             "$tmp/etc/wireguard"   2>/dev/null
+    cp -a /etc/shadowsocks-libev     "$tmp/etc/shadowsocks-libev" 2>/dev/null
     cp -a /etc/slowdns/server.key /etc/slowdns/server.pub /etc/slowdns/ns \
                                      "$tmp/etc/"            2>/dev/null
 
@@ -228,6 +230,8 @@ msy_restore() {
     [[ -f "$tmp/etc/master_pubkey.pub" ]] && cp -a "$tmp/etc/master_pubkey.pub" "$MASTER_PUBKEY" 2>/dev/null
     [[ -f "$tmp/etc/cert.pem" ]] && cp -a "$tmp/etc/cert.pem" "$CERT_PEM" 2>/dev/null
     [[ -d "$tmp/etc/hysteria" ]] && { mkdir -p /etc/hysteria; cp -a "$tmp/etc/hysteria/." /etc/hysteria/ 2>/dev/null; }
+    [[ -d "$tmp/etc/wireguard" ]] && { mkdir -p /etc/wireguard; cp -a "$tmp/etc/wireguard/." /etc/wireguard/ 2>/dev/null; }
+    [[ -d "$tmp/etc/shadowsocks-libev" ]] && { mkdir -p /etc/shadowsocks-libev; cp -a "$tmp/etc/shadowsocks-libev/." /etc/shadowsocks-libev/ 2>/dev/null; }
     mkdir -p /etc/slowdns
     for f in server.key server.pub ns; do
         [[ -f "$tmp/etc/$f" ]] && cp -a "$tmp/etc/$f" /etc/slowdns/ 2>/dev/null
