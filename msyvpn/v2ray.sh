@@ -64,10 +64,6 @@ v2_rebuild() {
     if xr_is_on xhttp; then
         inb+=$(printf ',{"listen":"127.0.0.1","port":%s,"protocol":"vless","settings":{"clients":[%s],"decryption":"none"},"streamSettings":{"network":"xhttp","xhttpSettings":{"path":"%s"}}}' "$V2_XH_PORT" "$vless" "$V2_XH_PATH")
     fi
-    if xr_is_on ss; then
-        local sp; sp=$(cat "$XR_SS" 2>/dev/null || { openssl rand -hex 8 | tee "$XR_SS"; })
-        inb+=$(printf ',{"listen":"0.0.0.0","port":%s,"protocol":"shadowsocks","settings":{"method":"aes-128-gcm","password":"%s","network":"tcp,udp"}}' "$V2_SS_PORT" "$sp")
-    fi
     if xr_is_on reality; then
         xr_reality_keys
         local rp pk sid rport
@@ -194,7 +190,6 @@ v2_toggle() {
         ok "$proto desactivado"
     else
         [[ "$proto" == reality ]] && { local p; p=$(ask 'Puerto Reality [2087]: '); [[ "$p" =~ ^[0-9]+$ ]] || p=2087; echo "$p" > "$XR_RPORT"; open_port "$p" tcp; }
-        [[ "$proto" == ss ]] && open_port "$V2_SS_PORT" tcp
         xr_enable "$proto"
         if v2_rebuild; then svc_restart xray; svc_restart msyvpn-wsproxy; ok "$proto activado"; else xr_disable "$proto"; fi
     fi
@@ -203,20 +198,19 @@ v2_toggle() {
 v2_protocols_menu() {
     while true; do
         clear; title "PROTOCOLOS XRAY (VLESS siempre activo)"
-        for p in vmess trojan shadowsocks:ss reality xhttp; do
+        for p in vmess trojan reality xhttp; do
             local name="${p%%:*}" key="${p##*:}"
             xr_is_on "$key" && echo "  [ON ] $name" || echo "  [off] $name"
         done
         line
-        echo "  1) VMess    2) Trojan    3) Shadowsocks"
-        echo "  4) Reality  5) xhttp     0) Volver"
+        echo "  1) VMess    2) Trojan"
+        echo "  3) Reality  4) xhttp     0) Volver"
         line
         case "$(ask 'Activar/desactivar: ')" in
             1) v2_toggle vmess;  pause ;;
             2) v2_toggle trojan; pause ;;
-            3) v2_toggle ss;     pause ;;
-            4) v2_toggle reality;pause ;;
-            5) v2_toggle xhttp;  pause ;;
+            3) v2_toggle reality;pause ;;
+            4) v2_toggle xhttp;  pause ;;
             0) return ;;
         esac
     done

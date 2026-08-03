@@ -118,6 +118,26 @@ mon_udp_detalle() {
     printf 'v1: %s   v2: %s' "${a:--}" "${b:--}"
 }
 
+# --- WireGuard: peers con handshake reciente (< 3 min) --------------
+mon_wg() {
+    command -v wg >/dev/null 2>&1 || { echo "-"; return; }
+    svc_active wg-quick@wg0 || { echo 0; return; }
+    local now; now=$(date +%s)
+    wg show all latest-handshakes 2>/dev/null | \
+        awk -v now="$now" '$3>0 && (now-$3)<180{n++} END{print n+0}'
+}
+
+# --- ShadowSocks: IPs unicas con conexion establecida al puerto -----
+mon_ss() {
+    svc_active msyvpn-ss || { echo "-"; return; }
+    local port; port=$(jq -r '.server_port // 8388' /etc/shadowsocks-libev/config.json 2>/dev/null || echo 8388)
+    ss -tanH 2>/dev/null | awk -v p=":$port" '
+        $1=="ESTAB" && index($4,p) {
+            ip=$5; sub(/:[0-9]+$/,"",ip); seen[ip]=1
+        }
+        END { n=0; for (i in seen) n++; print n }'
+}
+
 # Uso de memoria y swap
 mon_swap() {
     if [[ "$(swapon --show --noheadings 2>/dev/null | wc -l)" -eq 0 ]]; then
@@ -176,9 +196,11 @@ mon_show() {
     tot=$(( s + v + ${u//-/0} ))
     clear
     title "MONITOR DE CONEXIONES"
-    printf '  Usuarios SSH online    : %s\n' "$s"
-    printf '  Usuarios V2Ray online  : %s\n' "$v"
-    printf '  Usuarios UDP online    : %s   (%s)\n' "$u" "$(mon_udp_detalle)"
+    printf '  Usuarios SSH online    : %s\n' "$(num "$s")"
+    printf '  Usuarios V2Ray online  : %s\n' "$(num "$v")"
+    printf '  Usuarios UDP online    : %s   (%s)\n' "$(num "$u")" "$(mon_udp_detalle)"
+    printf '  ShadowSocks online     : %s\n' "$(num "$(mon_ss)")"
+    printf '  WireGuard online       : %s\n' "$(num "$(mon_wg)")"
     line
     printf '  TOTAL ONLINE           : %s\n' "$tot"
     line
