@@ -32,22 +32,15 @@ JSON
     chmod 600 "$SS_CFG"
 }
 
-ss_install() {
+# Configura el servidor sin preguntar (para auto-activar):
+# ss_setup [puerto] [password] [metodo]
+ss_setup() {
     ensure_pkg shadowsocks-libev qrencode jq
-    ss_installed || { err "No se pudo instalar shadowsocks-libev (revisa el repo 'universe')"; return 1; }
-    local port pass method
-    port=$(ask "Puerto [$SS_PORT_DEF]: "); [[ "$port" =~ ^[0-9]+$ ]] || port=$SS_PORT_DEF
-    echo "  Metodo:  1) aes-256-gcm (recomendado)   2) chacha20-ietf-poly1305"
-    case "$(ask 'Metodo [1]: ')" in
-        2) method="chacha20-ietf-poly1305" ;;
-        *) method="$SS_METHOD_DEF" ;;
-    esac
-    pass=$(ask 'Password (ENTER genera uno): ')
+    ss_installed || return 1
+    local port="${1:-$SS_PORT_DEF}" pass="$2" method="${3:-$SS_METHOD_DEF}"
     [[ -z "$pass" ]] && pass=$(openssl rand -base64 12 2>/dev/null | tr -dc 'A-Za-z0-9' | head -c 16)
-
     ss_write_config "$port" "$pass" "$method"
     open_port "$port" tcp; open_port "$port" udp
-    # Servicio propio (el del paquete a veces apunta a otra config)
     cat > /etc/systemd/system/msyvpn-ss.service <<EOF
 [Unit]
 Description=MSYVPN ShadowSocks
@@ -69,6 +62,20 @@ EOF
     systemctl enable --now msyvpn-ss >/dev/null 2>&1
     svc_restart msyvpn-ss
     sleep 1
+}
+
+ss_install() {
+    ensure_pkg shadowsocks-libev qrencode jq
+    ss_installed || { err "No se pudo instalar shadowsocks-libev (revisa el repo 'universe')"; return 1; }
+    local port pass method
+    port=$(ask "Puerto [$SS_PORT_DEF]: "); [[ "$port" =~ ^[0-9]+$ ]] || port=$SS_PORT_DEF
+    echo "  Metodo:  1) aes-256-gcm (recomendado)   2) chacha20-ietf-poly1305"
+    case "$(ask 'Metodo [1]: ')" in
+        2) method="chacha20-ietf-poly1305" ;;
+        *) method="$SS_METHOD_DEF" ;;
+    esac
+    pass=$(ask 'Password (ENTER genera uno): ')
+    ss_setup "$port" "$pass" "$method"
     ss_info
 }
 
