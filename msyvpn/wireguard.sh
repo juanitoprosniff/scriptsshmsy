@@ -11,21 +11,22 @@ WG_NET="10.66.66"
 WG_PORT_DEF=51820
 
 wg_installed() { command -v wg >/dev/null 2>&1 && [[ -f "$WG_CFG" ]]; }
-wg_iface()  { ip -4 route ls 2>/dev/null | awk '/default/{print $5; exit}'; }
-wg_port()   { grep -oP 'ListenPort\s*=\s*\K[0-9]+' "$WG_CFG" 2>/dev/null || echo $WG_PORT_DEF; }
+wg_iface()  { ip -4 route ls 2>/dev/null | awk '/^default/{for(i=1;i<=NF;i++)if($i=="dev"){print $(i+1);exit}}'; }
+wg_port()   { cat "$WG_DIR/port" 2>/dev/null || echo $WG_PORT_DEF; }
 wg_srv_pub(){ cat "$WG_DIR/server.pub" 2>/dev/null; }
 
 # Reconstruye wg0.conf desde server.key + los .conf de los clientes.
-# Cada cliente guarda su clave privada; la publica se deriva de ella.
+# La clave publica de cada cliente se deriva de su clave privada.
 wg_rebuild() {
-    local port ifc; port=$(wg_port); ifc=$(wg_iface)
+    local port ifc; port=$(wg_port); ifc=$(wg_iface); [[ -z "$ifc" ]] && ifc=eth0
     {
         echo "[Interface]"
         echo "Address = $WG_NET.1/24"
         echo "ListenPort = $port"
         echo "PrivateKey = $(cat "$WG_DIR/server.key")"
-        echo "PostUp = iptables -A FORWARD -i $WG_IF -j ACCEPT; iptables -A FORWARD -o $WG_IF -j ACCEPT; iptables -t nat -A POSTROUTING -o $ifc -j MASQUERADE"
-        echo "PostDown = iptables -D FORWARD -i $WG_IF -j ACCEPT; iptables -D FORWARD -o $WG_IF -j ACCEPT; iptables -t nat -D POSTROUTING -o $ifc -j MASQUERADE"
+        # -I (insert) gana a reglas DROP previas (Docker/ufw); sysctl por si acaso
+        echo "PostUp = sysctl -w net.ipv4.ip_forward=1; iptables -I FORWARD -i $WG_IF -j ACCEPT; iptables -I FORWARD -o $WG_IF -j ACCEPT; iptables -t nat -I POSTROUTING -s $WG_NET.0/24 -o $ifc -j MASQUERADE"
+        echo "PostDown = iptables -D FORWARD -i $WG_IF -j ACCEPT; iptables -D FORWARD -o $WG_IF -j ACCEPT; iptables -t nat -D POSTROUTING -s $WG_NET.0/24 -o $ifc -j MASQUERADE"
         local c cpriv cpub cpsk cip
         for c in "$WG_CLIENTS"/*.conf; do
             [[ -f "$c" ]] || continue
@@ -45,21 +46,29 @@ wg_rebuild() {
     systemctl restart wg-quick@$WG_IF 2>/dev/null
 }
 
-wg_install() {
+# Configura el servidor sin preguntar (para auto-activar): wg_setup [puerto]
+wg_setup() {
+    local port="${1:-$WG_PORT_DEF}"
     ensure_pkg wireguard wireguard-tools qrencode iptables
     command -v wg >/dev/null 2>&1 || { err "No se pudo instalar WireGuard"; return 1; }
     mkdir -p "$WG_DIR" "$WG_CLIENTS"; chmod 700 "$WG_DIR"
-    local port; port=$(ask "Puerto UDP [$WG_PORT_DEF]: "); [[ "$port" =~ ^[0-9]+$ ]] || port=$WG_PORT_DEF
     if [[ ! -s "$WG_DIR/server.key" ]]; then
         (umask 077; wg genkey | tee "$WG_DIR/server.key" | wg pubkey > "$WG_DIR/server.pub")
     fi
     echo "$port" > "$WG_DIR/port"
+    # Forwarding + rp_filter permisivo (algunas VPS descartan el trafico del tunel)
     sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
+    sysctl -w net.ipv4.conf.all.rp_filter=2 >/dev/null 2>&1
     open_port "$port" udp
     wg_rebuild
     systemctl enable wg-quick@$WG_IF >/dev/null 2>&1
-    systemctl restart wg-quick@$WG_IF
+    systemctl restart wg-quick@$WG_IF 2>/dev/null
     sleep 1
+}
+
+wg_install() {
+    local port; port=$(ask "Puerto UDP [$WG_PORT_DEF]: "); [[ "$port" =~ ^[0-9]+$ ]] || port=$WG_PORT_DEF
+    wg_setup "$port" && ok "WireGuard activo en UDP $port" || return 1
     wg_info
 }
 
@@ -80,11 +89,13 @@ wg_add_client() {
     local ip priv psk; ip=$(wg_next_ip)
     [[ -z "$ip" ]] && { err "Sin IPs libres"; return; }
     priv=$(wg genkey); psk=$(wg genpsk)
+    # MTU 1420: evita el clasico "conecta pero no carga paginas"
     cat > "$WG_CLIENTS/$name.conf" <<EOF
 [Interface]
 PrivateKey = $priv
 Address = $ip/24
 DNS = 1.1.1.1, 8.8.8.8
+MTU = 1420
 
 [Peer]
 PublicKey = $(wg_srv_pub)
@@ -129,6 +140,27 @@ wg_del_client() {
     ok "Cliente $name eliminado"
 }
 
+# Diagnostico de por que "no da internet"
+wg_diag() {
+    line
+    if ! wg_installed; then echo "WireGuard no instalado."; line; return; fi
+    ip link show $WG_IF >/dev/null 2>&1 && ok "Interfaz $WG_IF arriba" || err "Interfaz $WG_IF NO existe (systemctl status wg-quick@$WG_IF)"
+    [[ "$(sysctl -n net.ipv4.ip_forward 2>/dev/null)" == 1 ]] && ok "IP forwarding activo" || err "IP forwarding DESACTIVADO"
+    local ifc; ifc=$(wg_iface)
+    echo "     Interfaz de salida: ${ifc:-?}"
+    if iptables -t nat -C POSTROUTING -s $WG_NET.0/24 -o "$ifc" -j MASQUERADE 2>/dev/null; then
+        ok "NAT (MASQUERADE) presente"
+    else
+        err "NAT ausente — reactivando..."; wg_rebuild
+    fi
+    echo "     Puerto UDP: $(wg_port)   Clientes: $(ls -1 "$WG_CLIENTS"/*.conf 2>/dev/null | wc -l)"
+    echo "     Handshakes recientes:"
+    wg show $WG_IF latest-handshakes 2>/dev/null | awk 'NF{print "       "$0}' || echo "       (ninguno)"
+    line
+    info "Si conecta pero no navega: el cliente ya trae MTU 1420 y DNS 1.1.1.1."
+    info "Verifica que el puerto UDP $(wg_port) este abierto en el firewall del panel VPS."
+}
+
 wg_info() {
     line
     if wg_installed; then
@@ -156,7 +188,8 @@ wg_menu() {
         echo "  2) Crear cliente (.conf + QR)"
         echo "  3) Listar clientes (online/offline)"
         echo "  4) Eliminar cliente"
-        echo "  5) Detener / Eliminar servidor"
+        echo "  5) Diagnostico (por que no navega)"
+        echo "  6) Detener / Eliminar servidor"
         echo "  0) Volver"
         line
         case "$(ask 'Opcion: ')" in
@@ -164,7 +197,8 @@ wg_menu() {
             2) wg_add_client; pause ;;
             3) wg_list; pause ;;
             4) wg_del_client; pause ;;
-            5) wg_remove; pause ;;
+            5) wg_diag; pause ;;
+            6) wg_remove; pause ;;
             0) return ;;
         esac
     done

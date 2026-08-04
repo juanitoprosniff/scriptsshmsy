@@ -155,6 +155,8 @@ net.netfilter.nf_conntrack_max=524288
 net.netfilter.nf_conntrack_tcp_timeout_established=1800
 net.netfilter.nf_conntrack_udp_timeout=30
 net.netfilter.nf_conntrack_udp_timeout_stream=120
+# rp_filter permisivo: algunas VPS descartan el trafico de WireGuard
+net.ipv4.conf.all.rp_filter=2
 # MSYVPN-END
 EOF
 modprobe nf_conntrack 2>/dev/null
@@ -336,6 +338,24 @@ for _u in msyvpn-slowdns; do
         sed -i '/^ExecStart=/a StandardOutput=null\nStandardError=null' "$_f"
 done
 systemctl daemon-reload 2>/dev/null
+
+# --- WireGuard y ShadowSocks: auto-activar (si aun no estan) ---------
+echo "[+] Activando WireGuard y ShadowSocks..."
+source "$BASE_DIR/wireguard.sh"
+if wg_installed; then
+    wg_rebuild   # regenerar con las mejoras (MTU/NAT) sin tocar clientes
+    echo "    WireGuard ya configurado, actualizado."
+else
+    wg_setup >/dev/null 2>&1 && echo "    WireGuard activo en UDP :$(wg_port)" \
+        || echo "    (WireGuard se puede activar luego desde el menu)"
+fi
+source "$BASE_DIR/shadowsocks.sh"
+if ss_installed && [[ -f "$SS_CFG" ]]; then
+    echo "    ShadowSocks ya configurado."
+else
+    ss_setup >/dev/null 2>&1 && echo "    ShadowSocks activo en :$(ss_port)" \
+        || echo "    (ShadowSocks se puede activar luego desde el menu)"
+fi
 
 # En una actualizacion no se vuelve a preguntar nada
 if [[ -z "$MSYVPN_UPDATE" ]]; then
