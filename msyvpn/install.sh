@@ -269,12 +269,12 @@ Description=MSYVPN BadVPN UDP Gateway
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/badvpn-udpgw --listen-addr 127.0.0.1:7300 --max-clients 2000 --max-connections-for-client 12 --client-socket-sndbuf 65536
+ExecStart=/usr/bin/badvpn-udpgw --listen-addr 127.0.0.1:7300 --max-clients 2000 --max-connections-for-client 48 --client-socket-sndbuf 65536
 StandardOutput=null
 StandardError=null
 Restart=always
 RestartSec=2
-MemoryMax=150M
+MemoryMax=512M
 
 [Install]
 WantedBy=multi-user.target
