@@ -3,8 +3,29 @@
 # Cuenta = usuario del sistema (shell /bin/false, solo tunel).
 # Al crear, se agrega tambien a V2Ray y Hysteria si estan instalados.
 [[ -n "$BASE_DIR" ]] || source /etc/msyvpn/lib.sh
-source "$BASE_DIR/v2ray.sh"    >/dev/null 2>&1
-source "$BASE_DIR/hysteria.sh" >/dev/null 2>&1
+source "$BASE_DIR/v2ray.sh"       >/dev/null 2>&1
+source "$BASE_DIR/hysteria.sh"    >/dev/null 2>&1
+source "$BASE_DIR/shadowsocks.sh" >/dev/null 2>&1
+source "$BASE_DIR/wireguard.sh"   >/dev/null 2>&1
+
+# Muestra las credenciales del usuario en cada protocolo instalado
+u_show_protocols() {
+    local name="$1" pass="$2" ip; ip=$(get_ip)
+    if hy_installed 1 || hy_installed 2; then
+        line; echo "== UDP HYSTERIA (auth = usuario:contrasena) =="
+        hy_installed 1 && echo "  v1  $ip:$(hy_port 1)  obfs:$(hy_obfs 1)  auth: $name:$pass"
+        hy_installed 2 && echo "  v2  $ip:$(hy_port 2)  obfs:$(hy_obfs 2)  auth: $name:$pass"
+    fi
+    if ss_installed && [[ -f "$SS_CFG" ]]; then
+        line; echo "== SHADOWSOCKS (compartido) =="
+        echo "  $(ss_link)"
+    fi
+    if wg_installed; then
+        line; echo "== WIREGUARD ($name) =="
+        wg_create_peer "$name" && wg_show_client "$name"
+    fi
+    line
+}
 
 # Instala la clave maestra en el usuario (auth por llave, solo tunel).
 # Asi la app se conecta con la llave y la contrasena no viaja en claro.
@@ -63,9 +84,10 @@ u_create() {
         v2_rebuild && svc_restart xray
         v2_show_one "$uuid" "$name"
     fi
-    # Integracion Hysteria
+    # Integracion Hysteria (auth = usuario:contrasena)
     hy_add_user
-    [[ -f /etc/hysteria/config.json ]] && echo "Hysteria : $name:$pass  (obfs $HY_OBFS, puerto $HY_PORT)"
+    # Credenciales/enlaces de todos los protocolos instalados
+    u_show_protocols "$name" "$pass"
 }
 
 u_remove() {

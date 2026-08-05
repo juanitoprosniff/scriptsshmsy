@@ -46,6 +46,18 @@ wg_rebuild() {
     systemctl restart wg-quick@$WG_IF 2>/dev/null
 }
 
+# Aplica NAT + forwarding de forma idempotente, sin depender del PostUp
+# de wg-quick (que a veces falla en silencio y deja el tunel sin salida).
+wg_apply_nat() {
+    local ifc; ifc=$(wg_iface); [[ -z "$ifc" ]] && ifc=eth0
+    sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
+    sysctl -w net.ipv4.conf.all.rp_filter=2 >/dev/null 2>&1
+    iptables -C FORWARD -i $WG_IF -j ACCEPT 2>/dev/null || iptables -I FORWARD -i $WG_IF -j ACCEPT
+    iptables -C FORWARD -o $WG_IF -j ACCEPT 2>/dev/null || iptables -I FORWARD -o $WG_IF -j ACCEPT
+    iptables -t nat -C POSTROUTING -s $WG_NET.0/24 -o "$ifc" -j MASQUERADE 2>/dev/null || \
+        iptables -t nat -I POSTROUTING -s $WG_NET.0/24 -o "$ifc" -j MASQUERADE
+}
+
 # Configura el servidor sin preguntar (para auto-activar): wg_setup [puerto]
 wg_setup() {
     local port="${1:-$WG_PORT_DEF}"
@@ -59,11 +71,13 @@ wg_setup() {
     # Forwarding + rp_filter permisivo (algunas VPS descartan el trafico del tunel)
     sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
     sysctl -w net.ipv4.conf.all.rp_filter=2 >/dev/null 2>&1
+    modprobe wireguard 2>/dev/null
     open_port "$port" udp
     wg_rebuild
     systemctl enable wg-quick@$WG_IF >/dev/null 2>&1
     systemctl restart wg-quick@$WG_IF 2>/dev/null
     sleep 1
+    wg_apply_nat        # garantiza el NAT aunque el PostUp haya fallado
 }
 
 wg_install() {
@@ -80,16 +94,16 @@ wg_next_ip() {
     done
 }
 
-wg_add_client() {
-    wg_installed || { err "Instala WireGuard primero (opcion 1)"; return; }
-    local name; name=$(ask 'Nombre del cliente: ')
+# Crea el peer sin interaccion (reusa si ya existe). Uso: wg_create_peer <nombre>
+wg_create_peer() {
+    wg_installed || return 1
+    local name="$1"
     name=$(echo "$name" | tr -cd '[:alnum:]_-' | head -c 20)
-    [[ -z "$name" ]] && { err "Nombre invalido"; return; }
-    [[ -f "$WG_CLIENTS/$name.conf" ]] && { err "Ya existe"; return; }
+    [[ -z "$name" ]] && return 1
+    [[ -f "$WG_CLIENTS/$name.conf" ]] && return 0    # ya existe, se reusa
     local ip priv psk; ip=$(wg_next_ip)
-    [[ -z "$ip" ]] && { err "Sin IPs libres"; return; }
+    [[ -z "$ip" ]] && return 1
     priv=$(wg genkey); psk=$(wg genpsk)
-    # MTU 1420: evita el clasico "conecta pero no carga paginas"
     cat > "$WG_CLIENTS/$name.conf" <<EOF
 [Interface]
 PrivateKey = $priv
@@ -101,16 +115,47 @@ MTU = 1420
 PublicKey = $(wg_srv_pub)
 PresharedKey = $psk
 Endpoint = $(get_ip):$(wg_port)
-AllowedIPs = 0.0.0.0/0, ::/0
+AllowedIPs = 0.0.0.0/0
 PersistentKeepalive = 25
 EOF
     chmod 600 "$WG_CLIENTS/$name.conf"
     wg_rebuild
-    ok "Cliente $name creado (IP $ip)"
-    echo "Config guardada en: $WG_CLIENTS/$name.conf"
-    echo "Descargala con:  scp root@$(get_ip):$WG_CLIENTS/$name.conf ."
+}
+
+# Muestra la config, el enlace y el QR de un cliente
+wg_show_client() {
+    local name="$1" f="$WG_CLIENTS/$name.conf"
+    [[ -f "$f" ]] || { err "Cliente $name no existe"; return; }
+    echo "Config: $f   (scp root@$(get_ip):$f .)"
+    echo "Enlace NapsternetV:"
+    echo "  $(wg_sn_link "$name")"
     echo ""
-    command -v qrencode >/dev/null 2>&1 && qrencode -t ANSIUTF8 < "$WG_CLIENTS/$name.conf" 2>/dev/null
+    command -v qrencode >/dev/null 2>&1 && qrencode -t ANSIUTF8 < "$f" 2>/dev/null
+}
+
+wg_add_client() {
+    wg_installed || { err "Instala WireGuard primero (opcion 1)"; return; }
+    local name; name=$(ask 'Nombre del cliente: ')
+    name=$(echo "$name" | tr -cd '[:alnum:]_-' | head -c 20)
+    [[ -z "$name" ]] && { err "Nombre invalido"; return; }
+    [[ -f "$WG_CLIENTS/$name.conf" ]] && { err "Ya existe"; return; }
+    wg_create_peer "$name" || { err "No se pudo crear (sin IPs o WG parado)"; return; }
+    ok "Cliente $name creado"
+    wg_show_client "$name"
+}
+
+# Enlace sn://wg? para apps tipo NapsternetV = base64url(zlib(.conf))
+wg_sn_link() {
+    local name="$1" f="$WG_CLIENTS/$name.conf"
+    [[ -f "$f" ]] || return
+    local b64
+    b64=$(python3 - "$f" <<'PY' 2>/dev/null
+import sys, zlib, base64
+data = open(sys.argv[1], 'rb').read()
+print(base64.urlsafe_b64encode(zlib.compress(data, 9)).decode().rstrip('='))
+PY
+)
+    [[ -n "$b64" ]] && echo "sn://wg?$b64"
 }
 
 wg_list() {
