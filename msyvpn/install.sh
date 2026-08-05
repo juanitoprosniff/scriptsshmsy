@@ -343,8 +343,9 @@ systemctl daemon-reload 2>/dev/null
 echo "[+] Activando WireGuard y ShadowSocks..."
 source "$BASE_DIR/wireguard.sh"
 if wg_installed; then
-    wg_rebuild   # regenerar con las mejoras (MTU/NAT) sin tocar clientes
-    echo "    WireGuard ya configurado, actualizado."
+    wg_rebuild        # regenerar con las mejoras (MTU/NAT) sin tocar clientes
+    wg_apply_nat      # garantizar el NAT corregido
+    echo "    WireGuard ya configurado, NAT actualizado."
 else
     wg_setup >/dev/null 2>&1 && echo "    WireGuard activo en UDP :$(wg_port)" \
         || echo "    (WireGuard se puede activar luego desde el menu)"
