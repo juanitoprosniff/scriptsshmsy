@@ -50,12 +50,23 @@ wg_rebuild() {
 # de wg-quick (que a veces falla en silencio y deja el tunel sin salida).
 wg_apply_nat() {
     local ifc; ifc=$(wg_iface); [[ -z "$ifc" ]] && ifc=eth0
-    sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
-    sysctl -w net.ipv4.conf.all.rp_filter=2 >/dev/null 2>&1
+    # Forwarding + rp_filter en TODAS las interfaces (all + wg0 + salida)
+    sysctl -w net.ipv4.ip_forward=1                         >/dev/null 2>&1
+    sysctl -w net.ipv4.conf.all.rp_filter=2                 >/dev/null 2>&1
+    sysctl -w net.ipv4.conf.default.rp_filter=2             >/dev/null 2>&1
+    sysctl -w net.ipv4.conf.$WG_IF.rp_filter=2              >/dev/null 2>&1
+    sysctl -w net.ipv4.conf.$ifc.rp_filter=2                >/dev/null 2>&1
+    # Politica FORWARD por defecto ACCEPT (Docker/otros la ponen en DROP)
+    iptables -P FORWARD ACCEPT 2>/dev/null
     iptables -C FORWARD -i $WG_IF -j ACCEPT 2>/dev/null || iptables -I FORWARD -i $WG_IF -j ACCEPT
     iptables -C FORWARD -o $WG_IF -j ACCEPT 2>/dev/null || iptables -I FORWARD -o $WG_IF -j ACCEPT
     iptables -t nat -C POSTROUTING -s $WG_NET.0/24 -o "$ifc" -j MASQUERADE 2>/dev/null || \
         iptables -t nat -I POSTROUTING -s $WG_NET.0/24 -o "$ifc" -j MASQUERADE
+    # Desactivar firewalld si esta activo (bloquea el forward silenciosamente)
+    if systemctl is-active --quiet firewalld 2>/dev/null; then
+        systemctl stop firewalld 2>/dev/null
+        systemctl disable firewalld 2>/dev/null
+    fi
 }
 
 # Configura el servidor sin preguntar (para auto-activar): wg_setup [puerto]
@@ -185,25 +196,74 @@ wg_del_client() {
     ok "Cliente $name eliminado"
 }
 
-# Diagnostico de por que "no da internet"
+# Diagnostico REAL: revisa cada capa Y hace una prueba de trafico
 wg_diag() {
     line
     if ! wg_installed; then echo "WireGuard no instalado."; line; return; fi
-    ip link show $WG_IF >/dev/null 2>&1 && ok "Interfaz $WG_IF arriba" || err "Interfaz $WG_IF NO existe (systemctl status wg-quick@$WG_IF)"
-    [[ "$(sysctl -n net.ipv4.ip_forward 2>/dev/null)" == 1 ]] && ok "IP forwarding activo" || err "IP forwarding DESACTIVADO"
-    local ifc; ifc=$(wg_iface)
-    echo "     Interfaz de salida: ${ifc:-?}"
+
+    # 1. Interfaz
+    ip link show $WG_IF >/dev/null 2>&1 && ok "Interfaz $WG_IF arriba" \
+        || { err "Interfaz $WG_IF NO existe"; info "Mira: journalctl -u wg-quick@$WG_IF -n 30"; line; return; }
+
+    # 2. Forwarding + rp_filter
+    local ipf ifc rpa rpi
+    ipf=$(sysctl -n net.ipv4.ip_forward 2>/dev/null)
+    ifc=$(wg_iface); [[ -z "$ifc" ]] && ifc=eth0
+    rpa=$(sysctl -n net.ipv4.conf.all.rp_filter 2>/dev/null)
+    rpi=$(sysctl -n net.ipv4.conf.$ifc.rp_filter 2>/dev/null)
+    [[ "$ipf" == 1 ]] && ok "IP forwarding activo" || err "IP forwarding DESACTIVADO (sysctl net.ipv4.ip_forward)"
+    echo "     Interfaz salida: $ifc   rp_filter all=$rpa ${ifc}=$rpi (debe ser 0 o 2)"
+
+    # 3. Politica FORWARD y NAT
+    local pol
+    pol=$(iptables -L FORWARD -n 2>/dev/null | awk 'NR==1{print $NF}' | tr -d '()')
+    [[ "$pol" == "ACCEPT" ]] && ok "FORWARD policy: ACCEPT" || err "FORWARD policy: $pol (algunos paquetes se descartan)"
     if iptables -t nat -C POSTROUTING -s $WG_NET.0/24 -o "$ifc" -j MASQUERADE 2>/dev/null; then
-        ok "NAT (MASQUERADE) presente"
+        ok "NAT (MASQUERADE) presente sobre $ifc"
     else
-        err "NAT ausente — reactivando..."; wg_rebuild
+        err "NAT ausente — REAPLICANDO ahora..."; wg_apply_nat
+        iptables -t nat -C POSTROUTING -s $WG_NET.0/24 -o "$ifc" -j MASQUERADE 2>/dev/null \
+            && ok "NAT recien aplicado" || err "NAT sigue sin poder aplicarse"
     fi
-    echo "     Puerto UDP: $(wg_port)   Clientes: $(ls -1 "$WG_CLIENTS"/*.conf 2>/dev/null | wc -l)"
-    echo "     Handshakes recientes:"
-    wg show $WG_IF latest-handshakes 2>/dev/null | awk 'NF{print "       "$0}' || echo "       (ninguno)"
+
+    # 4. Docker/firewalld interfiriendo
+    systemctl is-active --quiet docker 2>/dev/null && \
+        info "Docker detectado: pone FORWARD en DROP. Ya se forzo ACCEPT."
+    systemctl is-active --quiet firewalld 2>/dev/null && \
+        err "firewalld ACTIVO — bloquea el forward. Se recomienda: systemctl disable --now firewalld"
+    # nftables como respaldo puede interferir tambien
+    if command -v nft >/dev/null 2>&1 && nft list ruleset 2>/dev/null | grep -qi 'drop'; then
+        info "nftables tiene reglas 'drop'. Revisa: nft list ruleset"
+    fi
+
+    # 5. Peers y handshakes
+    local nc; nc=$(ls -1 "$WG_CLIENTS"/*.conf 2>/dev/null | wc -l)
+    echo "     Puerto UDP: $(wg_port)   Clientes: $nc"
+    local now hs any=0; now=$(date +%s)
+    while read -r p t rest; do
+        [[ -z "$p" ]] && continue
+        any=1
+        if [[ "$t" -gt 0 ]]; then
+            echo "       $p  handshake hace $((now-t))s"
+        else
+            echo "       $p  SIN handshake"
+        fi
+    done < <(wg show $WG_IF latest-handshakes 2>/dev/null)
+    [[ $any -eq 0 ]] && echo "       (ningun peer conectado)"
+
+    # 6. Prueba REAL: puede el servidor salir a internet desde 10.66.66.1?
+    echo ""
+    echo "  Prueba de salida a internet (ping desde IP del tunel):"
+    if ping -c 2 -W 2 -I $WG_NET.1 8.8.8.8 >/dev/null 2>&1; then
+        ok "El servidor SI puede salir a internet desde $WG_NET.1"
+        info "Si el cliente aun no navega: recrea el .conf del cliente (opcion 2)"
+        info "Los .conf viejos tenian ::/0 y sin MTU — hay que regenerarlos."
+    else
+        err "El servidor NO puede salir a internet desde $WG_NET.1"
+        info "El problema es la salida del propio server, NO del cliente."
+        info "Prueba: ping -I $ifc 8.8.8.8   (¿la VPS tiene internet?)"
+    fi
     line
-    info "Si conecta pero no navega: el cliente ya trae MTU 1420 y DNS 1.1.1.1."
-    info "Verifica que el puerto UDP $(wg_port) este abierto en el firewall del panel VPS."
 }
 
 wg_info() {

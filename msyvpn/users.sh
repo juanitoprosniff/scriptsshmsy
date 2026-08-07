@@ -27,17 +27,24 @@ u_show_protocols() {
     line
 }
 
-# Instala la clave maestra en el usuario (auth por llave, solo tunel).
-# Asi la app se conecta con la llave y la contrasena no viaja en claro.
+# Instala la clave maestra en el usuario. Devuelve 0 si todo OK, 1 si no.
+# Fuerza permisos correctos y verifica que sshd los aceptara (StrictModes).
 u_install_authkey() {
     local usr="$1" home
+    id "$usr" >/dev/null 2>&1 || { err "u_install_authkey: $usr no existe"; return 1; }
+    [[ -s "$MASTER_PUBKEY" ]] || return 1
     home=$(getent passwd "$usr" | cut -d: -f6)
     [[ -z "$home" ]] && home="/home/$usr"
-    [[ -s "$MASTER_PUBKEY" ]] || return
+
+    # BUG posible: useradd -m puede fallar en silencio. Crear el home si falta.
+    if [[ ! -d "$home" ]]; then
+        mkdir -p "$home"
+        chown "$usr:$usr" "$home" 2>/dev/null
+    fi
+    # /home debe ser accesible por sshd (a veces queda 750 y sshd falla)
+    chmod 755 /home 2>/dev/null
+
     mkdir -p "$home/.ssh"
-    # Sin command="/bin/false": esa opcion ejecuta un comando que termina
-    # al instante y cierra la sesion, tumbando el tunel de la app.
-    # Se permite solo reenvio de puertos, que es lo que necesita la VPN.
     local opts='no-pty,no-X11-forwarding,no-agent-forwarding'
     local pub; pub=$(cat "$MASTER_PUBKEY")
     if [[ "$pub" == ssh-* || "$pub" == ecdsa-* ]]; then
@@ -45,9 +52,21 @@ u_install_authkey() {
     else
         echo "$pub" > "$home/.ssh/authorized_keys"
     fi
-    chmod 700 "$home" "$home/.ssh"
+    # Permisos exactos que exige StrictModes de sshd
+    chown "$usr:$usr" "$home"
+    chmod 750 "$home"
+    chown "$usr:$usr" "$home/.ssh"
+    chmod 700 "$home/.ssh"
+    chown "$usr:$usr" "$home/.ssh/authorized_keys"
     chmod 600 "$home/.ssh/authorized_keys"
-    chown -R "$usr:$usr" "$home"
+
+    # Verificacion real: el archivo debe existir con dueno correcto
+    local own; own=$(stat -c '%U' "$home/.ssh/authorized_keys" 2>/dev/null)
+    if [[ "$own" != "$usr" ]]; then
+        err "authorized_keys de $usr NO quedo con dueno correcto (es $own)"
+        return 1
+    fi
+    return 0
 }
 
 u_create() {
@@ -62,11 +81,27 @@ u_create() {
     if [[ "$days" -eq 0 ]]; then exp="2099-12-31"; gui="ilimitado"
     else exp=$(date +%Y-%m-%d -d "+$days days"); gui=$(date +%d/%m/%Y -d "+$days days"); fi
 
-    useradd -e "$exp" -m -s /bin/false "$name" >/dev/null 2>&1
+    # Crear usuario y home de forma robusta (no depender solo de -m)
+    useradd -e "$exp" -m -s /bin/false "$name" 2>/tmp/msyua.log
+    if ! id "$name" >/dev/null 2>&1; then
+        err "useradd fallo:"; cat /tmp/msyua.log; return
+    fi
+    # Si -m no creo el home (algunos entornos), crearlo a mano
+    [[ -d /home/$name ]] || { mkdir -p /home/$name; chown "$name:$name" /home/$name; }
     echo "$name:$pass" | chpasswd 2>/dev/null
     echo "$pass" > "$SENHA_DIR/$name"
     grep -qw "^$name " "$USERS_DB" 2>/dev/null || echo "$name $lim" >> "$USERS_DB"
-    u_install_authkey "$name"
+
+    # Instalar la clave maestra y verificar. Si falla, avisar (no continuar
+    # a ciegas como antes: era el bug de 'usuarios nuevos no conectan').
+    if [[ -s "$MASTER_PUBKEY" ]]; then
+        if u_install_authkey "$name"; then
+            ok "Clave maestra instalada en $name"
+        else
+            err "La clave maestra NO se instalo bien en $name"
+            info "Prueba: menu -> Usuarios -> 7) Diagnosticar clave maestra"
+        fi
+    fi
 
     clear; title "CUENTA CREADA"
     echo "IP       : $(get_ip)"
