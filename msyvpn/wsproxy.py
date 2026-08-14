@@ -24,14 +24,50 @@ DEFAULT_SSH = sys.argv[2] if len(sys.argv) > 2 else "127.0.0.1:22"
 if ":" not in DEFAULT_SSH:
     DEFAULT_SSH = "127.0.0.1:22"
 
-# Banner: siempre 101 (lo que esperan los payloads) con el nombre de la
-# app coloreado. Cambiar el codigo rompia los metodos normales, por eso
-# se responde 101 a todo.
+# Respuesta al payload. Hay apps que solo conectan si reciben 101 y otras
+# que solo conectan con 200, asi que NO se puede fijar una sola. Se elige
+# segun lo que pide el cliente en su propia peticion:
+#   - metodo CONNECT              -> 200 (es lo que define un proxy HTTP)
+#   - la peticion empieza por HTTP/ -> 200 (payload de "respuesta falsa")
+#   - hay cabecera Upgrade        -> 101 (handshake WebSocket)
+#   - resto                       -> WSPROXY_CODE (por defecto 101)
+# Asi los dos tipos de payload conviven en el mismo puerto.
 APP   = os.environ.get("WSPROXY_NAME", "MSY VPN")
 COLOR = os.environ.get("WSPROXY_COLOR", "green")
+try:
+    DEFAULT_CODE = int(os.environ.get("WSPROXY_CODE", "101"))
+except ValueError:
+    DEFAULT_CODE = 101
 
-RESPONSE = ('HTTP/1.1 101 <font color="%s">%s</font>\r\n\r\n'
-            % (COLOR, APP)).encode()
+_REASON = {101: "Switching Protocols", 200: "Connection established"}
+
+
+def _resp(code):
+    return ('HTTP/1.1 %d <font color="%s">%s</font>\r\n\r\n'
+            % (code, COLOR, APP)).encode()
+
+
+RESP_101 = _resp(101)
+RESP_200 = _resp(200)
+RESP_DEF = _resp(DEFAULT_CODE)
+
+
+def pick_response(buf):
+    """Elige 101 o 200 segun lo que espera el cliente."""
+    if not buf:
+        return RESP_DEF
+    head = buf[:512].upper()
+    first = head.split(b"\r\n", 1)[0]
+    # Payload que empieza con una linea de respuesta falsa: "HTTP/1.1 200"
+    if first.startswith(b"HTTP/"):
+        return RESP_200 if b"200" in first else RESP_101
+    # CONNECT es un proxy HTTP clasico: espera 200
+    if first.startswith(b"CONNECT"):
+        return RESP_200
+    # Handshake WebSocket explicito: espera 101
+    if b"UPGRADE:" in head or b"WEBSOCKET" in head:
+        return RESP_101
+    return RESP_DEF
 
 # Linea informativa que se envia ANTES del banner del servidor SSH.
 # El RFC 4253 permite lineas previas al "SSH-..." y los clientes las
@@ -244,7 +280,7 @@ async def handle(cr, cw):
                     else:
                         host, port = parse_hp(DEFAULT_SSH)
                         is_ssh = True
-                    cw.write(RESPONSE)
+                    cw.write(pick_response(buf))
                     await cw.drain()
                     if find_header(buf, "X-Split"):
                         try:
