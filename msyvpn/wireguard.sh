@@ -251,7 +251,18 @@ wg_diag() {
     done < <(wg show $WG_IF latest-handshakes 2>/dev/null)
     [[ $any -eq 0 ]] && echo "       (ningun peer conectado)"
 
-    # 6. Prueba REAL: puede el servidor salir a internet desde 10.66.66.1?
+    # 6. SlowDNS secuestrando el DNS de los clientes (causa clasica de
+    #    "conecta pero no navega" en la app oficial de WireGuard)
+    if iptables -t nat -S PREROUTING 2>/dev/null | grep -q '\-\-dport 53 -j REDIRECT'; then
+        if iptables -t nat -S PREROUTING 2>/dev/null | grep -- '--dport 53 -j REDIRECT' | grep -qv '\-i '; then
+            err "SlowDNS esta secuestrando el DNS de TODOS (incluidos los del tunel)"
+            info "Corrigelo con: menu -> SlowDNS -> 4) Reaplicar reglas de red"
+        else
+            ok "El desvio DNS de SlowDNS esta acotado a la interfaz publica"
+        fi
+    fi
+
+    # 7. Prueba REAL: puede el servidor salir a internet desde 10.66.66.1?
     echo ""
     echo "  Prueba de salida a internet (ping desde IP del tunel):"
     if ping -c 2 -W 2 -I $WG_NET.1 8.8.8.8 >/dev/null 2>&1; then

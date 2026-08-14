@@ -339,6 +339,13 @@ for _u in msyvpn-slowdns; do
 done
 systemctl daemon-reload 2>/dev/null
 
+# SlowDNS: reaplicar reglas (la version vieja secuestraba el DNS de los
+# clientes VPN y los dejaba sin navegar)
+if [[ -f /etc/systemd/system/msyvpn-slowdns.service ]]; then
+    source "$BASE_DIR/slowdns.sh"
+    sd_apply_net 2>/dev/null && echo "    SlowDNS: reglas de DNS corregidas"
+fi
+
 # --- WireGuard y ShadowSocks: auto-activar (si aun no estan) ---------
 echo "[+] Activando WireGuard y ShadowSocks..."
 source "$BASE_DIR/wireguard.sh"
