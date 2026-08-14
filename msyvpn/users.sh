@@ -7,6 +7,7 @@ source "$BASE_DIR/v2ray.sh"       >/dev/null 2>&1
 source "$BASE_DIR/hysteria.sh"    >/dev/null 2>&1
 source "$BASE_DIR/shadowsocks.sh" >/dev/null 2>&1
 source "$BASE_DIR/wireguard.sh"   >/dev/null 2>&1
+source "$BASE_DIR/openvpn.sh"     >/dev/null 2>&1
 
 # Muestra las credenciales del usuario en cada protocolo instalado
 u_show_protocols() {
@@ -23,6 +24,12 @@ u_show_protocols() {
     if wg_installed; then
         line; echo "== WIREGUARD ($name) =="
         wg_create_peer "$name" && wg_show_client "$name"
+    fi
+    if ov_installed; then
+        line; echo "== OPENVPN (mismo usuario y contrasena) =="
+        echo "  Usuario: $name    Contrasena: $pass"
+        echo "  Perfiles en $OV_CLIENTS/ (udp / tcp / auto)"
+        echo "  scp root@$ip:$OV_CLIENTS/'*.ovpn' ."
     fi
     line
 }

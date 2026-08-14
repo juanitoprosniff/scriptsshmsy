@@ -100,10 +100,12 @@ _WORKER_ID = 0
 
 _routes = []                # lista de (path, host, port)
 _routes_mtime = 0
+_ovpn = []                  # backends OpenVPN TCP [(host, port), ...]
+_ovpn_rr = 0                # reparto por turnos entre instancias
 _sem = None                 # se crea dentro del loop (compat 3.6+)
 
 # Conteo exacto: por categoria, {ip: nº de conexiones abiertas}
-_live = {"ssh": {}, "v2ray": {}}
+_live = {"ssh": {}, "v2ray": {}, "ovpn": {}}
 
 
 def _track(cat, ip, delta):
@@ -141,19 +143,49 @@ def read_proxy_header(buf):
     return None, rest
 
 
+def is_openvpn(buf):
+    """Detecta el primer paquete de OpenVPN sobre TCP.
+
+    Formato: 2 bytes de longitud (big-endian) + 1 byte de opcode. El
+    opcode son los 5 bits altos; los handshakes de cliente son
+    HARD_RESET_CLIENT V1/V2/V3 = 1, 7 y 10.
+    """
+    if len(buf) < 3 or buf[0] != 0:
+        return False
+    ln = (buf[0] << 8) | buf[1]
+    if ln < 10 or ln > 1600:
+        return False
+    return (buf[2] >> 3) in (1, 7, 10)
+
+
+def ovpn_backend():
+    """Devuelve la siguiente instancia OpenVPN (reparto por turnos).
+
+    OpenVPN es de un solo hilo por proceso, asi que repartir entre varias
+    instancias es lo que permite aprovechar todos los nucleos.
+    """
+    global _ovpn_rr
+    if not _ovpn:
+        return None
+    b = _ovpn[_ovpn_rr % len(_ovpn)]
+    _ovpn_rr += 1
+    return b
+
+
 def load_routes():
     """Recarga las rutas V2Ray si el archivo cambio (barato)."""
-    global _routes, _routes_mtime
+    global _routes, _routes_mtime, _ovpn
     try:
         mt = os.stat(ROUTES_PATH).st_mtime
     except OSError:
-        _routes, _routes_mtime = [], 0
+        _routes, _routes_mtime, _ovpn = [], 0, []
         return
     if mt == _routes_mtime:
         return
     _routes_mtime = mt
     enabled = False
     routes = []
+    ovpn = []
     try:
         with open(ROUTES_PATH) as f:
             for ln in f:
@@ -164,6 +196,15 @@ def load_routes():
                 k, v = k.strip().upper(), v.strip()
                 if k == "V2RAY_ENABLED":
                     enabled = v.lower() in ("yes", "1", "true", "on")
+                elif k == "OPENVPN":
+                    for item in v.split(","):
+                        item = item.strip()
+                        if ":" in item:
+                            h, _, pt = item.rpartition(":")
+                            try:
+                                ovpn.append((h, int(pt)))
+                            except ValueError:
+                                pass
                 elif k == "ROUTE":
                     parts = v.split(":")
                     if len(parts) < 3:
@@ -176,6 +217,7 @@ def load_routes():
         pass
     routes.sort(key=lambda r: -len(r[0]))     # ruta mas larga primero
     _routes = routes if enabled else []
+    _ovpn = ovpn
 
 
 def match_route(buf):
@@ -267,6 +309,10 @@ async def handle(cr, cw):
                 host, port = parse_hp(DEFAULT_SSH)          # SSH directo
                 first = buf
                 is_ssh = True
+            elif _ovpn and is_openvpn(buf):
+                host, port = ovpn_backend()                 # OpenVPN directo
+                first = buf
+                cat = "ovpn"
             else:
                 route = match_route(buf)
                 if route:
@@ -275,11 +321,6 @@ async def handle(cr, cw):
                     cat = "v2ray"
                 else:
                     target = find_header(buf, "X-Real-Host") # WebSocket/payload
-                    if target:
-                        host, port = parse_hp(target)
-                    else:
-                        host, port = parse_hp(DEFAULT_SSH)
-                        is_ssh = True
                     cw.write(pick_response(buf))
                     await cw.drain()
                     if find_header(buf, "X-Split"):
@@ -288,6 +329,25 @@ async def handle(cr, cw):
                         except Exception:
                             pass
                     first = b""
+                    if target:
+                        host, port = parse_hp(target)
+                    elif _ovpn:
+                        # Con OpenVPN activo hay que mirar el primer paquete
+                        # del tunel para saber si el cliente habla SSH u
+                        # OpenVPN: asi conviven en el mismo puerto y payload.
+                        try:
+                            first = await asyncio.wait_for(cr.read(BUFLEN), 3)
+                        except asyncio.TimeoutError:
+                            first = b""
+                        if is_openvpn(first):
+                            host, port = ovpn_backend()
+                            cat = "ovpn"
+                        else:
+                            host, port = parse_hp(DEFAULT_SSH)
+                            is_ssh = True
+                    else:
+                        host, port = parse_hp(DEFAULT_SSH)
+                        is_ssh = True
 
             if cat is None and is_ssh:
                 cat = "ssh"
