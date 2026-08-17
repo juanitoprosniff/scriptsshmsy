@@ -1,5 +1,6 @@
 #!/bin/bash
 # install.sh - Instalador unico MSYVPN (activar todo automatico)
+# Creado y modificado por t:me/JuanitoProSniif
 # Compatible Ubuntu 18-26 (server y minimal) / Debian 10-12
 # Instala: HAProxy + wsproxy(async) + OpenSSH afinado + BBR + BadVPN
 set -o pipefail
@@ -22,7 +23,7 @@ apt-get install -y haproxy python3 openssl curl wget iproute2 iptables \
 # --- 2. Copiar modulos a /etc/msyvpn --------------------------------
 echo "[2/9] Copiando modulos..."
 mkdir -p "$BASE_DIR/bin" "$BASE_DIR/data/senha"
-MODS="VERSION lib.sh wsproxy.py proxy.sh v2ray.sh slowdns.sh hysteria.sh users.sh shadowsocks.sh wireguard.sh openvpn.sh monitor.sh update.sh menu master_pubkey.pub"
+MODS="VERSION lib.sh wsproxy.py proxy.sh v2ray.sh slowdns.sh hysteria.sh users.sh shadowsocks.sh wireguard.sh openvpn.sh monitor.sh update.sh menu firewall.sh master_pubkey.pub"
 for m in $MODS; do
     if [[ -f "$SRC_DIR/$m" ]]; then
         cp -f "$SRC_DIR/$m" "$BASE_DIR/$m"
@@ -60,13 +61,15 @@ ClientAliveInterval 30
 ClientAliveCountMax 3
 IPQoS lowdelay throughput
 AllowTcpForwarding yes
-GatewayPorts yes
+GatewayPorts no
 PubkeyAuthentication yes
 PasswordAuthentication yes
+PermitRootLogin prohibit-password
 MaxStartups 200:30:2000
-MaxSessions 50
-# Con cientos de usuarios reconectando, sshd escribia GB en auth.log
-LogLevel ERROR'
+MaxSessions 20
+# LogLevel INFO es obligatorio para saber QUE usuario genero un abuso.
+# El volumen se controla en firewall.sh y en rsyslog, no apagando el log.
+LogLevel INFO'
 
 # Compatibilidad con apps VPN y claves RSA antiguas: OpenSSH 8.8+
 # desactiva las firmas ssh-rsa (SHA-1) y eso rompe la clave maestra y
@@ -140,6 +143,7 @@ net.ipv4.tcp_mtu_probing=1
 net.core.somaxconn=8192
 net.core.netdev_max_backlog=5000
 net.ipv4.tcp_max_syn_backlog=8192
+net.ipv4.tcp_syncookies=1
 net.ipv4.ip_forward=1
 net.ipv6.conf.all.disable_ipv6=0
 net.ipv6.conf.default.disable_ipv6=0
@@ -286,8 +290,24 @@ proxy_write_config
 
 # --- 9. Habilitar y arrancar ----------------------------------------
 echo "[9/9] Arrancando servicios..."
-systemctl disable --now msyvpn-firewall >/dev/null 2>&1
-rm -f /etc/systemd/system/msyvpn-firewall.service "$BASE_DIR/firewall.sh" 2>/dev/null
+# Firewall de salida: evita que un usuario del tunel escanee o spamee
+chmod +x "$BASE_DIR/firewall.sh" 2>/dev/null
+cat > /etc/systemd/system/msyvpn-firewall.service <<'EOF'
+[Unit]
+Description=MSYVPN egress firewall
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/etc/msyvpn/firewall.sh aplicar
+ExecStop=/etc/msyvpn/firewall.sh limpiar
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl enable --now msyvpn-firewall >/dev/null 2>&1
 systemctl daemon-reload
 systemctl enable --now msyvpn-wsproxy msyvpn-badvpn >/dev/null 2>&1
 systemctl enable --now haproxy >/dev/null 2>&1

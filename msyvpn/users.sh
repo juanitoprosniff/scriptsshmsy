@@ -1,5 +1,6 @@
 #!/bin/bash
 # users.sh - Crear y administrar cuentas SSH
+# Creado y modificado por t:me/JuanitoProSniif
 # Cuenta = usuario del sistema (shell /bin/false, solo tunel).
 # Al crear, se agrega tambien a V2Ray y Hysteria si estan instalados.
 [[ -n "$BASE_DIR" ]] || source /etc/msyvpn/lib.sh
@@ -81,7 +82,7 @@ u_create() {
     name=$(ask 'Usuario: ')
     [[ "$name" =~ ^[a-zA-Z0-9_-]{2,16}$ ]] || { err "Nombre invalido"; return; }
     id "$name" >/dev/null 2>&1 && { err "Ya existe"; return; }
-    pass=$(ask 'Contrasena: ');  [[ ${#pass} -ge 4 ]] || { err "Minimo 4 caracteres"; return; }
+    pass=$(ask 'Contrasena: ');  [[ ${#pass} -ge 12 ]] || { err "Minimo 12 caracteres"; return; }
     days=$(ask 'Dias (0=ilimitado): '); [[ "$days" =~ ^[0-9]+$ ]] || days=30
     lim=$(ask 'Limite conexiones [1]: '); [[ "$lim" =~ ^[0-9]+$ ]] || lim=1
 
@@ -148,7 +149,7 @@ u_remove() {
 u_passwd() {
     local name pass; name=$(ask 'Usuario: ')
     id "$name" >/dev/null 2>&1 || { err "No existe"; return; }
-    pass=$(ask 'Nueva contrasena: '); [[ ${#pass} -ge 4 ]] || { err "Minimo 4"; return; }
+    pass=$(ask 'Nueva contrasena: '); [[ ${#pass} -ge 12 ]] || { err "Minimo 12 caracteres"; return; }
     echo "$name:$pass" | chpasswd 2>/dev/null
     echo "$pass" > "$SENHA_DIR/$name"
     hy_add_user
