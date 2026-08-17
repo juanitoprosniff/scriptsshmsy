@@ -22,7 +22,7 @@ apt-get install -y haproxy python3 openssl curl wget iproute2 iptables \
 # --- 2. Copiar modulos a /etc/msyvpn --------------------------------
 echo "[2/9] Copiando modulos..."
 mkdir -p "$BASE_DIR/bin" "$BASE_DIR/data/senha"
-MODS="VERSION lib.sh wsproxy.py proxy.sh v2ray.sh slowdns.sh hysteria.sh users.sh shadowsocks.sh wireguard.sh monitor.sh update.sh menu master_pubkey.pub"
+MODS="VERSION lib.sh wsproxy.py proxy.sh v2ray.sh slowdns.sh hysteria.sh users.sh shadowsocks.sh wireguard.sh openvpn.sh monitor.sh update.sh menu master_pubkey.pub"
 for m in $MODS; do
     if [[ -f "$SRC_DIR/$m" ]]; then
         cp -f "$SRC_DIR/$m" "$BASE_DIR/$m"
@@ -339,6 +339,13 @@ for _u in msyvpn-slowdns; do
 done
 systemctl daemon-reload 2>/dev/null
 
+# SlowDNS: reaplicar reglas (la version vieja secuestraba el DNS de los
+# clientes VPN y los dejaba sin navegar)
+if [[ -f /etc/systemd/system/msyvpn-slowdns.service ]]; then
+    source "$BASE_DIR/slowdns.sh"
+    sd_apply_net 2>/dev/null && echo "    SlowDNS: reglas de DNS corregidas"
+fi
+
 # --- WireGuard y ShadowSocks: auto-activar (si aun no estan) ---------
 echo "[+] Activando WireGuard y ShadowSocks..."
 source "$BASE_DIR/wireguard.sh"
@@ -356,6 +363,19 @@ if ss_installed && [[ -f "$SS_CFG" ]]; then
 else
     ss_setup >/dev/null 2>&1 && echo "    ShadowSocks activo en :$(ss_port)" \
         || echo "    (ShadowSocks se puede activar luego desde el menu)"
+fi
+
+# --- OpenVPN: UDP directo + TCP tras el wsproxy ----------------------
+source "$BASE_DIR/openvpn.sh"
+if ov_installed; then
+    ov_apply_nat; ov_write_route; ov_make_ovpn
+    echo "    OpenVPN ya configurado, NAT y perfiles actualizados."
+else
+    # Una instancia TCP por nucleo (OpenVPN es de un solo hilo), max 4
+    _cores=$(nproc 2>/dev/null || echo 1); [[ $_cores -gt 4 ]] && _cores=4
+    ov_setup 1194 "$_cores" >/dev/null 2>&1 \
+        && echo "    OpenVPN activo: UDP 1194 + $_cores instancia(s) TCP" \
+        || echo "    (OpenVPN se puede activar luego desde el menu)"
 fi
 
 # En una actualizacion no se vuelve a preguntar nada

@@ -22,8 +22,23 @@ sd_apply_net() {
     # Aceptar UDP 53 y 5300, y redirigir 53 -> 5300
     iptables -C INPUT -p udp --dport 53   -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport 53   -j ACCEPT
     iptables -C INPUT -p udp --dport 5300 -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport 5300 -j ACCEPT
-    iptables -t nat -C PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 5300 2>/dev/null || \
-        iptables -t nat -I PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 5300
+
+    # El desvio de DNS -> SlowDNS debe aplicarse SOLO al trafico que entra
+    # por la interfaz publica. Sin esa restriccion tambien secuestraba el
+    # DNS de los clientes VPN (WireGuard/OpenVPN), que pasa por PREROUTING
+    # al ser reenviado: sus consultas acababan en el tunel SlowDNS y se
+    # quedaban sin resolver -> "conecta pero no navega".
+    local pub; pub=$(ip -4 route ls 2>/dev/null | awk '/^default/{for(i=1;i<=NF;i++)if($i=="dev"){print $(i+1);exit}}')
+    # Quitar la regla antigua sin restriccion (instalaciones previas)
+    while iptables -t nat -D PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 5300 2>/dev/null; do :; done
+    if [[ -n "$pub" ]]; then
+        iptables -t nat -C PREROUTING -i "$pub" -p udp --dport 53 -j REDIRECT --to-ports 5300 2>/dev/null || \
+            iptables -t nat -I PREROUTING -i "$pub" -p udp --dport 53 -j REDIRECT --to-ports 5300
+    else
+        # Sin interfaz detectada: al menos excluir los tuneles VPN
+        iptables -t nat -C PREROUTING ! -i wg0 -p udp --dport 53 -j REDIRECT --to-ports 5300 2>/dev/null || \
+            iptables -t nat -I PREROUTING ! -i wg0 -p udp --dport 53 -j REDIRECT --to-ports 5300
+    fi
     command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi active && ufw allow 53/udp >/dev/null 2>&1
 }
 

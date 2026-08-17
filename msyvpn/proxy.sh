@@ -108,6 +108,22 @@ proxy_cert_real() {
     fi
 }
 
+# Respuesta para los payloads ambiguos (los que no piden 101 ni 200 de
+# forma explicita). CONNECT y los payloads "HTTP/1.1 200" siguen
+# recibiendo 200, y los WebSocket 101, independientemente de esto.
+proxy_set_code() {
+    local code="$1"; [[ "$code" =~ ^(101|200)$ ]] || { err "Solo 101 o 200"; return; }
+    local env="$BASE_DIR/wsproxy.env"
+    sed -i '/^WSPROXY_CODE=/d' "$env" 2>/dev/null
+    echo "WSPROXY_CODE=$code" >> "$env"
+    svc_restart msyvpn-wsproxy
+    ok "Respuesta por defecto: $code (CONNECT y payloads 200 siguen dando 200)"
+}
+
+proxy_code_actual() {
+    grep -oP '^WSPROXY_CODE=\K.*' "$BASE_DIR/wsproxy.env" 2>/dev/null || echo 101
+}
+
 # Activa/desactiva la linea que se muestra antes del banner SSH
 proxy_toggle_sshbanner() {
     local env="$BASE_DIR/wsproxy.env"
@@ -138,16 +154,18 @@ proxy_menu() {
         echo "  1) Agregar puerto PLANO (sin TLS)"
         echo "  2) Agregar puerto TLS (SSL)"
         echo "  3) Eliminar puerto"
-        echo "  4) Activar/desactivar banner SSH"
-        echo "  5) Reiniciar proxy"
+        echo "  4) Respuesta por defecto: $(proxy_code_actual)  (101 / 200)"
+        echo "  5) Activar/desactivar banner SSH"
+        echo "  6) Reiniciar proxy"
         echo "  0) Volver"
         line
         case "$(ask 'Opcion: ')" in
             1) proxy_add_port plain "$(ask 'Puerto plano: ')"; pause ;;
             2) proxy_add_port tls   "$(ask 'Puerto TLS: ')";   pause ;;
             3) proxy_del_port "$(ask 'Puerto a eliminar: ')";  pause ;;
-            4) proxy_toggle_sshbanner; pause ;;
-            5) proxy_write_config; svc_restart msyvpn-wsproxy; ok "Reiniciado"; pause ;;
+            4) proxy_set_code "$(ask 'Codigo por defecto [101/200]: ')"; pause ;;
+            5) proxy_toggle_sshbanner; pause ;;
+            6) proxy_write_config; svc_restart msyvpn-wsproxy; ok "Reiniciado"; pause ;;
             0) return ;;
         esac
     done

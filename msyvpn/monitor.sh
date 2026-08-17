@@ -190,6 +190,18 @@ mon_cpu() {
     rm -f "$fa" "$fb"
 }
 
+# --- OpenVPN: clientes conectados (status en /run, sin gastar disco) ---
+mon_ovpn() {
+    local f n=0 any=0
+    for f in /run/openvpn/*.status; do
+        [[ -f "$f" ]] || continue; any=1
+        # status-version 2: lineas "CLIENT_LIST,usuario,ip,..."
+        n=$((n + $(grep -c '^CLIENT_LIST' "$f" 2>/dev/null)))
+    done
+    [[ $any -eq 0 ]] && { echo "-"; return; }
+    echo "$n"
+}
+
 mon_show() {
     local s v u tot
     s=$(mon_ssh); v=$(mon_v2ray); u=$(mon_udp)
@@ -201,6 +213,7 @@ mon_show() {
     printf '  Usuarios UDP online    : %s   (%s)\n' "$(num "$u")" "$(mon_udp_detalle)"
     printf '  ShadowSocks online     : %s\n' "$(num "$(mon_ss)")"
     printf '  WireGuard online       : %s\n' "$(num "$(mon_wg)")"
+    printf '  OpenVPN online         : %s\n' "$(num "$(mon_ovpn)")"
     line
     printf '  TOTAL ONLINE           : %s\n' "$tot"
     line
