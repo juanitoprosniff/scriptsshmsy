@@ -173,19 +173,92 @@ v2_del_user() {
     ok "Eliminado"
 }
 
+# ============================================================================
+#  ¿EL CERTIFICADO ES DE VERDAD?
+# ============================================================================
+#  De esto depende que haga falta allowInsecure, y por tanto que el enlace
+#  funcione en un cliente moderno.
+#
+#  Por defecto proxy_gen_cert crea un certificado AUTOFIRMADO con
+#  CN=msyvpn.local. Ningun cliente puede validarlo, asi que solo conecta
+#  saltandose la verificacion. Xray lleva tiempo desaconsejando allowInsecure y
+#  las versiones nuevas directamente lo ignoran o avisan: con autofirmado
+#  simplemente no hay conexion.
+#
+#  La prueba estandar de autofirmado es que el emisor sea el mismo sujeto. Si
+#  son distintos hay una CA de verdad detras (Let's Encrypt via proxy_cert_real)
+#  y entonces el enlace se emite SIN allowInsecure, que es lo correcto.
+v2_cert_real() {
+    [[ -s "$CERT_PEM" ]] || return 1
+    local sub iss
+    sub=$(openssl x509 -in "$CERT_PEM" -noout -subject 2>/dev/null | sed 's/^subject=//')
+    iss=$(openssl x509 -in "$CERT_PEM" -noout -issuer  2>/dev/null | sed 's/^issuer=//')
+    [[ -n "$sub" && -n "$iss" && "$sub" != "$iss" ]]
+}
+
+# Sufijo de los enlaces TLS: vacio con certificado real, allowInsecure si no.
+v2_tls_extra() {
+    v2_cert_real && echo "" || echo "&allowInsecure=1"
+}
+
+# Codifica en base64 sin saltos (para vmess://).
+v2_b64() { base64 2>/dev/null | tr -d '\n'; }
+
 v2_show_one() {
     local u="$1" a="$2" ip; ip=$(get_ip)
     local dom; dom=$(cat "$DATA_DIR/domain" 2>/dev/null); local addr="${dom:-$ip}"
+    local ins; ins=$(v2_tls_extra)
     line
     echo "Usuario: $a    UUID: $u"
     echo "Path: $V2_VLESS_PATH   Host/SNI: $addr"
+
+    # Aviso arriba del todo: es la causa numero uno de "conecta pero no navega".
+    if ! v2_cert_real; then
+        echo ""
+        echo "  AVISO: el certificado es autofirmado, asi que los enlaces TLS"
+        echo "         llevan allowInsecure=1. Xray moderno ya no lo acepta y"
+        echo "         la conexion fallara o no dara internet."
+        echo "         Arreglo: menu -> V2Ray -> Activar TLS con tu dominio"
+        echo "         (necesita un dominio apuntando a $ip)."
+        echo ""
+    fi
+    if [[ -z "$dom" ]]; then
+        echo "  AVISO: sin dominio configurado, el SNI va con la IP y muchos"
+        echo "         clientes lo rechazan. Configura un dominio."
+        echo ""
+    fi
+
     echo "VLESS TLS (443):"
-    echo "vless://$u@$addr:443?type=ws&encryption=none&security=tls&sni=$addr&host=$addr&path=%2Fvless&allowInsecure=1#$a-tls"
+    echo "vless://$u@$addr:443?type=ws&encryption=none&security=tls&sni=$addr&host=$addr&path=%2Fvless$ins#$a-tls"
     echo "VLESS HTTP (80):"
     echo "vless://$u@$addr:80?type=ws&encryption=none&security=none&host=$addr&path=%2Fvless#$a-http"
+
+    # ── Los que faltaban ────────────────────────────────────────────────────
+    # Estaban activos en la config y enrutados en el wsproxy, pero aqui no se
+    # emitia su enlace: quedaban inservibles porque no habia con que probarlos.
+    if xr_is_on vmess; then
+        echo "VMess TLS (443):"
+        # vmess:// es base64 de un JSON, no una URI con parametros.
+        local vm
+        vm=$(printf '{"v":"2","ps":"%s-vmess","add":"%s","port":"443","id":"%s","aid":"0","scy":"auto","net":"ws","type":"none","host":"%s","path":"%s","tls":"tls","sni":"%s"}' \
+             "$a" "$addr" "$u" "$addr" "$V2_VMESS_PATH" "$addr" | v2_b64)
+        echo "vmess://$vm"
+    fi
+    if xr_is_on trojan; then
+        # La contrasena de Trojan es el propio UUID: asi lo escribe v2_rebuild.
+        echo "Trojan TLS (443):"
+        echo "trojan://$u@$addr:443?type=ws&security=tls&sni=$addr&host=$addr&path=%2Ftrojan-ws$ins#$a-trojan"
+    fi
+    if xr_is_on xhttp; then
+        echo "VLESS xhttp TLS (443):"
+        echo "vless://$u@$addr:443?type=xhttp&encryption=none&security=tls&sni=$addr&host=$addr&path=%2Fxh&mode=auto$ins#$a-xhttp"
+    fi
     if xr_is_on reality; then
         local pub sid rport; pub=$(cut -d'|' -f2 "$XR_RKEYS"); sid=$(cut -d'|' -f3 "$XR_RKEYS")
         rport=$(cat "$XR_RPORT" 2>/dev/null || echo 2087)
+        # Reality NO usa el certificado de HAProxy ni pasa por el wsproxy: se
+        # hace pasar por otro sitio con su propio TLS. Por eso nunca lleva
+        # allowInsecure y funciona sin dominio propio.
         echo "VLESS Reality ($rport):"
         echo "vless://$u@$ip:$rport?type=tcp&encryption=none&security=reality&flow=xtls-rprx-vision&sni=$V2_REALITY_DEST&pbk=$pub&sid=$sid&fp=chrome#$a-reality"
     fi
