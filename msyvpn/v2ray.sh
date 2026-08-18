@@ -265,6 +265,100 @@ v2_show_one() {
     line
 }
 
+# ============================================================================
+#  DIAGNOSTICO TLS
+# ============================================================================
+#  Contesta de una sola vez las tres preguntas que deciden si allowInsecure
+#  hace falta, y que desde el movil no hay forma de saber:
+#
+#    1. ¿Que certificado se sirve de verdad en el 443 del dominio?
+#    2. ¿Lo valida un cliente normal, o hace falta saltarse la verificacion?
+#    3. ¿Contesta Cloudflare o contesta esta VPS?
+#
+#  Lo tercero es lo que mas confunde. Con el dominio en NARANJA (proxy activo)
+#  quien pone el TLS es Cloudflare con SU certificado, que es valido: entonces
+#  allowInsecure NO hace falta y emitir un Let's Encrypt aqui no cambia nada.
+#  En GRIS conecta contra esta VPS y manda el certificado de HAProxy, que por
+#  defecto es autofirmado y por eso obliga a allowInsecure.
+v2_diag_tls() {
+    local dom; dom=$(cat "$DATA_DIR/domain" 2>/dev/null)
+    local ip;  ip=$(get_ip)
+    line
+    title "DIAGNOSTICO TLS"
+
+    if [[ -z "$dom" ]]; then
+        err "No hay dominio configurado."
+        info "menu -> V2Ray -> Activar TLS con tu dominio"
+        line; return
+    fi
+    echo "Dominio : $dom"
+    echo "IP VPS  : $ip"
+
+    # ---- A donde resuelve el dominio -------------------------------------
+    local resuelta
+    resuelta=$(getent hosts "$dom" 2>/dev/null | awk '{print $1}' | head -1)
+    [[ -z "$resuelta" ]] && resuelta="(no resuelve)"
+    echo "Resuelve: $resuelta"
+
+    if [[ "$resuelta" == "$ip" ]]; then
+        ok "El dominio apunta a esta VPS (Cloudflare en GRIS o sin proxy)"
+        echo "   -> el certificado lo pone HAProxy, asi que tiene que ser real."
+    elif [[ "$resuelta" == "(no resuelve)" ]]; then
+        err "El dominio no resuelve. Revisa el DNS."
+    else
+        info "El dominio NO apunta a esta VPS: responde $resuelta"
+        echo "   -> es Cloudflare en NARANJA (proxy activo)."
+        echo "   -> el TLS lo pone Cloudflare con su propio certificado."
+        echo "   -> allowInsecure NO deberia hacer falta; si hace falta, el"
+        echo "      problema esta en el modo SSL/TLS de Cloudflare, no aqui."
+        echo ""
+        echo "   Con Cloudflare en naranja, ojo con dos cosas:"
+        echo "     · Solo proxifica ciertos puertos. Los que sirven aqui son"
+        echo "       80, 443, 8080, 8443, 8880, 2052, 2053, 2082, 2083, 2086,"
+        echo "       2087, 2095 y 2096. Cualquier otro no pasa."
+        echo "     · xhttp suele fallar porque Cloudflare almacena la respuesta"
+        echo "       en bufer y rompe el modo de flujo continuo. Prueba el"
+        echo "       enlace cambiando mode=auto por mode=packet-up."
+    fi
+
+    # ---- Certificado local (el que sirve HAProxy) ------------------------
+    line
+    echo "-- Certificado de HAProxy (el de esta VPS) --"
+    if [[ -s "$CERT_PEM" ]]; then
+        openssl x509 -in "$CERT_PEM" -noout -subject -issuer -dates 2>/dev/null \
+            | sed 's/^/  /'
+        if v2_cert_real; then
+            ok "Emitido por una CA: los enlaces se emiten sin allowInsecure"
+        else
+            err "AUTOFIRMADO: en GRIS obliga a allowInsecure"
+            info "Arreglo: menu -> V2Ray -> Activar TLS con tu dominio"
+        fi
+    else
+        err "No hay certificado en $CERT_PEM"
+    fi
+
+    # ---- Que se sirve de verdad en el 443 --------------------------------
+    line
+    echo "-- Lo que ve un cliente al conectar a $dom:443 --"
+    local salida
+    salida=$(echo | timeout 12 openssl s_client -connect "$dom:443" \
+             -servername "$dom" 2>&1)
+    if [[ -z "$salida" ]]; then
+        err "Sin respuesta en el 443. ¿HAProxy caido o puerto cerrado?"
+    else
+        echo "$salida" | grep -E '^ *(subject|issuer)=' | sed 's/^/  /' | head -4
+        local verif
+        verif=$(echo "$salida" | grep -m1 'Verify return code')
+        echo "  ${verif:-Verify return code: (desconocido)}"
+        if echo "$verif" | grep -q ': 0 (ok)'; then
+            ok "Un cliente normal lo valida: allowInsecure NO hace falta"
+        else
+            err "Un cliente normal NO lo valida: por eso exige allowInsecure"
+        fi
+    fi
+    line
+}
+
 v2_uris() {
     [[ -s "$XR_DB" ]] || { err "Sin usuarios"; return; }
     local u a; while IFS='|' read -r u a; do v2_valid "$u" && v2_show_one "$u" "$a"; done < "$XR_DB"
@@ -365,7 +459,8 @@ v2_menu() {
         echo "  5) Protocolos opcionales (VMess/Trojan/SS/Reality/xhttp)"
         echo "  6) Activar TLS real (dominio verificado)"
         echo "  7) Fijar/verificar dominio (Host/SNI)"
-        echo "  8) Desinstalar"
+        echo "  8) Diagnosticar TLS (por que pide allowInsecure)"
+        echo "  9) Desinstalar"
         echo "  0) Volver"
         line
         case "$(ask 'Opcion: ')" in
@@ -376,7 +471,8 @@ v2_menu() {
             5) v2_protocols_menu ;;
             6) v2_cert_tls; pause ;;
             7) v2_set_domain; pause ;;
-            8) v2_uninstall; pause ;;
+            8) v2_diag_tls; pause ;;
+            9) v2_uninstall; pause ;;
             0) return ;;
         esac
     done
