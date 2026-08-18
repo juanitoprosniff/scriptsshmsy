@@ -23,7 +23,7 @@ apt-get install -y haproxy python3 openssl curl wget iproute2 iptables \
 # --- 2. Copiar modulos a /etc/msyvpn --------------------------------
 echo "[2/9] Copiando modulos..."
 mkdir -p "$BASE_DIR/bin" "$BASE_DIR/data/senha"
-MODS="VERSION lib.sh wsproxy.py proxy.sh v2ray.sh slowdns.sh hysteria.sh users.sh shadowsocks.sh wireguard.sh openvpn.sh monitor.sh update.sh menu firewall.sh master_pubkey.pub"
+MODS="VERSION lib.sh wsproxy.py proxy.sh v2ray.sh slowdns.sh hysteria.sh users.sh shadowsocks.sh wireguard.sh openvpn.sh socks5.sh monitor.sh update.sh menu firewall.sh master_pubkey.pub"
 for m in $MODS; do
     if [[ -f "$SRC_DIR/$m" ]]; then
         cp -f "$SRC_DIR/$m" "$BASE_DIR/$m"
@@ -31,8 +31,9 @@ for m in $MODS; do
         wget -q "$REPO_RAW/$m" -O "$BASE_DIR/$m"
     fi
 done
-# Binarios incluidos (amd64) — para otras arquitecturas fetch_bin descarga
-for b in badvpn-udpgw dns-server; do
+# Binarios incluidos (amd64) — para otras arquitecturas fetch_bin descarga.
+# hev-socks5-server puede no estar: socks5.sh lo compila si falta.
+for b in badvpn-udpgw dns-server hev-socks5-server; do
     [[ -f "$SRC_DIR/bin/$b" ]] && cp -f "$SRC_DIR/bin/$b" "$BASE_DIR/bin/$b"
     chmod +x "$BASE_DIR/bin/$b" 2>/dev/null
 done
@@ -396,6 +397,20 @@ else
     ov_setup 1194 "$_cores" >/dev/null 2>&1 \
         && echo "    OpenVPN activo: UDP 1194 + $_cores instancia(s) TCP" \
         || echo "    (OpenVPN se puede activar luego desde el menu)"
+fi
+
+# --- SOCKS5: mismos puertos, mismos payloads, mismas cuentas ---------
+#
+# No abre ningun puerto nuevo: escucha en loopback y le llega todo por el
+# wsproxy, igual que al SSH. Si el binario no esta disponible para esta
+# arquitectura, socks5.sh lo compila; y si tampoco puede, se sigue sin el
+# —el resto de la instalacion no depende de esto.
+source "$BASE_DIR/socks5.sh"
+echo "[+] Activando SOCKS5..."
+if s5_setup >/dev/null 2>&1; then
+    echo "    SOCKS5 activo (interno :$(s5_port), cuentas compartidas con SSH)"
+else
+    echo "    (SOCKS5 se puede activar luego desde el menu -> 12)"
 fi
 
 # En una actualizacion no se vuelve a preguntar nada

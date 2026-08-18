@@ -47,6 +47,19 @@ mon_v2ray_conns() {
     [[ -n "$n" ]] && echo "$n" || echo "-"
 }
 
+# --- SOCKS5 ---------------------------------------------------------
+# Se cuentan IPs unicas, no conexiones: SOCKS5 no multiplexa y un solo
+# telefono navegando tiene decenas de conexiones abiertas a la vez.
+# Contarlas daria un "50 usuarios online" con un usuario.
+mon_socks5() {
+    local n; n=$(_stat socks5 ips)
+    [[ -n "$n" ]] && echo "$n" || echo "-"
+}
+mon_socks5_conns() {
+    local n; n=$(_stat socks5 conns)
+    [[ -n "$n" ]] && echo "$n" || echo "-"
+}
+
 # --- UDP Hysteria (v1 + v2) -----------------------------------------
 # Cada version se cuenta por separado y con su propio respaldo, para que
 # si a una le falla su API la otra siga apareciendo (antes, si v2

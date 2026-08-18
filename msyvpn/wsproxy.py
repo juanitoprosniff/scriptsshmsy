@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # wsproxy.py - Proxy WebSocket/SSH/V2Ray sobre asyncio
-# WSPROXY_VERSION: msyvpn-async-1
+# WSPROXY_VERSION: msyvpn-async-2
 #
 # Un solo proceso, un event loop. Sin hilo por conexion => poca RAM.
 # Recibe trafico ya en texto plano (HAProxy termina el TLS) y decide:
 #   - SSH directo : el buffer empieza con "SSH-"      -> tunel a SSH
+#   - SOCKS5      : el buffer es un saludo SOCKS5     -> tunel al socks5
 #   - V2Ray       : la ruta HTTP coincide con routes  -> forward crudo
 #   - WebSocket   : cualquier otra cosa (payload)      -> responde 101 + tunel
 #
@@ -14,6 +15,7 @@
 #   ROUTE=/vless:127.0.0.1:10086
 #   ROUTE=/vmess:127.0.0.1:10087
 #   ROUTE=/trojan-ws:127.0.0.1:10088
+#   SOCKS5=127.0.0.1:1080
 
 import asyncio
 import os
@@ -102,10 +104,11 @@ _routes = []                # lista de (path, host, port)
 _routes_mtime = 0
 _ovpn = []                  # backends OpenVPN TCP [(host, port), ...]
 _ovpn_rr = 0                # reparto por turnos entre instancias
+_socks5 = None              # backend SOCKS5 (host, port) o None
 _sem = None                 # se crea dentro del loop (compat 3.6+)
 
 # Conteo exacto: por categoria, {ip: nº de conexiones abiertas}
-_live = {"ssh": {}, "v2ray": {}, "ovpn": {}}
+_live = {"ssh": {}, "v2ray": {}, "ovpn": {}, "socks5": {}}
 
 
 def _track(cat, ip, delta):
@@ -158,6 +161,25 @@ def is_openvpn(buf):
     return (buf[2] >> 3) in (1, 7, 10)
 
 
+def is_socks5(buf):
+    """Detecta el saludo SOCKS5 del cliente (RFC 1928).
+
+    Formato: 0x05 <nmetodos> <metodo>...  — nada mas, el cliente se calla y
+    espera respuesta. Por eso se exige la longitud EXACTA: cualquier otra cosa
+    que empiece por 0x05 (un payload binario, un trozo de TLS) no cuadra y no
+    se confunde con esto.
+
+    No choca con los demas protocolos: los payloads son texto ASCII, el banner
+    SSH empieza por "SSH-" y el primer byte de OpenVPN sobre TCP es 0x00.
+    """
+    if len(buf) < 3 or buf[0] != 5:
+        return False
+    n = buf[1]
+    if n < 1:
+        return False
+    return len(buf) == 2 + n
+
+
 def ovpn_backend():
     """Devuelve la siguiente instancia OpenVPN (reparto por turnos).
 
@@ -174,11 +196,11 @@ def ovpn_backend():
 
 def load_routes():
     """Recarga las rutas V2Ray si el archivo cambio (barato)."""
-    global _routes, _routes_mtime, _ovpn
+    global _routes, _routes_mtime, _ovpn, _socks5
     try:
         mt = os.stat(ROUTES_PATH).st_mtime
     except OSError:
-        _routes, _routes_mtime, _ovpn = [], 0, []
+        _routes, _routes_mtime, _ovpn, _socks5 = [], 0, [], None
         return
     if mt == _routes_mtime:
         return
@@ -186,6 +208,7 @@ def load_routes():
     enabled = False
     routes = []
     ovpn = []
+    socks5 = None
     try:
         with open(ROUTES_PATH) as f:
             for ln in f:
@@ -205,6 +228,13 @@ def load_routes():
                                 ovpn.append((h, int(pt)))
                             except ValueError:
                                 pass
+                elif k == "SOCKS5":
+                    if ":" in v:
+                        h, _, pt = v.rpartition(":")
+                        try:
+                            socks5 = (h or "127.0.0.1", int(pt))
+                        except ValueError:
+                            socks5 = None
                 elif k == "ROUTE":
                     parts = v.split(":")
                     if len(parts) < 3:
@@ -218,6 +248,7 @@ def load_routes():
     routes.sort(key=lambda r: -len(r[0]))     # ruta mas larga primero
     _routes = routes if enabled else []
     _ovpn = ovpn
+    _socks5 = socks5
 
 
 def match_route(buf):
@@ -309,6 +340,14 @@ async def handle(cr, cw):
                 host, port = parse_hp(DEFAULT_SSH)          # SSH directo
                 first = buf
                 is_ssh = True
+            elif _socks5 and is_socks5(buf):
+                # SOCKS5 sin payload. Es el caso de los modos "SSL con SNI" y
+                # "directo sin payload" de la app: ahi el disfraz es el propio
+                # TLS y el cliente habla SOCKS5 desde el primer byte, sin
+                # cabecera HTTP que responder.
+                host, port = _socks5
+                first = buf
+                cat = "socks5"
             elif _ovpn and is_openvpn(buf):
                 host, port = ovpn_backend()                 # OpenVPN directo
                 first = buf
@@ -331,15 +370,19 @@ async def handle(cr, cw):
                     first = b""
                     if target:
                         host, port = parse_hp(target)
-                    elif _ovpn:
-                        # Con OpenVPN activo hay que mirar el primer paquete
-                        # del tunel para saber si el cliente habla SSH u
-                        # OpenVPN: asi conviven en el mismo puerto y payload.
+                    elif _ovpn or _socks5:
+                        # Con OpenVPN o SOCKS5 activos hay que mirar el primer
+                        # paquete del tunel para saber que habla el cliente:
+                        # asi los tres conviven en el mismo puerto y con el
+                        # mismo payload, que es justo lo que se busca.
                         try:
                             first = await asyncio.wait_for(cr.read(BUFLEN), 3)
                         except asyncio.TimeoutError:
                             first = b""
-                        if is_openvpn(first):
+                        if _socks5 and is_socks5(first):
+                            host, port = _socks5
+                            cat = "socks5"
+                        elif _ovpn and is_openvpn(first):
                             host, port = ovpn_backend()
                             cat = "ovpn"
                         else:

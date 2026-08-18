@@ -9,6 +9,7 @@ source "$BASE_DIR/hysteria.sh"    >/dev/null 2>&1
 source "$BASE_DIR/shadowsocks.sh" >/dev/null 2>&1
 source "$BASE_DIR/wireguard.sh"   >/dev/null 2>&1
 source "$BASE_DIR/openvpn.sh"     >/dev/null 2>&1
+source "$BASE_DIR/socks5.sh"      >/dev/null 2>&1
 
 # Muestra las credenciales del usuario en cada protocolo instalado
 u_show_protocols() {
@@ -129,6 +130,8 @@ u_create() {
     fi
     # Integracion Hysteria (auth = usuario:contrasena)
     hy_add_user
+    # SOCKS5: mismas credenciales. Recarga en caliente, sin cortar a nadie.
+    s5_reload_auth 2>/dev/null
     # Credenciales/enlaces de todos los protocolos instalados
     u_show_protocols "$name" "$pass"
 }
@@ -143,6 +146,7 @@ u_remove() {
     sed -i "/|$name$/d" "$XR_DB" 2>/dev/null
     v2_installed && { v2_rebuild && svc_restart xray; }
     hy_add_user
+    s5_reload_auth 2>/dev/null
     ok "Usuario $name eliminado"
 }
 
@@ -153,6 +157,7 @@ u_passwd() {
     echo "$name:$pass" | chpasswd 2>/dev/null
     echo "$pass" > "$SENHA_DIR/$name"
     hy_add_user
+    s5_reload_auth 2>/dev/null
     ok "Contrasena actualizada"
 }
 

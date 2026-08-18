@@ -7,6 +7,7 @@ source /etc/msyvpn/slowdns.sh
 source /etc/msyvpn/shadowsocks.sh
 source /etc/msyvpn/wireguard.sh
 source /etc/msyvpn/openvpn.sh
+source /etc/msyvpn/socks5.sh
 source /etc/msyvpn/monitor.sh
 source /etc/msyvpn/update.sh
 
@@ -34,12 +35,15 @@ estado() {
     printf '  ShadowSocks: %s   WireGuard: %s   OpenVPN: %s\n' \
         "$(svc_txt msyvpn-ss)" "$(svc_txt wg-quick@wg0)" \
         "$(svc_txt msyvpn-ovpn-udp msyvpn-ovpn-tcp0)"
+    printf '  SOCKS5: %s\n' "$(svc_txt msyvpn-socks5)"
     line
     echo "-- Usuarios online --"
     printf '  SSH: %s   V2Ray: %s   UDP: %s   (%s)\n' \
         "$(num "$(mon_ssh)")" "$(num "$(mon_v2ray)")" "$(num "$(mon_udp)")" "$(mon_udp_detalle)"
     printf '  ShadowSocks: %s   WireGuard: %s   OpenVPN: %s\n' \
         "$(num "$(mon_ss)")" "$(num "$(mon_wg)")" "$(num "$(mon_ovpn)")"
+    printf '  SOCKS5: %s   (%s conexiones)\n' \
+        "$(num "$(mon_socks5)")" "$(num "$(mon_socks5_conns)")"
     printf '  Cuentas creadas: %s\n' "$(num "$(wc -l < "$USERS_DB" 2>/dev/null || echo 0)")"
     line
 }
@@ -63,6 +67,7 @@ while true; do
     echo "  9) Monitor y velocidad"
     echo " 10) Estado del sistema"
     echo " 11) Mantenimiento  (actualizar / disco / backup)"
+    echo " 12) SOCKS5         (mismos puertos y payloads que SSH)"
     echo "  0) Salir"
     line
     case "$(ask 'Opcion: ')" in
@@ -77,6 +82,7 @@ while true; do
         9)  mon_menu ;;
         10) estado; pause ;;
         11) upd_menu ;;
+        12) s5_menu ;;
         0)  clear; exit 0 ;;
     esac
 done
