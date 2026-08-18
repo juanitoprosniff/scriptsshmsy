@@ -48,8 +48,14 @@ fetch_bin badvpn-udpgw /usr/bin/badvpn-udpgw || err "badvpn no disponible para $
 # Guardar IP publica
 get_ip > "$BASE_DIR/ip"
 
-# Red: comportamiento normal del sistema (sin forzar IPv4/IPv6)
-net_reset_pref
+# Red: se REAPLICA la preferencia de salida que hubiera configurada.
+#
+# Antes aqui se llamaba a net_reset_pref(), que la borraba. Como install.sh
+# corre en CADA actualizacion, la preferencia se perdia sola y sin avisar: la
+# VPS volvia a salir por IPv4 y, si la geolocalizacion de esa IPv4 no coincide
+# con la de la IPv6, cambiaba el pais que ven Google y AdMob. Muy dificil de
+# relacionar con "actualice la script".
+net_pref_aplicar
 
 # --- 3. Afinar OpenSSH (buen ping) ----------------------------------
 echo "[3/9] Afinando OpenSSH..."

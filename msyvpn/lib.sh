@@ -74,6 +74,100 @@ get_ip() {
     echo "${ip:-0.0.0.0}"
 }
 
+# ---------------------------------------------------------------
+# Por que familia SALE el trafico de la VPS
+# ---------------------------------------------------------------
+#
+# Decide si, cuando el destino tiene IPv4 e IPv6 (Google, YouTube, casi todo lo
+# grande), la VPS sale por una o por otra.
+#
+# ── POR QUE IMPORTA MUCHO MAS DE LO QUE PARECE ─────────────────────────────
+#  Las bases de geolocalizacion NO tienen por que situar la IPv4 y la IPv6 de
+#  la MISMA maquina en el mismo pais. Es habitual que un bloque IPv4 reasignado
+#  siga mapeado al pais del dueno anterior durante meses, y cada base (la de
+#  Google no es la de ipinfo) va por su cuenta.
+#
+#  Consecuencia practica: si Google situa tu IPv4 en otro pais, los resultados
+#  y los ANUNCIOS salen de ese pais aunque la maquina este en Austria. Y el
+#  match rate y el eCPM de AdMob cambian muchisimo de un pais a otro.
+#
+# ── EL DETALLE QUE LO ROMPIA ───────────────────────────────────────────────
+#  Por defecto (RFC 6724) Linux ya prefiere IPv6. Lo que le da la vuelta es
+#  esta linea, que muchas imagenes de VPS traen puesta:
+#
+#      precedence ::ffff:0:0/96  100
+#
+#  Ademas, hasta ahora install.sh llamaba a net_reset_pref() en cada
+#  actualizacion, asi que cualquier preferencia configurada se perdia sola y
+#  sin avisar. Por eso hay un marcador que sobrevive: net_pref_aplicar() lo
+#  vuelve a poner despues de actualizar.
+PREF_MARCA="$BASE_DIR/prefer_ipv6"
+
+# ipv6 | ipv4 | sistema
+net_pref_estado() {
+    if [[ -f "$PREF_MARCA" ]]; then cat "$PREF_MARCA" 2>/dev/null || echo sistema
+    else echo sistema; fi
+}
+
+_gai_limpiar() {
+    [[ -f /etc/gai.conf ]] && sed -i '/# MSYVPN-BEGIN/,/# MSYVPN-END/d' /etc/gai.conf
+    return 0
+}
+
+_gai_escribir() {   # $1 = contenido del bloque
+    touch /etc/gai.conf
+    _gai_limpiar
+    printf '# MSYVPN-BEGIN\n%s\n# MSYVPN-END\n' "$1" >> /etc/gai.conf
+}
+
+# Salir por IPv6 cuando el destino la tenga (el comportamiento estandar).
+net_pref_ipv6() {
+    # Basta con NO degradar IPv6: se deja el bloque vacio de precedencias y se
+    # anula cualquier "precedence ::ffff:0:0/96 100" que hubiera suelto.
+    sed -i 's/^\s*precedence\s*::ffff:0:0\/96.*/#&/' /etc/gai.conf 2>/dev/null
+    _gai_escribir "# Preferir IPv6 en las salidas: es el orden por defecto del
+# RFC 6724. Solo hay que asegurarse de que nadie lo degrade."
+    echo ipv6 > "$PREF_MARCA"
+}
+
+# Forzar salida por IPv4 aunque el destino tenga IPv6.
+net_pref_ipv4() {
+    _gai_escribir "precedence ::ffff:0:0/96  100"
+    echo ipv4 > "$PREF_MARCA"
+}
+
+# Dejar exactamente lo que traiga el sistema.
+net_pref_sistema() {
+    _gai_limpiar
+    rm -f "$PREF_MARCA" "$DATA_DIR/v6exit" 2>/dev/null
+    return 0
+}
+
+# Reaplica la preferencia guardada. La llama install.sh en cada actualizacion.
+net_pref_aplicar() {
+    case "$(net_pref_estado)" in
+        ipv6) net_pref_ipv6 ;;
+        ipv4) net_pref_ipv4 ;;
+        *)    return 0 ;;
+    esac
+}
+
+# Por donde sale de verdad ahora mismo. Es la unica prueba que vale.
+net_pref_probar() {
+    local v4 v6 auto
+    v4=$(curl -4 -s --max-time 6 https://ifconfig.me 2>/dev/null)
+    v6=$(curl -6 -s --max-time 6 https://ifconfig.me 2>/dev/null)
+    auto=$(curl -s --max-time 6 https://ifconfig.me 2>/dev/null)
+    echo "  IPv4 de salida : ${v4:-(sin IPv4)}"
+    echo "  IPv6 de salida : ${v6:-(sin IPv6)}"
+    echo "  Se usa por defecto: ${auto:-(sin respuesta)}"
+    if [[ -n "$auto" && "$auto" == "$v6" && -n "$v6" ]]; then
+        ok "Sale por IPv6"
+    elif [[ -n "$auto" && "$auto" == "$v4" ]]; then
+        info "Sale por IPv4"
+    fi
+}
+
 # Restaura el orden normal de IPv4/IPv6 del sistema (sin forzar nada)
 net_reset_pref() {
     [[ -f /etc/gai.conf ]] && sed -i '/# MSYVPN-BEGIN/,/# MSYVPN-END/d' /etc/gai.conf
@@ -150,3 +244,33 @@ ask()   { local p="$1"; local __v; read -rp "$p" __v; printf '%s' "$__v"; }
 ok()    { printf '[OK] %s\n' "$1"; }
 err()   { printf '[X]  %s\n' "$1"; }
 info()  { printf '     %s\n' "$1"; }
+
+# ---------------------------------------------------------------
+# Menu: por donde sale el trafico de la VPS
+# ---------------------------------------------------------------
+net_pref_menu() {
+    while true; do
+        clear; title "SALIDA A INTERNET DE LA VPS  (IPv4 / IPv6)"
+        echo "Preferencia guardada: $(net_pref_estado)"
+        line
+        echo "Esto decide por que familia sale el trafico cuando el destino"
+        echo "tiene las dos. Importa porque las bases de geolocalizacion NO"
+        echo "situan siempre la IPv4 y la IPv6 de la misma maquina en el mismo"
+        echo "pais: si Google ubica tu IPv4 en otro sitio, los anuncios de"
+        echo "AdMob salen de ese pais y el eCPM cambia."
+        line
+        echo "  1) Comprobar por donde sale AHORA"
+        echo "  2) Preferir IPv6   (recomendado si tu IPv6 geolocaliza bien)"
+        echo "  3) Forzar IPv4"
+        echo "  4) Dejar lo que traiga el sistema"
+        echo "  0) Volver"
+        line
+        case "$(ask 'Opcion: ')" in
+            1) net_pref_probar; pause ;;
+            2) net_pref_ipv6; ok "Se prefiere IPv6"; net_pref_probar; pause ;;
+            3) net_pref_ipv4; ok "Se fuerza IPv4";  net_pref_probar; pause ;;
+            4) net_pref_sistema; ok "Sin preferencia propia"; net_pref_probar; pause ;;
+            0) return ;;
+        esac
+    done
+}

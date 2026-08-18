@@ -68,6 +68,7 @@ while true; do
     echo " 10) Estado del sistema"
     echo " 11) Mantenimiento  (actualizar / disco / backup)"
     echo " 12) SOCKS5         (mismos puertos y payloads que SSH)"
+    echo " 13) Salida IPv4/IPv6  (afecta al pais que ven Google y AdMob)"
     echo "  0) Salir"
     line
     case "$(ask 'Opcion: ')" in
@@ -83,6 +84,7 @@ while true; do
         10) estado; pause ;;
         11) upd_menu ;;
         12) s5_menu ;;
+        13) net_pref_menu ;;
         0)  clear; exit 0 ;;
     esac
 done
