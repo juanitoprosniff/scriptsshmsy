@@ -107,12 +107,27 @@ xr_reality_keys() {
 }
 
 # Rutas para el wsproxy (solo protocolos basados en WS/xhttp)
+# OJO: este archivo NO es solo de V2Ray.
+#
+# routes.conf lo comparten V2Ray (V2RAY_ENABLED y ROUTE=), OpenVPN (OPENVPN=)
+# y SOCKS5 (SOCKS5=). Esta funcion lo reescribia ENTERO con '>', asi que se
+# llevaba por delante las lineas de los otros dos.
+#
+# Y no era un caso raro: v2_rebuild se llama desde users.sh cada vez que se
+# crea o se borra una cuenta. O sea que el SOCKS5 dejaba de enrutar en cuanto
+# se tocaba un usuario, y el sintoma era un tunel que respondia al payload y
+# despues mandaba el trafico al SSH. Muy dificil de relacionar con la causa.
+#
+# Ahora se conservan las lineas ajenas.
 v2_write_routes() {
+    local ajenas
+    ajenas=$(grep -E '^(OPENVPN|SOCKS5)=' "$ROUTES_CONF" 2>/dev/null)
     { echo "V2RAY_ENABLED=yes"
       echo "ROUTE=$V2_VLESS_PATH:127.0.0.1:$V2_VLESS_PORT"
       xr_is_on vmess  && echo "ROUTE=$V2_VMESS_PATH:127.0.0.1:$V2_VMESS_PORT"
       xr_is_on trojan && echo "ROUTE=$V2_TROJAN_PATH:127.0.0.1:$V2_TROJAN_PORT"
       xr_is_on xhttp  && echo "ROUTE=$V2_XH_PATH:127.0.0.1:$V2_XH_PORT"
+      [[ -n "$ajenas" ]] && echo "$ajenas"
     } > "$ROUTES_CONF"
 }
 
@@ -219,7 +234,12 @@ v2_protocols_menu() {
 v2_uninstall() {
     systemctl disable --now xray >/dev/null 2>&1
     bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ remove --purge >/dev/null 2>&1
-    echo "V2RAY_ENABLED=no" > "$ROUTES_CONF"; svc_restart msyvpn-wsproxy
+    # Mismo cuidado que en v2_write_routes: desinstalar V2Ray no puede dejar
+    # sin enrutar a SOCKS5 ni a OpenVPN.
+    _ajenas=$(grep -E '^(OPENVPN|SOCKS5)=' "$ROUTES_CONF" 2>/dev/null)
+    { echo "V2RAY_ENABLED=no"; [[ -n "$_ajenas" ]] && echo "$_ajenas"; } > "$ROUTES_CONF"
+    unset _ajenas
+    svc_restart msyvpn-wsproxy
     ok "Xray desinstalado"
 }
 
