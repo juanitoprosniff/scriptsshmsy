@@ -68,7 +68,7 @@ while true; do
     echo " 10) Estado del sistema"
     echo " 11) Mantenimiento  (actualizar / disco / backup)"
     echo " 12) SOCKS5         (mismos puertos y payloads que SSH)"
-    echo " 13) Salida IPv4/IPv6  (afecta al pais que ven Google y AdMob)"
+    echo " 13) Diagnostico IPv4/IPv6  (pais de tus IPs y salida de la VPS)"
     echo "  0) Salir"
     line
     case "$(ask 'Opcion: ')" in

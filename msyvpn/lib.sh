@@ -75,21 +75,28 @@ get_ip() {
 }
 
 # ---------------------------------------------------------------
-# Por que familia SALE el trafico de la VPS
+# Por que familia salen las conexiones que NACEN en la VPS
 # ---------------------------------------------------------------
 #
-# Decide si, cuando el destino tiene IPv4 e IPv6 (Google, YouTube, casi todo lo
-# grande), la VPS sale por una o por otra.
+# OJO CON EL ALCANCE, que es la parte que se malinterpreta:
 #
-# ── POR QUE IMPORTA MUCHO MAS DE LO QUE PARECE ─────────────────────────────
-#  Las bases de geolocalizacion NO tienen por que situar la IPv4 y la IPv6 de
-#  la MISMA maquina en el mismo pais. Es habitual que un bloque IPv4 reasignado
-#  siga mapeado al pais del dueno anterior durante meses, y cada base (la de
-#  Google no es la de ipinfo) va por su cuenta.
+#   SI afecta  -> a lo que la VPS inicia por su cuenta: curl, apt, acme.sh,
+#                 las consultas del propio script...
+#   NO afecta  -> al trafico de los usuarios del tunel.
 #
-#  Consecuencia practica: si Google situa tu IPv4 en otro pais, los resultados
-#  y los ANUNCIOS salen de ese pais aunque la maquina este en Austria. Y el
-#  match rate y el eCPM de AdMob cambian muchisimo de un pais a otro.
+# El motivo es que el trafico del tunel no lo INICIA la VPS: llega ya dirigido
+# a una IP concreta y la VPS solo lo reenvia (NAT). Quien decidio si esa IP era
+# la v4 o la v6 de Google fue EL TELEFONO, al resolver el nombre, y lo decidio
+# segun lo que su propio tunel le ofrezca.
+#
+# Consecuencia: si el tunel del telefono es IPv4 puro, TODO sale por la IPv4 de
+# la VPS haga lo que haga este archivo. Para que un usuario salga por IPv6 hay
+# que llevar IPv6 DENTRO del tunel (en la app: "IPv6 dentro del tunel"), no
+# tocar gai.conf.
+#
+# Aun asi esto se mantiene porque decide con que IP se ve la VPS a si misma
+# frente a servicios externos, y porque el diagnostico de abajo es la forma mas
+# rapida de saber si la maquina tiene IPv6 util y donde la situan.
 #
 # ── EL DETALLE QUE LO ROMPIA ───────────────────────────────────────────────
 #  Por defecto (RFC 6724) Linux ya prefiere IPv6. Lo que le da la vuelta es
@@ -153,19 +160,42 @@ net_pref_aplicar() {
 }
 
 # Por donde sale de verdad ahora mismo. Es la unica prueba que vale.
+# Pais de una IP, segun un servicio publico. Vacio si no se puede saber.
+_geo_de() {
+    [[ -z "$1" ]] && return 0
+    # sed y no "grep -P": -P no esta en todos los grep (busybox, y en algunas
+    # locales GNU lo rechaza). Aqui hace falta que funcione en cualquier VPS.
+    curl -s --max-time 8 "https://ipinfo.io/$1/json" 2>/dev/null \
+        | sed -n 's/.*"country"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+        | head -1
+}
+
 net_pref_probar() {
-    local v4 v6 auto
+    local v4 v6 auto g4 g6
     v4=$(curl -4 -s --max-time 6 https://ifconfig.me 2>/dev/null)
     v6=$(curl -6 -s --max-time 6 https://ifconfig.me 2>/dev/null)
     auto=$(curl -s --max-time 6 https://ifconfig.me 2>/dev/null)
-    echo "  IPv4 de salida : ${v4:-(sin IPv4)}"
-    echo "  IPv6 de salida : ${v6:-(sin IPv6)}"
-    echo "  Se usa por defecto: ${auto:-(sin respuesta)}"
-    if [[ -n "$auto" && "$auto" == "$v6" && -n "$v6" ]]; then
-        ok "Sale por IPv6"
-    elif [[ -n "$auto" && "$auto" == "$v4" ]]; then
-        info "Sale por IPv4"
+
+    g4=$(_geo_de "$v4"); g6=$(_geo_de "$v6")
+
+    echo "  IPv4 de la VPS : ${v4:-(sin IPv4)}   pais: ${g4:-?}"
+    echo "  IPv6 de la VPS : ${v6:-(SIN IPv6)}   pais: ${g6:-?}"
+    echo "  La VPS sale por: ${auto:-(sin respuesta)}"
+    line
+    if [[ -z "$v6" ]]; then
+        err "Esta VPS NO tiene IPv6 util."
+        info "Entonces todos tus usuarios saldran por la IPv4 pase lo que pase,"
+        info "y el unico camino es cambiar de IPv4 o pedir la correccion de su"
+        info "geolocalizacion. Llevar IPv6 al tunel no serviria de nada."
+    elif [[ -n "$g4" && -n "$g6" && "$g4" != "$g6" ]]; then
+        info "Tu IPv4 y tu IPv6 estan en PAISES DISTINTOS ($g4 vs $g6)."
+        info "Para que un usuario salga por la IPv6 hay que activar en la app"
+        info "'IPv6 dentro del tunel'. Con el tunel en IPv4 puro siempre saldra"
+        info "por $g4."
+    elif [[ -n "$g4" ]]; then
+        ok "Las dos familias geolocalizan igual ($g4): el pais no depende de esto."
     fi
+    info "Ojo: Google usa SU base, que puede no coincidir con la de aqui."
 }
 
 # Restaura el orden normal de IPv4/IPv6 del sistema (sin forzar nada)
@@ -250,14 +280,17 @@ info()  { printf '     %s\n' "$1"; }
 # ---------------------------------------------------------------
 net_pref_menu() {
     while true; do
-        clear; title "SALIDA A INTERNET DE LA VPS  (IPv4 / IPv6)"
-        echo "Preferencia guardada: $(net_pref_estado)"
+        clear; title "DIAGNOSTICO IPv4 / IPv6"
+        echo "Preferencia de la propia VPS: $(net_pref_estado)"
         line
-        echo "Esto decide por que familia sale el trafico cuando el destino"
-        echo "tiene las dos. Importa porque las bases de geolocalizacion NO"
-        echo "situan siempre la IPv4 y la IPv6 de la misma maquina en el mismo"
-        echo "pais: si Google ubica tu IPv4 en otro sitio, los anuncios de"
-        echo "AdMob salen de ese pais y el eCPM cambia."
+        echo "La opcion 1 es la util: dice que IPs tiene esta VPS y en que"
+        echo "pais las situan. Si la IPv4 y la IPv6 estan en paises distintos,"
+        echo "eso explica el pais que ven Google y AdMob."
+        echo ""
+        echo "OJO: las opciones 2 y 3 solo afectan a lo que la VPS inicia por"
+        echo "su cuenta (curl, apt...), NO al trafico de los usuarios. Para que"
+        echo "un usuario salga por IPv6 hay que activar 'IPv6 dentro del tunel'"
+        echo "en la app: es el telefono quien elige, no la VPS."
         line
         echo "  1) Comprobar por donde sale AHORA"
         echo "  2) Preferir IPv6   (recomendado si tu IPv6 geolocaliza bien)"
