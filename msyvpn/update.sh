@@ -4,7 +4,7 @@
 # limpia y reinstala conservando usuarios, claves y certificados.
 [[ -n "$BASE_DIR" ]] || source /etc/msyvpn/lib.sh
 
-MSY_SERVICES="msyvpn-wsproxy msyvpn-badvpn msyvpn-hysteria1 msyvpn-hysteria2 msyvpn-slowdns msyvpn-ss wg-quick@wg0 msyvpn-ovpn-udp msyvpn-ovpn-tcp0 haproxy xray"
+MSY_SERVICES="msyvpn-wsproxy msyvpn-badvpn msyvpn-hysteria1 msyvpn-hysteria2 msyvpn-slowdns msyvpn-ss wg-quick@wg0 msyvpn-ovpn-udp msyvpn-ovpn-tcp0 msyvpn-socks5 haproxy xray"
 MSY_MODULES="VERSION lib.sh wsproxy.py proxy.sh v2ray.sh slowdns.sh hysteria.sh users.sh shadowsocks.sh wireguard.sh openvpn.sh monitor.sh update.sh menu install.sh master_pubkey.pub"
 
 msy_stop_all() {
@@ -261,6 +261,15 @@ msy_restore() {
     declare -F v2_rebuild >/dev/null 2>&1 && command -v xray >/dev/null 2>&1 && { v2_rebuild; svc_restart xray; }
     declare -F hy_add_user >/dev/null 2>&1 && hy_add_user
     svc_restart msyvpn-slowdns 2>/dev/null
+    # SOCKS5 usa las mismas cuentas: si ya estaba instalado (o si el
+    # backup vino de una VPS donde si lo estaba), reconstruir su auth
+    # desde los datos ya restaurados y dejarlo activo.
+    if declare -F s5_write_auth >/dev/null 2>&1; then
+        if s5_installed 2>/dev/null; then
+            s5_write_auth
+            svc_restart msyvpn-socks5 2>/dev/null
+        fi
+    fi
     ok "Restauracion completa: $cnt cuentas recreadas"
     info "Total de cuentas ahora: $(wc -l < "$USERS_DB" 2>/dev/null || echo 0)"
 }

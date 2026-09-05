@@ -10,7 +10,7 @@ HY_KEY="$HY_DIR/server.key"
 
 # Puertos y rangos de port-hopping separados para que no choquen
 hy_port() { local v; v=$(cat "$HY_DIR/port$1" 2>/dev/null); echo "${v:-$([[ $1 == 1 ]] && echo 36712 || echo 36713)}"; }
-hy_obfs() { local v; v=$(cat "$HY_DIR/obfs$1" 2>/dev/null); echo "${v:-msyvpn}"; }
+hy_obfs() { local v; v=$(cat "$HY_DIR/obfs$1" 2>/dev/null); echo "${v:-agnudp}"; }
 hy_hop()  { [[ "$1" == 1 ]] && echo "20000:40000" || echo "40001:60000"; }
 hy_svc()  { echo "msyvpn-hysteria$1"; }
 hy_bin()  { echo "/usr/local/bin/hysteria$1"; }
@@ -135,7 +135,7 @@ hy_install() {
     [[ -x "$bin" ]] || { err "No se pudo descargar Hysteria v$v para $a"; return 1; }
 
     [[ -f "$HY_DIR/port$v" ]] || hy_port "$v" > "$HY_DIR/port$v"
-    [[ -f "$HY_DIR/obfs$v" ]] || echo msyvpn > "$HY_DIR/obfs$v"
+    [[ -f "$HY_DIR/obfs$v" ]] || echo agnudp > "$HY_DIR/obfs$v"
     hy_mport "$v" > "$HY_DIR/mport$v"
     hy_cert
     [[ "$v" == 1 ]] && hy_write_v1 || hy_write_v2

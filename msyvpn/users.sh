@@ -139,8 +139,37 @@ u_create() {
 u_remove() {
     local name; name=$(ask 'Usuario a eliminar: ')
     id "$name" >/dev/null 2>&1 || { err "No existe"; return; }
-    pkill -u "$name" 2>/dev/null
-    userdel -r "$name" >/dev/null 2>&1
+
+    # BUG que arregla este bloque: pkill (sin senal) manda SIGTERM y
+    # sigue de inmediato a userdel, pero un tunel con trafico en curso
+    # puede quedar en estado D (esperando I/O) y no morir al instante.
+    # userdel entonces fallaba (usuario con procesos vivos = "user busy"),
+    # el error quedaba oculto por el ">/dev/null 2>&1", y el script decia
+    # "eliminado" aunque el usuario seguia existiendo: seguia pudiendo
+    # conectar, no aparecia como recien creado si lo volvias a crear
+    # (useradd fallaba por "ya existe") y no habia forma de saber por que.
+    #
+    # Ahora: SIGTERM, esperar hasta 5s revisando de verdad que ya no haya
+    # procesos, y solo si alguno se resiste usar SIGKILL. Recien despues
+    # se llama userdel, y se comprueba que de verdad borro al usuario.
+    pkill -TERM -u "$name" 2>/dev/null
+    local intentos=0
+    while pgrep -u "$name" >/dev/null 2>&1 && [[ $intentos -lt 10 ]]; do
+        sleep 0.5
+        intentos=$((intentos+1))
+    done
+    pgrep -u "$name" >/dev/null 2>&1 && pkill -KILL -u "$name" 2>/dev/null && sleep 0.5
+
+    userdel -r "$name" >/tmp/msyud.log 2>&1
+    if id "$name" >/dev/null 2>&1; then
+        # userdel fallo de verdad: no seguir como si hubiera funcionado.
+        err "No se pudo eliminar $name del sistema:"
+        cat /tmp/msyud.log
+        info "Procesos restantes de $name: $(pgrep -c -u "$name" 2>/dev/null || echo 0)"
+        info "Vuelve a intentar la opcion 2, o revisa 'ps -u $name' a mano."
+        return 1
+    fi
+
     rm -f "$SENHA_DIR/$name"
     sed -i "/^$name /d" "$USERS_DB" 2>/dev/null
     sed -i "/|$name$/d" "$XR_DB" 2>/dev/null

@@ -213,12 +213,23 @@ s5_write_auth() {
     return 0
 }
 
-# Recarga el auth en caliente. Sin reinicio y sin cortar a los conectados.
+# Recarga el auth. Antes se usaba SIGUSR1 para recargar en caliente, pero
+# hev-socks5-server puede quedar en bucle de reintento de lectura del
+# archivo si la senal llega mientras hay conexiones activas (mas facil
+# de ver con "workers" en varios nucleos) — cada worker atascado consume
+# un nucleo entero, que es el sintoma de "todos los nucleos al 100%,
+# proceso msyvpns5 o socks5.yml" que se puede ver con htop.
+#
+# El restart corta a los conectados de SOCKS5 un instante, pero es
+# la unica forma confiable de que el proceso quede sirviendo con el
+# archivo de auth real que hay en disco. La alternativa (seguir con
+# SIGUSR1) es la causa exacta del bug: no vale la pena ahorrarse el
+# corte de un segundo a cambio de nucleos atascados horas o dias despues.
 s5_reload_auth() {
     s5_installed || return 0
     [[ -f "$S5_CFG" ]] || return 0
     s5_write_auth
-    pkill -SIGUSR1 -x hev-socks5-server 2>/dev/null
+    svc_active msyvpn-socks5 && svc_restart msyvpn-socks5
     return 0
 }
 
@@ -260,6 +271,10 @@ StandardError=null
 Restart=always
 RestartSec=2
 MemoryMax=512M
+# Red de seguridad: un servidor SOCKS5 real no necesita mas de 1 nucleo
+# completo de forma sostenida. Si algun dia se atasca por otra causa,
+# esto limita el dano a un nucleo en vez de saturarlos todos.
+CPUQuota=100%
 # El limite lo pone systemd, no el proceso: sin privilegios no podria subir
 # el suyo por encima del limite duro heredado.
 LimitNOFILE=100000

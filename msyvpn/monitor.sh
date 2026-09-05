@@ -227,6 +227,9 @@ mon_show() {
     printf '  ShadowSocks online     : %s\n' "$(num "$(mon_ss)")"
     printf '  WireGuard online       : %s\n' "$(num "$(mon_wg)")"
     printf '  OpenVPN online         : %s\n' "$(num "$(mon_ovpn)")"
+    local sk; sk=$(mon_socks5)
+    printf '  SOCKS5 online          : %s   (%s conexiones)\n' "$(num "$sk")" "$(num "$(mon_socks5_conns)")"
+    [[ "$sk" =~ ^[0-9]+$ ]] && tot=$((tot + sk))
     line
     printf '  TOTAL ONLINE           : %s\n' "$tot"
     line
