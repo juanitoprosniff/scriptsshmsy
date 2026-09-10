@@ -13,6 +13,47 @@ REPO_RAW="https://raw.githubusercontent.com/juanitoprosniff/scriptsshmsy/main/ms
 
 echo "=== INSTALANDO MSYVPN ==="
 
+# ============================================================================
+#  TODO LO QUE HAY QUE PREGUNTAR, SE PREGUNTA AQUI
+# ============================================================================
+#  Antes las preguntas estaban al FINAL, despues de diez minutos de
+#  instalacion. Eso obligaba a quedarse mirando la pantalla hasta el final
+#  para escribir dos dominios, y quien se iba a hacer otra cosa se encontraba
+#  la instalacion parada esperando, o terminada sin TLS y sin tunel DNS.
+#
+#  Ahora se recogen antes de empezar y a partir de ahi no se pregunta nada
+#  mas: se lanza, se va uno, y al volver esta todo activo.
+#
+#  En una actualizacion no se pregunta: ya estan guardados de la vez anterior.
+_DOM_TLS=""; _VD_HOST=""; _VD_NS=""
+if [[ -z "$MSYVPN_UPDATE" ]]; then
+    _IP_AHORA=$(hostname -I 2>/dev/null | awk '{print $1}')
+    echo ""
+    echo "  ------------------------------------------------------------"
+    echo "   DOMINIOS  (se puede dejar en blanco y configurarlo despues)"
+    echo "  ------------------------------------------------------------"
+    echo ""
+    echo "   1) Dominio para TLS — el del certificado, para V2Ray y los"
+    echo "      puertos con SSL. Tiene que tener un registro A a $_IP_AHORA"
+    echo ""
+    read -rp "      Dominio TLS (ej: msyvpn.cloud): " _DOM_TLS
+    _DOM_TLS=$(echo "$_DOM_TLS" | tr 'A-Z' 'a-z' | xargs)
+    echo ""
+    echo "   2) VayDNS — el tunel por DNS, para lineas sin saldo."
+    echo "      Necesita DOS nombres, creados en tu proveedor de DNS:"
+    echo ""
+    echo "         ns.tudominio.com   A    $_IP_AHORA"
+    echo "         n.tudominio.com    NS   ns.tudominio.com"
+    echo ""
+    read -rp "      Nombre del servidor, el del registro A (ej: ns.tudominio.com): " _VD_HOST
+    _VD_HOST=$(echo "$_VD_HOST" | tr 'A-Z' 'a-z' | xargs)
+    read -rp "      Dominio del tunel, el del registro NS (ej: n.tudominio.com): " _VD_NS
+    _VD_NS=$(echo "$_VD_NS" | tr 'A-Z' 'a-z' | xargs)
+    echo ""
+    echo "  Listo. A partir de aqui no se pregunta nada mas."
+    echo ""
+fi
+
 # --- 1. Dependencias -------------------------------------------------
 echo "[1/9] Dependencias..."
 export DEBIAN_FRONTEND=noninteractive
@@ -23,17 +64,64 @@ apt-get install -y haproxy python3 openssl curl wget iproute2 iptables \
 # --- 2. Copiar modulos a /etc/msyvpn --------------------------------
 echo "[2/9] Copiando modulos..."
 mkdir -p "$BASE_DIR/bin" "$BASE_DIR/data/senha"
-MODS="VERSION lib.sh wsproxy.py proxy.sh v2ray.sh slowdns.sh hysteria.sh users.sh shadowsocks.sh wireguard.sh openvpn.sh socks5.sh monitor.sh update.sh menu firewall.sh master_pubkey.pub"
+MODS="VERSION lib.sh wsproxy.py proxy.sh v2ray.sh vaydns.sh hysteria.sh users.sh shadowsocks.sh wireguard.sh openvpn.sh socks5.sh monitor.sh update.sh menu firewall.sh master_pubkey.pub"
+# ============================================================================
+#  ESTA DESCARGA SE HACE ANTES DE TENER lib.sh, ASI QUE EL REINTENTO VA AQUI
+# ============================================================================
+#  Antes era una linea:
+#
+#      wget -q "$REPO_RAW/$m" -O "$BASE_DIR/$m"
+#
+#  y tenia dos fallos graves. El primero, un solo intento: un parpadeo de red
+#  dejaba ese modulo fuera. El segundo y peor: "-O" CREA el archivo aunque la
+#  descarga falle, asi que el modulo quedaba en 0 bytes **machacando al que
+#  funcionaba**. Si al que le tocaba era lib.sh, el "source" de mas abajo
+#  cargaba un archivo vacio y a partir de ahi fallaba todo sin ninguna
+#  relacion aparente: SOCKS5 que no arranca, OpenVPN que no se activa,
+#  WireGuard que no aparece... segun a quien le tocara el parpadeo.
+#
+#  Ahora se baja a un temporal, se comprueba, y solo entonces se pone en su
+#  sitio. Si falla, el modulo anterior sigue intacto.
+_bajar_modulo() {
+    local m="$1" tmp="$BASE_DIR/.$1.tmp" intento
+    for intento in 1 2 3; do
+        rm -f "$tmp"
+        wget -q --timeout=20 --tries=1 "$REPO_RAW/$m" -O "$tmp" 2>/dev/null \
+            || curl -fsSL --max-time 20 "$REPO_RAW/$m" -o "$tmp" 2>/dev/null
+        if [[ -s "$tmp" ]]; then
+            mv -f "$tmp" "$BASE_DIR/$m"
+            return 0
+        fi
+        [[ $intento -lt 3 ]] && sleep $((intento * 2))
+    done
+    rm -f "$tmp"
+    return 1
+}
+
+_faltan=""
 for m in $MODS; do
     if [[ -f "$SRC_DIR/$m" ]]; then
         cp -f "$SRC_DIR/$m" "$BASE_DIR/$m"
     else
-        wget -q "$REPO_RAW/$m" -O "$BASE_DIR/$m"
+        _bajar_modulo "$m" || _faltan="$_faltan $m"
     fi
 done
+
+# Sin estos no hay nada que hacer: seguir adelante solo produce fallos raros
+# mas tarde, imposibles de relacionar con una descarga de hace diez minutos.
+for m in lib.sh menu; do
+    if [[ ! -s "$BASE_DIR/$m" ]]; then
+        echo ""
+        echo "  ERROR: no se pudo obtener '$m' y sin el no se puede continuar."
+        echo "  Casi siempre es un corte de red. Vuelve a lanzar el instalador."
+        echo ""
+        exit 1
+    fi
+done
+[[ -n "$_faltan" ]] && echo "    (no se pudieron bajar:$_faltan — se reintentan al actualizar)"
 # Binarios incluidos (amd64) — para otras arquitecturas fetch_bin descarga.
 # hev-socks5-server puede no estar: socks5.sh lo compila si falta.
-for b in badvpn-udpgw dns-server hev-socks5-server; do
+for b in badvpn-udpgw vaydns-server hev-socks5-server; do
     [[ -f "$SRC_DIR/bin/$b" ]] && cp -f "$SRC_DIR/bin/$b" "$BASE_DIR/bin/$b"
     chmod +x "$BASE_DIR/bin/$b" 2>/dev/null
 done
@@ -41,6 +129,10 @@ chmod +x "$BASE_DIR"/*.sh "$BASE_DIR"/wsproxy.py "$BASE_DIR"/menu 2>/dev/null
 
 # shellcheck source=/dev/null
 source "$BASE_DIR/lib.sh"
+
+# El parte de averias arranca en blanco: lo que salga al final es de ESTA
+# ejecucion, no arrastrado de un intento anterior.
+msy_reset_fallos
 
 # Binario badvpn segun arquitectura -> /usr/bin
 fetch_bin badvpn-udpgw /usr/bin/badvpn-udpgw || err "badvpn no disponible para $(arch)"
@@ -320,7 +412,7 @@ systemctl enable --now msyvpn-wsproxy msyvpn-badvpn >/dev/null 2>&1
 systemctl enable --now haproxy >/dev/null 2>&1
 systemctl restart msyvpn-wsproxy msyvpn-badvpn haproxy >/dev/null 2>&1
 # Volver a levantar lo que ya estuviera configurado (tras actualizar)
-for _s in xray msyvpn-slowdns msyvpn-hysteria1 msyvpn-hysteria2; do
+for _s in xray msyvpn-vaydns msyvpn-hysteria1 msyvpn-hysteria2; do
     systemctl is-enabled "$_s" >/dev/null 2>&1 && systemctl restart "$_s" >/dev/null 2>&1
 done
 
@@ -358,7 +450,7 @@ else
 fi
 
 # Asegurar logs mudos en servicios ya existentes (units de versiones viejas)
-for _u in msyvpn-slowdns; do
+for _u in msyvpn-vaydns; do
     _f=/etc/systemd/system/$_u.service
     [[ -f "$_f" ]] || continue
     grep -q 'StandardOutput=null' "$_f" || \
@@ -366,11 +458,24 @@ for _u in msyvpn-slowdns; do
 done
 systemctl daemon-reload 2>/dev/null
 
-# SlowDNS: reaplicar reglas (la version vieja secuestraba el DNS de los
-# clientes VPN y los dejaba sin navegar)
+# --- Retirada de SlowDNS (sustituido por VayDNS el 2026-09-09) -------
+#
+# Los dos usan el puerto 53 y ponen la MISMA regla de NAT, asi que no pueden
+# convivir: el REDIRECT no mira el dominio y se lo lleva todo. Al actualizar
+# se apaga SlowDNS y se le quita su regla, o VayDNS no recibiria ni una
+# consulta y no habria forma de saber por que.
 if [[ -f /etc/systemd/system/msyvpn-slowdns.service ]]; then
-    source "$BASE_DIR/slowdns.sh"
-    sd_apply_net 2>/dev/null && echo "    SlowDNS: reglas de DNS corregidas"
+    systemctl disable --now msyvpn-slowdns >/dev/null 2>&1
+    rm -f /etc/systemd/system/msyvpn-slowdns.service
+    while iptables -t nat -D PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 5300 2>/dev/null; do :; done
+    systemctl daemon-reload
+    echo "    SlowDNS retirado (sus claves se conservan en /etc/slowdns)"
+fi
+
+# VayDNS: reaplicar reglas de red si ya estaba configurado
+if [[ -f /etc/systemd/system/msyvpn-vaydns.service ]]; then
+    source "$BASE_DIR/vaydns.sh"
+    vd_apply_net 2>/dev/null && echo "    VayDNS: reglas de DNS aplicadas"
 fi
 
 # --- WireGuard y ShadowSocks: auto-activar (si aun no estan) ---------
@@ -419,22 +524,43 @@ else
     echo "    (SOCKS5 se puede activar luego desde el menu -> 12)"
 fi
 
-# En una actualizacion no se vuelve a preguntar nada
-if [[ -z "$MSYVPN_UPDATE" ]]; then
-    read -rp "Activar TLS con tu dominio ahora? [s/N]: " _tls
-    if [[ "$_tls" =~ ^[sS]$ ]]; then
-        source "$BASE_DIR/v2ray.sh"
-        read -rp "Dominio (debe apuntar a esta IP): " _dom
-        _dom=$(echo "$_dom" | tr 'A-Z' 'a-z' | xargs)
-        if [[ -n "$_dom" ]]; then
-            echo "$_dom" > "$DATA_DIR/domain"
-            if v2_check_domain "$_dom"; then proxy_cert_real "$_dom"
-            else echo "    Reintenta luego en: menu -> V2Ray -> Activar TLS"; fi
-        fi
+# --- Aplicar los dominios que se pidieron al principio ---------------
+#
+# Ya no se pregunta nada aqui: lo que hubiera que saber se recogio antes de
+# empezar. Si algo falla se anota y se resume abajo, pero la instalacion
+# termina igual — un dominio mal puesto no debe dejar la VPS a medias.
+if [[ -n "$_DOM_TLS" ]]; then
+    echo "[+] Activando TLS para $_DOM_TLS..."
+    source "$BASE_DIR/v2ray.sh"
+    echo "$_DOM_TLS" > "$DATA_DIR/domain"
+    if v2_check_domain "$_DOM_TLS" >/dev/null 2>&1; then
+        proxy_cert_real "$_DOM_TLS" >/dev/null 2>&1 \
+            && echo "    Certificado emitido para $_DOM_TLS" \
+            || { echo "    (no se pudo emitir el certificado)"; \
+                 msy_anotar_fallo "certificado TLS de $_DOM_TLS"; }
+    else
+        echo "    $_DOM_TLS todavia no apunta a esta IP"
+        msy_anotar_fallo "el dominio $_DOM_TLS no resuelve a esta VPS (menu -> V2Ray -> Activar TLS)"
     fi
-    read -rp "Configurar SlowDNS ahora? (necesita un NS delegado) [s/N]: " _sd
-    if [[ "$_sd" =~ ^[sS]$ ]]; then
-        source "$BASE_DIR/slowdns.sh"; sd_install
+fi
+
+if [[ -n "$_VD_NS" ]]; then
+    echo "[+] Activando VayDNS ($_VD_NS)..."
+    source "$BASE_DIR/vaydns.sh"
+    if vd_setup "$_VD_NS" "$_VD_HOST" >/dev/null 2>&1; then
+        echo "    VayDNS activo. Clave publica:"
+        echo "      $(cat /etc/vaydns/server.pub 2>/dev/null)"
+        # La delegacion es el fallo numero uno y no depende de la VPS: el
+        # servidor arranca perfecto y no conecta nadie porque falta el NS.
+        if vd_check_dns >/dev/null 2>&1; then
+            echo "    Delegacion comprobada: el NS ya apunta aqui"
+        else
+            echo "    OJO: el NS aun no esta delegado o no se ha propagado"
+            msy_anotar_fallo "la delegacion de $_VD_NS aun no responde (menu -> VayDNS -> Comprobar)"
+        fi
+    else
+        echo "    (VayDNS se puede activar luego desde el menu)"
+        msy_anotar_fallo "no se pudo activar VayDNS"
     fi
 fi
 
@@ -442,5 +568,10 @@ echo ""
 echo "=== MSYVPN INSTALADO ==="
 echo "IP        : $(cat "$BASE_DIR/ip")"
 [[ -s "$MASTER_PUBKEY" ]] && echo "Clave RSA : instalada (auth por llave activo)"
+[[ -n "$_VD_NS" ]] && echo "VayDNS    : $_VD_NS  (clave en menu -> VayDNS)"
 echo "Escribe 'menu' para administrar."
+
+# El parte de averias. Sin esto, un fallo de descarga desaparecia en el
+# /dev/null y el usuario se quedaba sin saber por que le faltaba un protocolo.
+msy_resumen_fallos
 echo ""

@@ -3,7 +3,7 @@
 source /etc/msyvpn/lib.sh
 source /etc/msyvpn/proxy.sh
 source /etc/msyvpn/users.sh      # arrastra v2ray.sh y hysteria.sh
-source /etc/msyvpn/slowdns.sh
+source /etc/msyvpn/vaydns.sh
 source /etc/msyvpn/shadowsocks.sh
 source /etc/msyvpn/wireguard.sh
 source /etc/msyvpn/openvpn.sh
@@ -28,8 +28,8 @@ estado() {
     echo "-- Servicios --"
     printf '  OpenSSH: %s   HAProxy: %s   wsproxy: %s\n' \
         "$(svc_txt ssh sshd)" "$(svc_txt haproxy)" "$(svc_txt msyvpn-wsproxy)"
-    printf '  BadVPN: %s   Xray/V2Ray: %s   SlowDNS: %s\n' \
-        "$(svc_txt msyvpn-badvpn)" "$(svc_txt xray)" "$(svc_txt msyvpn-slowdns)"
+    printf '  BadVPN: %s   Xray/V2Ray: %s   VayDNS: %s\n' \
+        "$(svc_txt msyvpn-badvpn)" "$(svc_txt xray)" "$(svc_txt msyvpn-vaydns)"
     printf '  Hysteria v1: %s   v2: %s\n' \
         "$(svc_txt msyvpn-hysteria1)" "$(svc_txt msyvpn-hysteria2)"
     printf '  ShadowSocks: %s   WireGuard: %s   OpenVPN: %s\n' \
@@ -62,7 +62,7 @@ while true; do
     echo "  4) ShadowSocks"
     echo "  5) WireGuard"
     echo "  6) OpenVPN        (UDP + TCP por payload)"
-    echo "  7) SlowDNS        (tunel DNS)"
+    echo "  7) VayDNS         (tunel por DNS)"
     echo "  8) UDP Hysteria   (v1 y v2)"
     echo "  9) Monitor y velocidad"
     echo " 10) Estado del sistema"
@@ -78,7 +78,7 @@ while true; do
         4)  ss_menu ;;
         5)  wg_menu ;;
         6)  ov_menu ;;
-        7)  sd_menu ;;
+        7)  vd_menu ;;
         8)  hy_menu ;;
         9)  mon_menu ;;
         10) estado; pause ;;
