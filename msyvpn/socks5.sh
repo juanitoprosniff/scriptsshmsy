@@ -96,19 +96,85 @@ s5_port()      { cat "$DATA_DIR/socks5.port" 2>/dev/null || echo "$S5_PORT_DEF";
 # Primero el binario del repo (instantaneo), y si no hay para esta
 # arquitectura se compila. Compilar tarda ~1 min y necesita git y compilador,
 # pero funciona en cualquier arquitectura sin que haya que subir nada.
+# ============================================================================
+#  POR QUE AHORA SE COMPILA SIEMPRE, Y NO SE USA EL BINARIO DEL REPO
+# ============================================================================
+#  hev-socks5-server de upstream tiene un BUCLE A 100% DE CPU. Esta en
+#  src/hev-socks5-worker.c, en el bucle de accept del worker:
+#
+#      nfd = hev_task_io_socket_accept (fd, NULL, NULL, task_io_yielder, self);
+#      if (nfd == -1) {
+#          LOG_E ("socks5 proxy accept");
+#          continue;              <-- vuelve a intentarlo AL INSTANTE
+#      }
+#
+#  hev_task_io_socket_accept solo cede la CPU cuando accept() da EAGAIN. Con
+#  CUALQUIER otro error devuelve -1 sin ceder, y el worker vuelve a llamarlo
+#  inmediatamente. Cuando el proceso se queda sin descriptores (EMFILE), la
+#  conexion pendiente sigue en la cola —o sea que no es EAGAIN— y accept()
+#  falla una y otra vez para siempre: bucle cerrado, un nucleo al 100%, y ni
+#  una conexion nueva atendida hasta reiniciar.
+#
+#  Y son TODOS los nucleos, no uno: hev_socket_factory_get hace dup() del mismo
+#  socket de escucha para cada worker, asi que los "workers: nproc" se quedan
+#  girando a la vez sobre la misma conexion pendiente.
+#
+#  Eso explica el sintoma entero: aparece a los dias (segun crecen los
+#  descriptores en uso), deja el SOCKS5 sin aceptar, y se arregla reiniciando.
+#  El diagnostico anterior —que era SIGUSR1— era falso: quitar la recarga en
+#  caliente no lo curo porque nunca fue esa la causa.
+#
+#  hev-socks5-server NO tiene tope de sesiones (a diferencia de
+#  hev-socks5-tunnel, que si trae max-session-count), asi que los descriptores
+#  crecen con los usuarios sin ningun techo.
+#
+#  El parche son dos lineas y hay que aplicarlo al fuente antes de compilar.
+#  Por eso el binario precompilado del repo YA NO SE USA: lo trae sin parchear.
+
 s5_fetch() {
+    # Se intenta compilar parcheado. Solo si no se puede (sin compilador, sin
+    # red, arquitectura rara) se cae al binario del repo, que tiene el bug.
+    if s5_build; then
+        return 0
+    fi
+    err "No se pudo compilar: se usara el binario del repo, que TIENE el bug"
+    err "del bucle de CPU. El vigilante (msyvpn-socks5-watch) lo reiniciara."
     if fetch_bin hev-socks5-server "$S5_BIN" 2>/dev/null && [[ -s "$S5_BIN" ]]; then
         chmod +x "$S5_BIN"
         # El binario del repo puede ser de otra arquitectura: si no ejecuta,
-        # se descarta y se compila. Sin esta comprobacion el servicio quedaba
-        # en bucle de reinicio con "Exec format error".
+        # se descarta. Sin esta comprobacion el servicio quedaba en bucle de
+        # reinicio con "Exec format error".
         if "$S5_BIN" --version >/dev/null 2>&1 || "$S5_BIN" 2>&1 | grep -qi 'usage\|config'; then
-            info "hev-socks5-server: binario del repo ($(arch))"
+            info "hev-socks5-server: binario del repo ($(arch)), SIN parchear"
             return 0
         fi
         rm -f "$S5_BIN"
     fi
-    s5_build
+    return 1
+}
+
+# Mete el descanso que le falta al bucle de accept.
+#
+# 100 ms no se notan cuando accept() falla de verdad —son casos de error—, y
+# convierten un nucleo al 100% en diez intentos por segundo. Ademas el proceso
+# se RECUPERA solo: en cuanto se liberan descriptores, el siguiente accept()
+# funciona y sigue como si nada, sin reinicio.
+s5_patch_accept() {
+    local src="$1/src/hev-socks5-worker.c"
+    [[ -f "$src" ]] || { err "No aparece hev-socks5-worker.c: no se pudo parchear"; return 1; }
+
+    # Ya parcheado (por si upstream lo arregla algun dia).
+    grep -q 'hev_task_sleep (100);' "$src" && { info "El fuente ya trae el descanso"; return 0; }
+
+    grep -q 'LOG_E ("socks5 proxy accept");' "$src" || {
+        err "El bucle de accept cambio en upstream: revisar el parche a mano"
+        return 1
+    }
+
+    sed -i 's|LOG_E ("socks5 proxy accept");|LOG_E ("socks5 proxy accept");\n            hev_task_sleep (100);|' "$src"
+
+    grep -q 'hev_task_sleep (100);' "$src" || { err "El parche no entro"; return 1; }
+    ok "Parche del bucle de CPU aplicado"
 }
 
 s5_build() {
@@ -118,11 +184,29 @@ s5_build() {
     command -v make >/dev/null 2>&1 || { err "Falta make (build-essential)"; return 1; }
 
     local tmp="/tmp/hev-socks5-server.$$"
-    rm -rf "$tmp"
     # --recursive es obligatorio: el core y el sistema de tareas son submodulos
     # y sin ellos el make falla con cientos de errores de cabeceras.
-    git clone --recursive --depth 1 "$S5_SRC" "$tmp" >/dev/null 2>&1 \
-        || { err "No se pudo descargar el codigo de hev-socks5-server"; rm -rf "$tmp"; return 1; }
+    #
+    # Tres intentos: el clone era de uno solo, y un parpadeo de red dejaba la
+    # VPS sin SOCKS5 hasta que alguien se diera cuenta y lo reintentara a mano.
+    # Ese era el "le di varias veces y a la tercera se compilo".
+    local intento clonado=0
+    for intento in 1 2 3; do
+        rm -rf "$tmp"
+        if git clone --recursive --depth 1 "$S5_SRC" "$tmp" >/dev/null 2>&1; then
+            clonado=1; break
+        fi
+        [[ $intento -lt 3 ]] && { info "  reintentando la descarga del codigo ($intento/3)..."; sleep $((intento * 3)); }
+    done
+    if [[ $clonado -ne 1 ]]; then
+        err "No se pudo descargar el codigo de hev-socks5-server"
+        msy_anotar_fallo "descarga del codigo de hev-socks5-server (3 intentos)"
+        rm -rf "$tmp"; return 1
+    fi
+
+    # SIN el parche no se compila: un binario con el bucle es peor que no
+    # tenerlo, porque el sintoma tarda dias en aparecer y no se relaciona.
+    s5_patch_accept "$tmp" || { rm -rf "$tmp"; return 1; }
 
     # ENABLE_STATIC: sin dependencias de libc en tiempo de ejecucion, asi el
     # binario sobrevive a una actualizacion del sistema.
@@ -131,11 +215,12 @@ s5_build() {
         cp -f "$tmp/bin/hev-socks5-server" "$S5_BIN"
         chmod +x "$S5_BIN"
         rm -rf "$tmp"
-        ok "hev-socks5-server compilado"
+        ok "hev-socks5-server compilado (con el parche del bucle)"
         return 0
     fi
     rm -rf "$tmp"
     err "Fallo la compilacion de hev-socks5-server"
+    msy_anotar_fallo "compilacion de hev-socks5-server"
     return 1
 }
 
@@ -166,8 +251,24 @@ auth:
 misc:
   task-stack-size: 20480
   connect-timeout: 10000
-  tcp-read-write-timeout: 300000
+  # ==========================================================================
+  #  ESTE NUMERO ES EL QUE MANDA SOBRE LOS DESCRIPTORES
+  # ==========================================================================
+  #  hev-socks5-server NO tiene tope de sesiones —a diferencia de
+  #  hev-socks5-tunnel, que trae max-session-count—, asi que lo unico que
+  #  libera descriptores es que las sesiones caduquen. Cada sesion son DOS.
+  #
+  #  Estuvo en 300000 (5 minutos). Un movil que pierde cobertura deja su
+  #  sesion muerta ocupando dos descriptores todo ese rato, y con cientos de
+  #  usuarios eso se acumula hasta EMFILE — que es lo que dispara el bucle de
+  #  accept del worker (ver la nota larga de arriba).
+  #
+  #  Dos minutos siguen siendo de sobra para cualquier conexion viva: mientras
+  #  haya trafico el contador se reinicia. Solo corta a las que ya no existen.
+  tcp-read-write-timeout: 120000
   udp-read-write-timeout: 60000
+  # log-file null a proposito: si el bucle de accept volviera por otra via,
+  # un log activo escribiria miles de lineas por segundo y llenaria el disco.
   log-file: null
   log-level: error
   limit-nofile: 100000
@@ -271,10 +372,20 @@ StandardError=null
 Restart=always
 RestartSec=2
 MemoryMax=512M
-# Red de seguridad: un servidor SOCKS5 real no necesita mas de 1 nucleo
-# completo de forma sostenida. Si algun dia se atasca por otra causa,
-# esto limita el dano a un nucleo en vez de saturarlos todos.
-CPUQuota=100%
+# ============================================================================
+#  OJO CON ESTE LIMITE: ESTABA HACIENDO DANO
+# ============================================================================
+#  Estuvo en CPUQuota=100%, que NO es "el 100% de la maquina" sino **un solo
+#  nucleo en total para todo el servicio**. Con "workers: nproc" eso ahoga a
+#  todos los workers dentro de un unico nucleo: bajo carga las sesiones se
+#  acumulan, con ellas los descriptores, y los descriptores son justo lo que
+#  dispara el bucle de accept. O sea que el remedio alimentaba la enfermedad.
+#
+#  Ahora se deja como red de seguridad de verdad: el 75% de la maquina. Sobra
+#  para servir, y deja siempre un cuarto libre para que sshd y HAProxy
+#  respondan aunque el SOCKS5 se vuelva loco — que es lo unico que se le pedia
+#  al limite.
+CPUQuota=$(( $(nproc 2>/dev/null || echo 1) * 75 ))%
 # El limite lo pone systemd, no el proceso: sin privilegios no podria subir
 # el suyo por encima del limite duro heredado.
 LimitNOFILE=100000
@@ -290,11 +401,80 @@ EOF
     systemctl enable --now msyvpn-socks5 >/dev/null 2>&1
     svc_restart msyvpn-socks5
     s5_write_route
+    s5_setup_watchdog
     sleep 1
     svc_active msyvpn-socks5
 }
 
+# ============================================================================
+#  EL VIGILANTE
+# ============================================================================
+#  Con el parche del bucle esto no deberia saltar nunca. Se pone igualmente
+#  por dos motivos: si la compilacion falla se acaba usando el binario del
+#  repo, que si tiene el bug; y porque un servidor que deja de aceptar sin
+#  morirse es la peor averia posible — systemd no la ve, porque el proceso
+#  sigue "activo".
+#
+#  La prueba es directa: se abre una conexion al puerto interno y se manda un
+#  saludo SOCKS5. Si el servidor esta sano contesta dos bytes. No se mira la
+#  CPU ni el numero de descriptores: se comprueba lo unico que importa, que es
+#  si atiende. Dos fallos seguidos (30 s) para no reiniciar por una rafaga.
+s5_setup_watchdog() {
+    cat > "$BASE_DIR/socks5_watch.sh" <<'WEOF'
+#!/bin/bash
+# Comprueba que el SOCKS5 local sigue aceptando. Lo llama un timer de systemd.
+source /etc/msyvpn/lib.sh 2>/dev/null || exit 0
+port=$(cat "$DATA_DIR/socks5.port" 2>/dev/null || echo 1080)
+fallos="$DATA_DIR/socks5.fallos"
+
+systemctl is-active --quiet msyvpn-socks5 || exit 0
+
+# Saludo SOCKS5 sin autenticacion: 05 01 00. Un servidor sano responde 2 bytes.
+if printf '\x05\x01\x00' | timeout 5 nc -w 3 127.0.0.1 "$port" 2>/dev/null | head -c 2 | wc -c | grep -q '^2$'; then
+    rm -f "$fallos"
+    exit 0
+fi
+
+n=$(( $(cat "$fallos" 2>/dev/null || echo 0) + 1 ))
+echo "$n" > "$fallos"
+if [[ $n -ge 2 ]]; then
+    logger -t msyvpn-socks5-watch "no acepta conexiones tras $n intentos: reiniciando"
+    systemctl restart msyvpn-socks5
+    rm -f "$fallos"
+fi
+WEOF
+    chmod +x "$BASE_DIR/socks5_watch.sh"
+
+    cat > /etc/systemd/system/msyvpn-socks5-watch.service <<EOF
+[Unit]
+Description=MSYVPN SOCKS5 watchdog
+[Service]
+Type=oneshot
+ExecStart=$BASE_DIR/socks5_watch.sh
+EOF
+
+    cat > /etc/systemd/system/msyvpn-socks5-watch.timer <<EOF
+[Unit]
+Description=MSYVPN SOCKS5 watchdog
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15s
+AccuracySec=5s
+[Install]
+WantedBy=timers.target
+EOF
+
+    # nc hace la prueba. Sin el, el vigilante no puede comprobar nada.
+    command -v nc >/dev/null 2>&1 || ensure_pkg netcat-openbsd 2>/dev/null || ensure_pkg netcat 2>/dev/null
+    systemctl daemon-reload
+    systemctl enable --now msyvpn-socks5-watch.timer >/dev/null 2>&1
+}
+
 s5_remove() {
+    systemctl disable --now msyvpn-socks5-watch.timer >/dev/null 2>&1
+    rm -f /etc/systemd/system/msyvpn-socks5-watch.timer \
+          /etc/systemd/system/msyvpn-socks5-watch.service \
+          "$BASE_DIR/socks5_watch.sh"
     systemctl disable --now msyvpn-socks5 >/dev/null 2>&1
     rm -f /etc/systemd/system/msyvpn-socks5.service
     systemctl daemon-reload

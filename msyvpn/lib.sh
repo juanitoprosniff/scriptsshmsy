@@ -48,6 +48,62 @@ arch() {
     esac
 }
 
+# ============================================================================
+#  DESCARGAS: POR QUE ANTES FALLABAN "A VECES"
+# ============================================================================
+#  El sintoma clasico era: instalas o actualizas y sale "no se descargo V2Ray"
+#  o "no se compilo SOCKS5"; le das otra vez y funciona. La causa era que la
+#  descarga se hacia de UN SOLO INTENTO:
+#
+#      wget -q "$REPO_RAW/bin/$name-$a" -O "$dest" 2>/dev/null || \
+#      wget -q "$REPO_RAW/bin/$name"    -O "$dest" 2>/dev/null
+#
+#  Sin reintentos, sin tiempo limite y con la salida tirada a /dev/null. Un
+#  parpadeo de red, un corte de DNS o un limite de github durante dos segundos
+#  dejaban ese binario fuera para siempre — y como el error no se veia, la
+#  instalacion seguia adelante como si nada y el servicio no arrancaba.
+#
+#  Ademas no se comprobaba QUE se habia descargado: si github devolvia una
+#  pagina de error, el archivo no estaba vacio, pasaba el "-s", se le hacia
+#  chmod +x y el servicio moria luego con "Exec format error" — que no se
+#  parece en nada a un fallo de descarga.
+#
+#  Ahora: 3 intentos con espera creciente, tiempo limite, curl como respaldo si
+#  no hay wget, y se comprueba que lo bajado sea de verdad un ejecutable.
+
+# descargar <url> <destino> — 3 intentos. Deja el destino intacto si falla.
+descargar() {
+    local url="$1" dest="$2" tmp="$2.dl.$$" intento
+    for intento in 1 2 3; do
+        rm -f "$tmp"
+        if command -v wget >/dev/null 2>&1; then
+            wget -q --timeout=20 --tries=1 "$url" -O "$tmp" 2>/dev/null
+        elif command -v curl >/dev/null 2>&1; then
+            curl -fsSL --max-time 20 "$url" -o "$tmp" 2>/dev/null
+        else
+            rm -f "$tmp"; return 1
+        fi
+        if [[ -s "$tmp" ]]; then
+            mv -f "$tmp" "$dest"
+            return 0
+        fi
+        # Espera creciente: 2 s, 4 s. Un limite de github se pasa solo.
+        [[ $intento -lt 3 ]] && sleep $((intento * 2))
+    done
+    rm -f "$tmp"
+    return 1
+}
+
+# ¿Esto es un ejecutable de verdad, o la pagina de error de github?
+es_ejecutable() {
+    [[ -s "$1" ]] || return 1
+    # ELF empieza por 0x7F 'E' 'L' 'F'. Un script empieza por "#!".
+    local m; m=$(head -c 4 "$1" 2>/dev/null | od -An -tx1 2>/dev/null | tr -d ' \n')
+    [[ "$m" == "7f454c46" ]] && return 0
+    head -c 2 "$1" 2>/dev/null | grep -q '#!' && return 0
+    return 1
+}
+
 # Obtiene un binario segun la arquitectura.
 # Uso: fetch_bin <nombre> <destino>
 #   - amd64: usa el binario incluido en bin/ (o lo descarga del repo)
@@ -59,11 +115,50 @@ fetch_bin() {
     elif [[ -f "$BASE_DIR/bin/$name-$a" ]]; then
         cp -f "$BASE_DIR/bin/$name-$a" "$dest"
     else
-        wget -q "$REPO_RAW/bin/$name-$a" -O "$dest" 2>/dev/null || \
-        wget -q "$REPO_RAW/bin/$name"    -O "$dest" 2>/dev/null
+        descargar "$REPO_RAW/bin/$name-$a" "$dest" || \
+        descargar "$REPO_RAW/bin/$name"    "$dest" || {
+            msy_anotar_fallo "descarga de $name ($a)"
+            return 1
+        }
     fi
-    [[ -s "$dest" ]] && chmod +x "$dest" && return 0
-    return 1
+    if ! es_ejecutable "$dest"; then
+        rm -f "$dest"
+        msy_anotar_fallo "$name descargado pero no es un ejecutable valido"
+        return 1
+    fi
+    chmod +x "$dest"
+    return 0
+}
+
+# ---------------------------------------------------------------
+# El parte de averias
+# ---------------------------------------------------------------
+#
+# Casi todo el instalador corre con ">/dev/null 2>&1" para que la salida sea
+# legible. El precio era que un fallo desaparecia sin dejar rastro y el usuario
+# solo veia "(se puede activar luego desde el menu)" sin saber por que.
+#
+# Esto lo apunta en un archivo. Al final de la instalacion se resume, y queda
+# ahi para consultarlo despues.
+MSY_FALLOS="$DATA_DIR/fallos.log"
+
+msy_anotar_fallo() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S')  $*" >> "$MSY_FALLOS" 2>/dev/null
+}
+
+msy_reset_fallos() { : > "$MSY_FALLOS" 2>/dev/null; }
+
+msy_resumen_fallos() {
+    [[ -s "$MSY_FALLOS" ]] || return 0
+    echo ""
+    echo "  ATENCION: algo no quedo bien"
+    echo "  ------------------------------------------------------------"
+    sed 's/^/  /' "$MSY_FALLOS"
+    echo "  ------------------------------------------------------------"
+    echo "  Casi siempre es un corte de red pasajero. Reintentar suele"
+    echo "  bastar: menu -> el protocolo que falte -> Instalar."
+    echo "  Este parte queda en $MSY_FALLOS"
+    echo ""
 }
 
 get_ip() {
