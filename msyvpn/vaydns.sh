@@ -175,6 +175,24 @@ EOF
     #                     Por encima, muchos resolutores fragmentan o descartan.
     #  -upstream        : el SOCKS5 que ya corre en esta VPS. Ver la nota de
     #                     arriba: de ahi salen las cuentas compartidas.
+    #
+    #  -kcp-window-size 32 y -queue-size 96 : ESTO ES LO QUE EVITA EL ATASCO.
+    #      El defecto es 256 de ventana y 512 de cola. Medido el 2026-09-10 en
+    #      el Huawei: con el camino hasta la VPS en 283 ms y el enlace dando
+    #      ~10 KB/s, el producto ancho-por-retardo son TRES paquetes. Con una
+    #      ventana de 256 el servidor puede tener ochenta veces mas datos
+    #      encolados de los que el enlace mueve, y cada paquete nuevo espera
+    #      detras de todos esos:
+    #
+    #          ida y vuelta por el tunel : 12.267 ms  (43x el suelo de 283 ms)
+    #          una consulta DNS          : 15.757 ms de media
+    #
+    #      Eso no es lentitud, es cola. Con ventana 32 el techo teorico sigue
+    #      siendo 32 x 929 B / 0,283 s = ~105 KB/s, muy por encima de lo que
+    #      el enlace da: no se pierde caudal y se recorta la espera.
+    #
+    #      **No subirlo "para que vaya mas rapido".** Una ventana mayor no
+    #      acelera un enlace lento: solo alarga la cola.
     cat > /etc/systemd/system/msyvpn-vaydns.service <<EOF
 [Unit]
 Description=MSYVPN VayDNS (tunel por DNS)
@@ -183,7 +201,7 @@ Wants=msyvpn-socks5.service
 
 [Service]
 ExecStartPre=$VD_NET
-ExecStart=$VD_BIN -udp :$VD_PORT -privkey-file $VD_KEY -domain $ns -upstream $(vd_upstream) -mtu 1232 -record-type caa -idle-timeout 60s -keepalive 10s -log-level error
+ExecStart=$VD_BIN -udp :$VD_PORT -privkey-file $VD_KEY -domain $ns -upstream $(vd_upstream) -kcp-window-size 32 -queue-size 96 -mtu 1232 -record-type caa -idle-timeout 60s -keepalive 10s -log-level error
 StandardOutput=null
 StandardError=null
 Restart=always
@@ -266,27 +284,43 @@ vd_check_dns() {
     command -v dig >/dev/null 2>&1 || ensure_pkg dnsutils >/dev/null 2>&1
     command -v dig >/dev/null 2>&1 || { err "Falta 'dig' (paquete dnsutils)"; return 1; }
 
-    echo "Preguntando por la delegacion de $ns ..."
-    local res; res=$(dig +short NS "$ns" @8.8.8.8 2>/dev/null)
-    if [[ -z "$res" ]]; then
-        err "Nadie responde NS para $ns"
-        info "Falta el registro NS en tu proveedor, o aun no se ha propagado"
-        info "(puede tardar desde minutos hasta unas horas)."
-        return 1
-    fi
-    ok "NS delegado a: $(echo "$res" | tr '\n' ' ')"
+    # ── POR QUE NO SE PREGUNTA POR EL REGISTRO NS ────────────────────────────
+    #  La primera version hacia "dig NS $ns" y daba SIEMPRE que no habia
+    #  delegacion, incluso con la delegacion perfectamente puesta. El motivo:
+    #  una vez delegado, quien responde por ese nombre es vaydns-server, y
+    #  vaydns-server NO sirve registros NS — solo sabe contestar los nombres
+    #  del tunel. O sea que la prueba daba NXDOMAIN justo cuando todo estaba
+    #  bien. Costo una sesion entera de diagnostico equivocado (2026-09-10).
+    #
+    #  La prueba buena es la misma que hace la app: preguntar por un nombre AL
+    #  AZAR bajo el dominio del tunel. Nadie puede tenerlo en cache, asi que el
+    #  resolutor esta obligado a recorrer la delegacion hasta esta VPS. Si
+    #  contesta algo —lo que sea, incluso NXDOMAIN del propio servidor— es que
+    #  el camino existe. Si no contesta nada, la delegacion no esta.
+    local nombre="zz$(date +%s)$RANDOM.$ns"
+    echo "Probando el camino completo hasta este servidor..."
+    local t0 t1 salida
+    t0=$(date +%s%3N)
+    salida=$(dig +time=5 +tries=1 CAA "$nombre" @8.8.8.8 2>/dev/null)
+    t1=$(date +%s%3N)
 
-    # Y que ese nombre apunte AQUI.
-    local host ip mia
-    host=$(echo "$res" | head -1 | sed 's/\.$//')
-    ip=$(dig +short A "$host" @8.8.8.8 2>/dev/null | head -1)
-    mia=$(get_ip)
-    if [[ "$ip" == "$mia" ]]; then
-        ok "$host apunta a esta VPS ($ip)"
-    else
-        err "$host apunta a '${ip:-nada}' y esta VPS es $mia"
+    if [[ -z "$salida" ]] || echo "$salida" | grep -q "connection timed out"; then
+        err "Nadie responde por $ns"
+        info "Falta la delegacion en tu proveedor de DNS, o aun no se ha propagado."
+        info "Hacen falta DOS registros, y el A tiene que ir SIN proxy (nube gris):"
+        info "    <nombre>   A    $(get_ip)"
+        info "    $ns   NS   <nombre>"
         return 1
     fi
+
+    ok "El camino responde en $((t1-t0)) ms"
+    info "Ese es el suelo del tunel: ninguna consulta puede ir mas rapido."
+    if [[ $((t1-t0)) -gt 400 ]]; then
+        info "Mas de 400 ms es mucho. Casi todo ese tiempo es el tramo entre el"
+        info "resolutor y ESTA VPS: una VPS mas cerca de tus usuarios ayudaria"
+        info "mas que cualquier ajuste."
+    fi
+    return 0
 }
 
 vd_remove() {
