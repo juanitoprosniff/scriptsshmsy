@@ -119,10 +119,12 @@ s5_port()      { cat "$DATA_DIR/socks5.port" 2>/dev/null || echo "$S5_PORT_DEF";
 #  socket de escucha para cada worker, asi que los "workers: nproc" se quedan
 #  girando a la vez sobre la misma conexion pendiente.
 #
-#  Eso explica el sintoma entero: aparece a los dias (segun crecen los
-#  descriptores en uso), deja el SOCKS5 sin aceptar, y se arregla reiniciando.
-#  El diagnostico anterior —que era SIGUSR1— era falso: quitar la recarga en
-#  caliente no lo curo porque nunca fue esa la causa.
+#  OJO: este bug es REAL pero resulto NO ser la causa del nucleo al 100% que
+#  se sufrio en produccion. Eso era el desbordamiento de pila — ver la nota de
+#  task-stack-size mas abajo. Se comprobo midiendo: con el nucleo clavado solo
+#  habia 746 descriptores abiertos de 100.000, o sea que EMFILE nunca llego a
+#  pasar. El parche se mantiene porque el bucle sigue estando ahi y saltaria el
+#  dia que de verdad se agoten los descriptores.
 #
 #  hev-socks5-server NO tiene tope de sesiones (a diferencia de
 #  hev-socks5-tunnel, que si trae max-session-count), asi que los descriptores
@@ -249,7 +251,38 @@ auth:
   file: $S5_AUTH
 
 misc:
-  task-stack-size: 20480
+  # ==========================================================================
+  #  ESTE NUMERO ERA EL CULPABLE DEL NUCLEO AL 100% (2026-09-10)
+  # ==========================================================================
+  #  Estuvo en 20480 y las tareas DESBORDABAN LA PILA. Cazado en produccion
+  #  trazando el hilo caliente: escribia esto 1.300 veces por segundo.
+  #
+  #      ========== Oops! Stack overflow! ==========
+  #      Task: 0x7eb20407ce50
+  #        Stack   : 0x7eb22c1bc000 - 0x7eb22c1c2000   <- 24 KB, o sea 20480
+  #        Bad addr: 0x7eb22c1bcfc8
+  #
+  #  Cuando una tarea desborda, hev lo detecta con su pagina de guarda, lo
+  #  imprime... y el hilo se queda en un bucle imprimiendolo. De ahi el
+  #  sintoma: un nucleo al 100%, luego otro, y el SOCKS5 dejando de aceptar.
+  #  Medido: 47.000 futex/s (los dos hilos peleandose por el cerrojo del
+  #  logger) y 6.600 write/s. No era EMFILE: solo habia 746 descriptores de
+  #  100.000.
+  #
+  #  Desborda por el camino UDP: hev-socks5-udp.c usa arrays de tamano
+  #  variable EN PILA (mmsghdr, iovec, sockaddr_in6, HevSocks5UDPMsg),
+  #  dimensionados por udp-copy-buffer-nums (10), y anidados en varios
+  #  niveles de llamada. Cada nivel se come cerca de 1 KB.
+  #
+  #  Por eso ademas se caia al arrancar un speedtest: de golpe abre muchas
+  #  conexiones y UDP a la vez, se baja mas hondo en la pila y desborda.
+  #
+  #  64 KB da margen de sobra. No cuesta memoria real: la pila se reserva en
+  #  espacio de direcciones y solo se ocupan las paginas que se tocan.
+  #
+  #  **No volver a bajarlo.** Si algun dia hay que ajustarlo, la otra palanca
+  #  es udp-copy-buffer-nums, que escala directamente esos arrays.
+  task-stack-size: 65536
   connect-timeout: 10000
   # ==========================================================================
   #  ESTE NUMERO ES EL QUE MANDA SOBRE LOS DESCRIPTORES
@@ -426,6 +459,7 @@ s5_setup_watchdog() {
 source /etc/msyvpn/lib.sh 2>/dev/null || exit 0
 port=$(cat "$DATA_DIR/socks5.port" 2>/dev/null || echo 1080)
 fallos="$DATA_DIR/socks5.fallos"
+atasco="$DATA_DIR/socks5_atasco.log"
 
 systemctl is-active --quiet msyvpn-socks5 || exit 0
 
@@ -438,6 +472,34 @@ fi
 n=$(( $(cat "$fallos" 2>/dev/null || echo 0) + 1 ))
 echo "$n" > "$fallos"
 if [[ $n -ge 2 ]]; then
+    # ── CAPTURA ANTES DE REINICIAR ──────────────────────────────────────
+    #  Reiniciar borra la evidencia. Sin esto solo se sabe QUE se atasco,
+    #  nunca EN QUE. La pila sale con nombres solo si esta el binario con
+    #  simbolos; es el mismo codigo, byte a byte, pero sin quitar la tabla.
+    PID=$(ps -eo pid,comm --no-headers | awk '$2=="hev-socks5-serv"{print $1; exit}')
+    if [[ -n "$PID" ]]; then
+        {
+            echo "===== $(date '+%Y-%m-%d %H:%M:%S') ====="
+            echo "pid $PID · fds: $(ls /proc/$PID/fd 2>/dev/null | wc -l) · hilos: $(ls /proc/$PID/task 2>/dev/null | wc -l)"
+            echo "--- CPU por hilo (delta 3 s) ---"
+            HZ=$(getconf CLK_TCK)
+            for t in /proc/$PID/task/*; do
+                echo "$(basename "$t") $(awk '{print $14+$15}' "$t/stat" 2>/dev/null)"
+            done > /tmp/w1
+            sleep 3
+            for t in /proc/$PID/task/*; do
+                echo "$(basename "$t") $(awk '{print $14+$15}' "$t/stat" 2>/dev/null)"
+            done > /tmp/w2
+            join /tmp/w1 /tmp/w2 2>/dev/null | awk -v h="$HZ" '{d=($3-$2)*100/h/3; if(d>20) printf "  hilo %s : %.0f%%\n", $1, d}'
+            echo "--- pilas ---"
+            command -v gdb >/dev/null 2>&1 && \
+                timeout 40 gdb -p "$PID" -batch -ex 'thread apply all bt 10' 2>/dev/null | grep -E '^Thread|^#'
+            echo ""
+        } >> "$atasco" 2>&1
+        # No dejar que el archivo crezca sin fin.
+        tail -n 2000 "$atasco" > "$atasco.tmp" 2>/dev/null && mv -f "$atasco.tmp" "$atasco"
+    fi
+
     logger -t msyvpn-socks5-watch "no acepta conexiones tras $n intentos: reiniciando"
     systemctl restart msyvpn-socks5
     rm -f "$fallos"
