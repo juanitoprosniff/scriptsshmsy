@@ -4,7 +4,7 @@
 # limpia y reinstala conservando usuarios, claves y certificados.
 [[ -n "$BASE_DIR" ]] || source /etc/msyvpn/lib.sh
 
-MSY_SERVICES="msyvpn-wsproxy msyvpn-badvpn msyvpn-hysteria1 msyvpn-hysteria2 msyvpn-ss wg-quick@wg0 msyvpn-ovpn-udp msyvpn-ovpn-tcp0 msyvpn-socks5 haproxy xray"
+MSY_SERVICES="msyvpn-wsproxy msyvpn-badvpn msyvpn-bhttp msyvpn-hcr msyvpn-hysteria1 msyvpn-hysteria2 msyvpn-ss wg-quick@wg0 msyvpn-ovpn-udp msyvpn-ovpn-tcp0 msyvpn-socks5 haproxy xray"
 # ============================================================================
 #  ESTA LISTA TIENE QUE CUADRAR CON LA "MODS" DE install.sh
 # ============================================================================
@@ -18,7 +18,7 @@ MSY_SERVICES="msyvpn-wsproxy msyvpn-badvpn msyvpn-hysteria1 msyvpn-hysteria2 msy
 #  igual sin explicacion.
 #
 #  Al anadir un modulo nuevo hay que tocar LAS DOS listas.
-MSY_MODULES="VERSION lib.sh wsproxy.py proxy.sh v2ray.sh hysteria.sh users.sh shadowsocks.sh wireguard.sh openvpn.sh socks5.sh monitor.sh update.sh menu install.sh firewall.sh master_pubkey.pub"
+MSY_MODULES="VERSION lib.sh wsproxy.py proxy.sh v2ray.sh bhttp.sh hcr.sh hysteria.sh users.sh shadowsocks.sh wireguard.sh openvpn.sh socks5.sh monitor.sh update.sh menu install.sh firewall.sh master_pubkey.pub"
 
 msy_stop_all() {
     local s
@@ -98,7 +98,7 @@ msy_update() {
     info "Reactivando servicios..."
     msy_start_all
     local s
-    for s in xray msyvpn-vaydns msyvpn-hysteria1 msyvpn-hysteria2; do
+    for s in xray msyvpn-bhttp msyvpn-hcr msyvpn-hysteria1 msyvpn-hysteria2; do
         systemctl is-enabled "$s" >/dev/null 2>&1 && \
             { systemctl restart "$s" >/dev/null 2>&1; info "  $s reiniciado"; }
     done
