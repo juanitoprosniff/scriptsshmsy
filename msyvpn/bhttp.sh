@@ -78,7 +78,7 @@ StartLimitIntervalSec=0
 [Service]
 Type=simple
 User=root
-ExecStart=/etc/bhttp/bin/bhttp-server --listen 0.0.0.0 --port $BHTTP_PORT --backend-host 127.0.0.1 --backend-port $SSH_PORT --session-ttl 180 --max-sessions $BHTTP_MAX_SESSIONS --request-timeout 30 --read-wait-ms 2 --sequence-wait 6 --max-requests-per-conn 2048
+ExecStart=/etc/bhttp/bin/bhttp-server --listen 0.0.0.0 --port $BHTTP_PORT --backend-host 127.0.0.1 --backend-port 1080 --session-ttl 180 --max-sessions $BHTTP_MAX_SESSIONS --request-timeout 30 --read-wait-ms 2 --sequence-wait 6 --max-requests-per-conn 2048
 Restart=always
 RestartSec=1
 TimeoutStopSec=15
