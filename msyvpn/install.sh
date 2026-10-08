@@ -25,7 +25,7 @@ echo "=== INSTALANDO MSYVPN ==="
 #  mas: se lanza, se va uno, y al volver esta todo activo.
 #
 #  En una actualizacion no se pregunta: ya estan guardados de la vez anterior.
-_DOM_TLS=""; _VD_HOST=""; _VD_NS=""
+_DOM_TLS=""
 if [[ -z "$MSYVPN_UPDATE" ]]; then
     _IP_AHORA=$(hostname -I 2>/dev/null | awk '{print $1}')
     echo ""
@@ -38,17 +38,6 @@ if [[ -z "$MSYVPN_UPDATE" ]]; then
     echo ""
     read -rp "      Dominio TLS (ej: msyvpn.cloud): " _DOM_TLS
     _DOM_TLS=$(echo "$_DOM_TLS" | tr 'A-Z' 'a-z' | xargs)
-    echo ""
-    echo "   2) VayDNS — el tunel por DNS, para lineas sin saldo."
-    echo "      Necesita DOS nombres, creados en tu proveedor de DNS:"
-    echo ""
-    echo "         ns.tudominio.com   A    $_IP_AHORA"
-    echo "         n.tudominio.com    NS   ns.tudominio.com"
-    echo ""
-    read -rp "      Nombre del servidor, el del registro A (ej: ns.tudominio.com): " _VD_HOST
-    _VD_HOST=$(echo "$_VD_HOST" | tr 'A-Z' 'a-z' | xargs)
-    read -rp "      Dominio del tunel, el del registro NS (ej: n.tudominio.com): " _VD_NS
-    _VD_NS=$(echo "$_VD_NS" | tr 'A-Z' 'a-z' | xargs)
     echo ""
     echo "  Listo. A partir de aqui no se pregunta nada mas."
     echo ""
@@ -64,7 +53,7 @@ apt-get install -y haproxy python3 openssl curl wget iproute2 iptables \
 # --- 2. Copiar modulos a /etc/msyvpn --------------------------------
 echo "[2/9] Copiando modulos..."
 mkdir -p "$BASE_DIR/bin" "$BASE_DIR/data/senha"
-MODS="VERSION lib.sh wsproxy.py proxy.sh v2ray.sh vaydns.sh hysteria.sh users.sh shadowsocks.sh wireguard.sh openvpn.sh socks5.sh monitor.sh update.sh menu firewall.sh master_pubkey.pub"
+MODS="VERSION lib.sh wsproxy.py proxy.sh v2ray.sh bhttp.sh hcr.sh hysteria.sh users.sh shadowsocks.sh wireguard.sh openvpn.sh socks5.sh monitor.sh update.sh menu firewall.sh master_pubkey.pub"
 # ============================================================================
 #  ESTA DESCARGA SE HACE ANTES DE TENER lib.sh, ASI QUE EL REINTENTO VA AQUI
 # ============================================================================
@@ -121,7 +110,7 @@ done
 [[ -n "$_faltan" ]] && echo "    (no se pudieron bajar:$_faltan — se reintentan al actualizar)"
 # Binarios incluidos (amd64) — para otras arquitecturas fetch_bin descarga.
 # hev-socks5-server puede no estar: socks5.sh lo compila si falta.
-for b in badvpn-udpgw vaydns-server hev-socks5-server; do
+for b in badvpn-udpgw hev-socks5-server; do
     [[ -f "$SRC_DIR/bin/$b" ]] && cp -f "$SRC_DIR/bin/$b" "$BASE_DIR/bin/$b"
     chmod +x "$BASE_DIR/bin/$b" 2>/dev/null
 done
@@ -412,7 +401,7 @@ systemctl enable --now msyvpn-wsproxy msyvpn-badvpn >/dev/null 2>&1
 systemctl enable --now haproxy >/dev/null 2>&1
 systemctl restart msyvpn-wsproxy msyvpn-badvpn haproxy >/dev/null 2>&1
 # Volver a levantar lo que ya estuviera configurado (tras actualizar)
-for _s in xray msyvpn-vaydns msyvpn-hysteria1 msyvpn-hysteria2; do
+for _s in xray msyvpn-hysteria1 msyvpn-hysteria2; do
     systemctl is-enabled "$_s" >/dev/null 2>&1 && systemctl restart "$_s" >/dev/null 2>&1
 done
 
@@ -450,7 +439,7 @@ else
 fi
 
 # Asegurar logs mudos en servicios ya existentes (units de versiones viejas)
-for _u in msyvpn-vaydns; do
+for _u in msyvpn-wsproxy; do
     _f=/etc/systemd/system/$_u.service
     [[ -f "$_f" ]] || continue
     grep -q 'StandardOutput=null' "$_f" || \
@@ -458,24 +447,14 @@ for _u in msyvpn-vaydns; do
 done
 systemctl daemon-reload 2>/dev/null
 
-# --- Retirada de SlowDNS (sustituido por VayDNS el 2026-09-09) -------
-#
-# Los dos usan el puerto 53 y ponen la MISMA regla de NAT, asi que no pueden
-# convivir: el REDIRECT no mira el dominio y se lo lleva todo. Al actualizar
-# se apaga SlowDNS y se le quita su regla, o VayDNS no recibiria ni una
-# consulta y no habria forma de saber por que.
+# --- Retirada de SlowDNS -------
+# se apaga SlowDNS y se le quita su regla
 if [[ -f /etc/systemd/system/msyvpn-slowdns.service ]]; then
     systemctl disable --now msyvpn-slowdns >/dev/null 2>&1
     rm -f /etc/systemd/system/msyvpn-slowdns.service
     while iptables -t nat -D PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 5300 2>/dev/null; do :; done
     systemctl daemon-reload
     echo "    SlowDNS retirado (sus claves se conservan en /etc/slowdns)"
-fi
-
-# VayDNS: reaplicar reglas de red si ya estaba configurado
-if [[ -f /etc/systemd/system/msyvpn-vaydns.service ]]; then
-    source "$BASE_DIR/vaydns.sh"
-    vd_apply_net 2>/dev/null && echo "    VayDNS: reglas de DNS aplicadas"
 fi
 
 # --- WireGuard y ShadowSocks: auto-activar (si aun no estan) ---------
@@ -524,6 +503,24 @@ else
     echo "    (SOCKS5 se puede activar luego desde el menu -> 12)"
 fi
 
+# --- BHTTP y HCR: auto-activar (si aun no estan) ---------
+echo "[+] Activando BHTTP y HCR..."
+source "$BASE_DIR/bhttp.sh"
+if bhttp_installed; then
+    echo "    BHTTP ya configurado."
+else
+    bhttp_setup >/dev/null 2>&1 && echo "    BHTTP activo en :$(bhttp_port)" \
+        || echo "    (BHTTP se puede activar luego desde el menu)"
+fi
+
+source "$BASE_DIR/hcr.sh"
+if hcr_installed; then
+    echo "    HCR ya configurado."
+else
+    hcr_setup >/dev/null 2>&1 && echo "    HCR activo en :$(hcr_port)" \
+        || echo "    (HCR se puede activar luego desde el menu)"
+fi
+
 # --- Aplicar los dominios que se pidieron al principio ---------------
 #
 # Ya no se pregunta nada aqui: lo que hubiera que saber se recogio antes de
@@ -544,31 +541,10 @@ if [[ -n "$_DOM_TLS" ]]; then
     fi
 fi
 
-if [[ -n "$_VD_NS" ]]; then
-    echo "[+] Activando VayDNS ($_VD_NS)..."
-    source "$BASE_DIR/vaydns.sh"
-    if vd_setup "$_VD_NS" "$_VD_HOST" >/dev/null 2>&1; then
-        echo "    VayDNS activo. Clave publica:"
-        echo "      $(cat /etc/vaydns/server.pub 2>/dev/null)"
-        # La delegacion es el fallo numero uno y no depende de la VPS: el
-        # servidor arranca perfecto y no conecta nadie porque falta el NS.
-        if vd_check_dns >/dev/null 2>&1; then
-            echo "    Delegacion comprobada: el NS ya apunta aqui"
-        else
-            echo "    OJO: el NS aun no esta delegado o no se ha propagado"
-            msy_anotar_fallo "la delegacion de $_VD_NS aun no responde (menu -> VayDNS -> Comprobar)"
-        fi
-    else
-        echo "    (VayDNS se puede activar luego desde el menu)"
-        msy_anotar_fallo "no se pudo activar VayDNS"
-    fi
-fi
-
 echo ""
 echo "=== MSYVPN INSTALADO ==="
 echo "IP        : $(cat "$BASE_DIR/ip")"
 [[ -s "$MASTER_PUBKEY" ]] && echo "Clave RSA : instalada (auth por llave activo)"
-[[ -n "$_VD_NS" ]] && echo "VayDNS    : $_VD_NS  (clave en menu -> VayDNS)"
 echo "Escribe 'menu' para administrar."
 
 # El parte de averias. Sin esto, un fallo de descarga desaparecia en el

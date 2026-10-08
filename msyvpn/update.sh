@@ -4,7 +4,7 @@
 # limpia y reinstala conservando usuarios, claves y certificados.
 [[ -n "$BASE_DIR" ]] || source /etc/msyvpn/lib.sh
 
-MSY_SERVICES="msyvpn-wsproxy msyvpn-badvpn msyvpn-hysteria1 msyvpn-hysteria2 msyvpn-vaydns msyvpn-ss wg-quick@wg0 msyvpn-ovpn-udp msyvpn-ovpn-tcp0 msyvpn-socks5 haproxy xray"
+MSY_SERVICES="msyvpn-wsproxy msyvpn-badvpn msyvpn-bhttp msyvpn-hcr msyvpn-hysteria1 msyvpn-hysteria2 msyvpn-ss wg-quick@wg0 msyvpn-ovpn-udp msyvpn-ovpn-tcp0 msyvpn-socks5 haproxy xray"
 # ============================================================================
 #  ESTA LISTA TIENE QUE CUADRAR CON LA "MODS" DE install.sh
 # ============================================================================
@@ -18,7 +18,7 @@ MSY_SERVICES="msyvpn-wsproxy msyvpn-badvpn msyvpn-hysteria1 msyvpn-hysteria2 msy
 #  igual sin explicacion.
 #
 #  Al anadir un modulo nuevo hay que tocar LAS DOS listas.
-MSY_MODULES="VERSION lib.sh wsproxy.py proxy.sh v2ray.sh vaydns.sh hysteria.sh users.sh shadowsocks.sh wireguard.sh openvpn.sh socks5.sh monitor.sh update.sh menu install.sh firewall.sh master_pubkey.pub"
+MSY_MODULES="VERSION lib.sh wsproxy.py proxy.sh v2ray.sh bhttp.sh hcr.sh hysteria.sh users.sh shadowsocks.sh wireguard.sh openvpn.sh socks5.sh monitor.sh update.sh menu install.sh firewall.sh master_pubkey.pub"
 
 msy_stop_all() {
     local s
@@ -93,12 +93,12 @@ msy_update() {
     rm -rf "$tmp"
 
     # El instalador solo arranca sus propios servicios; hay que volver a
-    # levantar V2Ray, VayDNS e Hysteria, que se detuvieron mas arriba.
+    # levantar V2Ray e Hysteria, que se detuvieron mas arriba.
     echo ""
     info "Reactivando servicios..."
     msy_start_all
     local s
-    for s in xray msyvpn-vaydns msyvpn-hysteria1 msyvpn-hysteria2; do
+    for s in xray msyvpn-bhttp msyvpn-hcr msyvpn-hysteria1 msyvpn-hysteria2; do
         systemctl is-enabled "$s" >/dev/null 2>&1 && \
             { systemctl restart "$s" >/dev/null 2>&1; info "  $s reiniciado"; }
     done
@@ -138,7 +138,7 @@ msy_uninstall() {
         while read -r u _; do
             [[ -n "$u" ]] && id "$u" >/dev/null 2>&1 && userdel -r "$u" >/dev/null 2>&1
         done < <(cat "$USERS_DB" 2>/dev/null)
-        rm -rf "$BASE_DIR" /etc/hysteria /etc/slowdns /etc/vaydns
+        rm -rf "$BASE_DIR" /etc/hysteria /etc/slowdns
         ok "Datos y usuarios eliminados"
     else
         info "Datos conservados en $BASE_DIR"
@@ -247,10 +247,6 @@ msy_restore() {
     [[ -d "$tmp/etc/wireguard" ]] && { mkdir -p /etc/wireguard; cp -a "$tmp/etc/wireguard/." /etc/wireguard/ 2>/dev/null; }
     [[ -d "$tmp/etc/openvpn-msyvpn" ]] && { mkdir -p /etc/openvpn/msyvpn; cp -a "$tmp/etc/openvpn-msyvpn/." /etc/openvpn/msyvpn/ 2>/dev/null; }
     [[ -d "$tmp/etc/shadowsocks-libev" ]] && { mkdir -p /etc/shadowsocks-libev; cp -a "$tmp/etc/shadowsocks-libev/." /etc/shadowsocks-libev/ 2>/dev/null; }
-    mkdir -p /etc/vaydns
-    for f in server.key server.pub ns host; do
-        [[ -f "$tmp/etc/$f" ]] && cp -a "$tmp/etc/$f" /etc/vaydns/ 2>/dev/null
-    done
 
     # Recrear las cuentas del sistema que falten
     local u pass lim exp cnt=0
@@ -273,7 +269,6 @@ msy_restore() {
     # Reconstruir configs y reiniciar
     declare -F v2_rebuild >/dev/null 2>&1 && command -v xray >/dev/null 2>&1 && { v2_rebuild; svc_restart xray; }
     declare -F hy_add_user >/dev/null 2>&1 && hy_add_user
-    svc_restart msyvpn-vaydns 2>/dev/null
     # SOCKS5 usa las mismas cuentas: si ya estaba instalado (o si el
     # backup vino de una VPS donde si lo estaba), reconstruir su auth
     # desde los datos ya restaurados y dejarlo activo.
